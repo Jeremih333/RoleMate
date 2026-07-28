@@ -196,7 +196,7 @@ describe('D1 domain operations', () => {
         referralNotificationsEnabled: true,
         premiumNotificationsEnabled: false,
         privacyShieldEnabled: true,
-        showOnlineStatus: false,
+        showOnlineStatus: true,
         showPremiumBadge: true,
         theme: 'dark',
       },
@@ -376,6 +376,232 @@ describe('D1 domain operations', () => {
     expect(
       sqlite.prepare('SELECT status, sent_count FROM broadcasts WHERE id = ?').get(broadcast.id),
     ).toEqual({ status: 'completed', sent_count: 2 });
+  });
+
+  it('enforces Premium capabilities and configurable free usage limits', async () => {
+    const freeUser = await onboard(2200);
+    const firstTarget = await onboard(2201);
+    const secondTarget = await onboard(2202);
+    const adminId = await upsert(1_040_929_628);
+
+    await expect(
+      executeOperation(
+        env,
+        'swipes.incoming',
+        { userId: freeUser, limit: 20 },
+        crypto.randomUUID(),
+      ),
+    ).rejects.toMatchObject<ApiError>({ code: 'PREMIUM_REQUIRED' });
+    await expect(
+      executeOperation(
+        env,
+        'search.preferences.update',
+        {
+          userId: freeUser,
+          ageGroups: ['21_25'],
+          languages: [],
+          genres: ['Фэнтези'],
+          fandoms: [],
+          writingStyles: [],
+          activityLevels: [],
+          onlyOnline: false,
+          onlyWithPhoto: false,
+        },
+        crypto.randomUUID(),
+      ),
+    ).rejects.toMatchObject<ApiError>({ code: 'PREMIUM_REQUIRED' });
+
+    await executeOperation(
+      env,
+      'admin.config.update',
+      { adminUserId: adminId, key: 'free_daily_profile_limit', value: '1' },
+      crypto.randomUUID(),
+    );
+    const firstPage = (await executeOperation(
+      env,
+      'search.list',
+      { userId: freeUser, limit: 20 },
+      crypto.randomUUID(),
+    )) as unknown[];
+    expect(firstPage).toHaveLength(1);
+    await expect(
+      executeOperation(env, 'search.list', { userId: freeUser, limit: 20 }, crypto.randomUUID()),
+    ).rejects.toMatchObject<ApiError>({ code: 'DAILY_VIEW_LIMIT' });
+    await executeOperation(
+      env,
+      'swipes.create',
+      {
+        userId: freeUser,
+        targetUserId: firstTarget,
+        action: 'super_like',
+        source: 'miniapp',
+        idempotencyKey: 'free-super-like-limit-0001',
+      },
+      crypto.randomUUID(),
+    );
+    await expect(
+      executeOperation(
+        env,
+        'swipes.create',
+        {
+          userId: freeUser,
+          targetUserId: secondTarget,
+          action: 'super_like',
+          source: 'miniapp',
+          idempotencyKey: 'free-super-like-limit-0002',
+        },
+        crypto.randomUUID(),
+      ),
+    ).rejects.toMatchObject<ApiError>({ code: 'SUPER_LIKE_LIMIT' });
+    await expect(
+      executeOperation(
+        env,
+        'settings.update',
+        {
+          userId: freeUser,
+          notificationsEnabled: true,
+          matchNotificationsEnabled: true,
+          messageNotificationsEnabled: true,
+          referralNotificationsEnabled: true,
+          premiumNotificationsEnabled: true,
+          privacyShieldEnabled: true,
+          showOnlineStatus: false,
+          showPremiumBadge: false,
+          theme: 'telegram',
+        },
+        crypto.randomUUID(),
+      ),
+    ).rejects.toMatchObject<ApiError>({ code: 'PREMIUM_REQUIRED' });
+
+    await executeOperation(
+      env,
+      'admin.premium.grant',
+      {
+        adminUserId: adminId,
+        targetUserId: freeUser,
+        durationDays: 7,
+        reason: 'Premium feature integration test',
+        idempotencyKey: 'premium-feature-test-0001',
+      },
+      crypto.randomUUID(),
+    );
+    await expect(
+      executeOperation(
+        env,
+        'search.preferences.update',
+        {
+          userId: freeUser,
+          ageGroups: ['21_25'],
+          languages: [],
+          genres: ['Фэнтези'],
+          fandoms: [],
+          writingStyles: ['literary'],
+          activityLevels: ['daily'],
+          onlyOnline: false,
+          onlyWithPhoto: false,
+        },
+        crypto.randomUUID(),
+      ),
+    ).resolves.toEqual({ updated: true });
+
+    await executeOperation(
+      env,
+      'swipes.create',
+      {
+        userId: freeUser,
+        targetUserId: firstTarget,
+        action: 'skip',
+        source: 'miniapp',
+        idempotencyKey: 'premium-rewind-skip-0001',
+      },
+      crypto.randomUUID(),
+    );
+    await expect(
+      executeOperation(env, 'swipes.rewind', { userId: freeUser }, crypto.randomUUID()),
+    ).resolves.toMatchObject({ rewound: true, targetUserId: firstTarget });
+    await executeOperation(
+      env,
+      'swipes.create',
+      {
+        userId: secondTarget,
+        targetUserId: freeUser,
+        action: 'like',
+        source: 'bot',
+        idempotencyKey: 'premium-incoming-like-001',
+      },
+      crypto.randomUUID(),
+    );
+    await expect(
+      executeOperation(
+        env,
+        'swipes.incoming',
+        { userId: freeUser, limit: 20 },
+        crypto.randomUUID(),
+      ),
+    ).resolves.toEqual([expect.objectContaining({ user_id: secondTarget, action: 'like' })]);
+    await expect(
+      executeOperation(env, 'premium.boost', { userId: freeUser }, crypto.randomUUID()),
+    ).resolves.toEqual({ boosted: true });
+    await expect(
+      executeOperation(env, 'premium.boost', { userId: freeUser }, crypto.randomUUID()),
+    ).rejects.toMatchObject<ApiError>({ code: 'BOOST_COOLDOWN' });
+    const filterSet = (await executeOperation(
+      env,
+      'search.filterSets.save',
+      {
+        userId: freeUser,
+        name: 'Фэнтези вечером',
+        filters: {
+          ageGroups: ['21_25'],
+          languages: [],
+          genres: ['Фэнтези'],
+          fandoms: [],
+          writingStyles: ['literary'],
+          activityLevels: ['daily'],
+          onlyOnline: false,
+          onlyWithPhoto: false,
+        },
+      },
+      crypto.randomUUID(),
+    )) as { id: string };
+    await expect(
+      executeOperation(
+        env,
+        'search.filterSets.activate',
+        { userId: freeUser, filterSetId: filterSet.id },
+        crypto.randomUUID(),
+      ),
+    ).resolves.toEqual({ activated: true });
+    const variant = (await executeOperation(
+      env,
+      'premium.profileVariants.save',
+      {
+        userId: freeUser,
+        name: 'Космическая опера',
+        shortHeadline: 'Ищу экипаж для далёкой экспедиции',
+        about: 'Медленная сюжетная игра с исследованием мира и развитием персонажей.',
+        plots: 'Первый контакт на заброшенной станции.',
+      },
+      crypto.randomUUID(),
+    )) as { id: string };
+    await expect(
+      executeOperation(
+        env,
+        'premium.profileVariants.activate',
+        { userId: freeUser, variantId: variant.id },
+        crypto.randomUUID(),
+      ),
+    ).resolves.toEqual({ activated: true });
+    await expect(
+      executeOperation(
+        env,
+        'premium.profileVariants.list',
+        { userId: freeUser },
+        crypto.randomUUID(),
+      ),
+    ).resolves.toEqual([
+      expect.objectContaining({ id: variant.id, name: 'Космическая опера', is_active: 1 }),
+    ]);
   });
 
   it('creates a match, mutual contact reveal, report queue, and closes chat on block', async () => {

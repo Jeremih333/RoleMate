@@ -247,11 +247,16 @@ export function createBot(env: AppEnv, dataApi: DataApiClient): Bot {
     await context.reply(ru.bot.captchaQuestion(left, right), { reply_markup: keyboard });
   }
 
-  bot.catch(({ error, ctx }) => {
+  bot.catch(async ({ error, ctx }) => {
     console.error({
       updateId: ctx.update.update_id,
       error: error instanceof Error ? error.message : 'unknown',
     });
+    const message =
+      error instanceof DataApiError
+        ? (ru.bot.errors[error.code as keyof typeof ru.bot.errors] ?? ru.bot.errors.default)
+        : ru.bot.errors.default;
+    await ctx.reply(message).catch(() => undefined);
   });
 
   bot.command('start', async (context) => {

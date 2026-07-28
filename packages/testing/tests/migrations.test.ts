@@ -34,6 +34,7 @@ describe('D1 migrations', () => {
       '0004_risk_premium_payments.sql',
       '0005_referrals.sql',
       '0006_admin_operations.sql',
+      '0007_premium_features.sql',
     ]);
     expect(() => applyMigrations()).not.toThrow();
     const tables = database
@@ -51,6 +52,9 @@ describe('D1 migrations', () => {
         'referrals',
         'broadcasts',
         'broadcast_deliveries',
+        'profile_views',
+        'saved_filter_sets',
+        'profile_variants',
         'api_nonces',
       ]),
     );
@@ -103,5 +107,9 @@ describe('D1 migrations', () => {
       .all() as Array<{ key: string; enabled: number }>;
     expect(flags).toHaveLength(2);
     expect(flags.every((flag) => flag.enabled === 0)).toBe(true);
+    const earlyAccess = database
+      .prepare("SELECT enabled FROM feature_flags WHERE key = 'premium_early_access'")
+      .get() as { enabled: number };
+    expect(earlyAccess.enabled).toBe(0);
   });
 });

@@ -70,6 +70,28 @@ async function mockApi(page: Page, admin = false): Promise<void> {
           is_premium: 1,
         },
       ],
+      '/api/premium/status': {
+        premium: false,
+        earlyAccess: false,
+        usage: {
+          profileViews: 1,
+          profileViewLimit: 20,
+          superLikes: 0,
+          superLikeLimit: 1,
+        },
+      },
+      '/api/search/preferences': {
+        premium: false,
+        age_groups: '[]',
+        languages: '[]',
+        genres: '[]',
+        fandoms: '[]',
+        writing_styles: '[]',
+        activity_levels: '[]',
+        only_online: 0,
+        only_with_photo: 0,
+      },
+      '/api/search/filter-sets': [],
       '/api/products': [],
       '/api/admin/dashboard': {
         users: 120,

@@ -22,23 +22,29 @@ import { Button, Card, EmptyState, SectionTitle, Skeleton } from '../components/
 import { getTelegram } from '../telegram.js';
 
 export function MatchesPage() {
+  const queryClient = useQueryClient();
   const matches = useQuery({ queryKey: ['matches'], queryFn: api.matches });
+  const premium = useQuery({ queryKey: ['premium-status'], queryFn: api.premiumStatus });
+  const incoming = useQuery({
+    queryKey: ['incoming-likes'],
+    queryFn: api.incomingLikes,
+    enabled: premium.data?.premium === true,
+  });
+  const likeBack = useMutation({
+    mutationFn: (userId: string) => api.swipe(userId, 'like'),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ['matches'] });
+      void queryClient.invalidateQueries({ queryKey: ['incoming-likes'] });
+    },
+  });
   if (matches.isLoading) return <Skeleton className="h-80" />;
-  if (!matches.data?.length)
-    return (
-      <EmptyState
-        icon={<Heart className="h-7 w-7" />}
-        title={ru.miniApp.community.matchesEmptyTitle}
-        description={ru.miniApp.community.matchesEmptyDescription}
-      />
-    );
   return (
     <div>
       <SectionTitle eyebrow={ru.miniApp.community.matchesEyebrow}>
         {ru.miniApp.community.matchesTitle}
       </SectionTitle>
       <div className="space-y-3">
-        {matches.data.map((match) => (
+        {(matches.data ?? []).map((match) => (
           <Card key={match.id} className="flex items-center gap-4 p-4">
             <span className="avatar">{match.display_name?.slice(0, 1) ?? 'R'}</span>
             <div className="min-w-0 flex-1">
@@ -50,7 +56,39 @@ export function MatchesPage() {
             </a>
           </Card>
         ))}
+        {!matches.data?.length ? (
+          <EmptyState
+            icon={<Heart className="h-7 w-7" />}
+            title={ru.miniApp.community.matchesEmptyTitle}
+            description={ru.miniApp.community.matchesEmptyDescription}
+          />
+        ) : null}
       </div>
+      <SectionTitle eyebrow="Premium">{ru.miniApp.community.incomingLikesTitle}</SectionTitle>
+      {!premium.data?.premium ? (
+        <Card className="p-4 text-sm text-soft">{ru.miniApp.community.incomingLikesPremium}</Card>
+      ) : (
+        <div className="space-y-3">
+          {incoming.data?.map((like) => (
+            <Card key={like.swipe_id} className="p-4">
+              <div className="flex items-center justify-between gap-3">
+                <div>
+                  <strong>{like.display_name}</strong>
+                  <p className="text-sm text-muted">{like.short_headline}</p>
+                </div>
+                <span className="status-pill">{like.action}</span>
+              </div>
+              <Button
+                className="mt-3"
+                onClick={() => likeBack.mutate(like.user_id)}
+                loading={likeBack.isPending}
+              >
+                <Heart className="h-4 w-4" /> {ru.miniApp.community.likeBack}
+              </Button>
+            </Card>
+          ))}
+        </div>
+      )}
     </div>
   );
 }
@@ -198,6 +236,13 @@ export function ChatsPage() {
 
 export function PremiumPage() {
   const products = useQuery({ queryKey: ['products'], queryFn: api.products });
+  const status = useQuery({ queryKey: ['premium-status'], queryFn: api.premiumStatus });
+  const stats = useQuery({
+    queryKey: ['premium-stats'],
+    queryFn: api.premiumStats,
+    enabled: status.data?.premium === true,
+  });
+  const boost = useMutation({ mutationFn: api.premiumBoost });
   const invoice = useMutation({
     mutationFn: api.invoice,
     onSuccess: (result) => {
@@ -220,6 +265,34 @@ export function PremiumPage() {
           </Card>
         ))}
       </div>
+      {status.data?.premium ? (
+        <Card className="mt-4 p-4">
+          {stats.data ? (
+            <p className="text-sm text-soft">
+              {ru.miniApp.community.premiumStats(
+                stats.data.viewsToday,
+                stats.data.viewsSevenDays,
+                stats.data.viewsTotal,
+                stats.data.incomingLikes,
+              )}
+            </p>
+          ) : null}
+          {status.data.earlyAccess ? (
+            <p className="mt-2 text-sm text-lilac">{ru.miniApp.community.earlyAccessEnabled}</p>
+          ) : null}
+          <Button
+            className="mt-3"
+            onClick={() => boost.mutate()}
+            loading={boost.isPending}
+            disabled={boost.isSuccess}
+          >
+            {boost.isSuccess
+              ? ru.miniApp.community.boostActivated
+              : ru.miniApp.community.activateBoost}
+          </Button>
+        </Card>
+      ) : null}
+      {status.data?.premium ? <PremiumProfileVariants /> : null}
       <SectionTitle eyebrow={ru.miniApp.community.paymentEyebrow}>
         {ru.miniApp.community.choosePlan}
       </SectionTitle>
@@ -238,6 +311,94 @@ export function PremiumPage() {
       </div>
       <p className="mt-6 text-center text-xs text-muted">{ru.miniApp.attribution}</p>
     </div>
+  );
+}
+
+function PremiumProfileVariants() {
+  const queryClient = useQueryClient();
+  const variants = useQuery({ queryKey: ['profile-variants'], queryFn: api.profileVariants });
+  const [name, setName] = useState('');
+  const [shortHeadline, setShortHeadline] = useState('');
+  const [about, setAbout] = useState('');
+  const [plots, setPlots] = useState('');
+  const save = useMutation({
+    mutationFn: api.saveProfileVariant,
+    onSuccess: () => {
+      setName('');
+      setShortHeadline('');
+      setAbout('');
+      setPlots('');
+      void queryClient.invalidateQueries({ queryKey: ['profile-variants'] });
+    },
+  });
+  const activate = useMutation({
+    mutationFn: api.activateProfileVariant,
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ['profile-variants'] });
+      void queryClient.invalidateQueries({ queryKey: ['profile'] });
+    },
+  });
+  const remove = useMutation({
+    mutationFn: api.deleteProfileVariant,
+    onSuccess: () => void queryClient.invalidateQueries({ queryKey: ['profile-variants'] }),
+  });
+  return (
+    <Card className="mt-4 space-y-3 p-4">
+      <h2 className="font-display text-2xl">{ru.miniApp.community.profileVariantsTitle}</h2>
+      <input
+        className="input-field"
+        value={name}
+        maxLength={40}
+        onChange={(event) => setName(event.target.value)}
+        placeholder={ru.miniApp.community.profileVariantName}
+      />
+      <input
+        className="input-field"
+        value={shortHeadline}
+        maxLength={120}
+        onChange={(event) => setShortHeadline(event.target.value)}
+        placeholder={ru.miniApp.community.profileVariantHeadline}
+      />
+      <textarea
+        className="input-field min-h-24"
+        value={about}
+        maxLength={2_000}
+        onChange={(event) => setAbout(event.target.value)}
+        placeholder={ru.miniApp.community.profileVariantAbout}
+      />
+      <textarea
+        className="input-field min-h-20"
+        value={plots}
+        maxLength={2_000}
+        onChange={(event) => setPlots(event.target.value)}
+        placeholder={ru.miniApp.community.profileVariantPlots}
+      />
+      <Button
+        loading={save.isPending}
+        disabled={!name.trim() || shortHeadline.trim().length < 3 || about.trim().length < 20}
+        onClick={() => save.mutate({ name, shortHeadline, about, plots })}
+      >
+        {ru.miniApp.community.saveProfileVariant}
+      </Button>
+      <div className="space-y-2">
+        {variants.data?.map((variant) => (
+          <div className="setting-row" key={variant.id}>
+            <span>
+              {variant.name}
+              {variant.is_active ? ' ✓' : ''}
+            </span>
+            <span className="flex gap-2">
+              <button onClick={() => activate.mutate(variant.id)}>
+                {ru.miniApp.community.activateProfileVariant}
+              </button>
+              <button onClick={() => remove.mutate(variant.id)}>
+                {ru.miniApp.community.deleteProfileVariant}
+              </button>
+            </span>
+          </div>
+        ))}
+      </div>
+    </Card>
   );
 }
 
@@ -283,6 +444,7 @@ export function ReferralsPage() {
 
 export function SettingsPage() {
   const settings = useQuery({ queryKey: ['settings'], queryFn: api.settings });
+  const premium = useQuery({ queryKey: ['premium-status'], queryFn: api.premiumStatus });
   const [form, setForm] = useState<SettingsInput | null>(null);
   const save = useMutation({ mutationFn: api.saveSettings });
   const searchState = useMutation({ mutationFn: api.setSearchEnabled });
@@ -323,10 +485,16 @@ export function SettingsPage() {
             <input
               type="checkbox"
               checked={Boolean(form[key])}
+              disabled={
+                !premium.data?.premium && (key === 'showOnlineStatus' || key === 'showPremiumBadge')
+              }
               onChange={(event) => setForm({ ...form, [key]: event.target.checked })}
             />
           </Card>
         ))}
+        {!premium.data?.premium ? (
+          <p className="text-sm text-muted">{ru.miniApp.community.premiumPrivacyOnly}</p>
+        ) : null}
         <Card className="setting-row">
           <span>{ru.miniApp.community.theme}</span>
           <select

@@ -3,7 +3,12 @@ import { motion, AnimatePresence } from 'framer-motion';
 import { Ban, Flag, Heart, RotateCcw, SlidersHorizontal, Star, X } from 'lucide-react';
 import { useState } from 'react';
 import { ru } from '@rolemate/shared';
-import { api, type SearchProfile } from '../api.js';
+import {
+  api,
+  type SearchPreferences,
+  type SearchPreferencesInput,
+  type SearchProfile,
+} from '../api.js';
 import { Button, Card, EmptyState, Skeleton } from '../components/ui.js';
 import { haptic } from '../telegram.js';
 
@@ -71,7 +76,13 @@ function ProfileCard({ profile }: { profile: SearchProfile }) {
 export function SearchPage() {
   const queryClient = useQueryClient();
   const profiles = useQuery({ queryKey: ['search'], queryFn: api.search });
+  const premium = useQuery({ queryKey: ['premium-status'], queryFn: api.premiumStatus });
+  const preferences = useQuery({
+    queryKey: ['search-preferences'],
+    queryFn: api.searchPreferences,
+  });
   const [index, setIndex] = useState(0);
+  const [filtersOpen, setFiltersOpen] = useState(false);
   const current = profiles.data?.[index];
   const swipe = useMutation({
     mutationFn: ({
@@ -87,6 +98,19 @@ export function SearchPage() {
       if (result.matched) void queryClient.invalidateQueries({ queryKey: ['conversations'] });
     },
   });
+  const rewind = useMutation({
+    mutationFn: api.rewind,
+    onSuccess: () => {
+      haptic('light');
+      setIndex((value) => Math.max(0, value - 1));
+      void queryClient.invalidateQueries({ queryKey: ['search'] });
+    },
+  });
+  const block = useMutation({
+    mutationFn: (userId: string) => api.block(userId),
+    onSuccess: () => setIndex((value) => value + 1),
+  });
+  const report = useMutation({ mutationFn: api.report });
 
   if (profiles.isLoading) {
     return (
@@ -114,10 +138,38 @@ export function SearchPage() {
           <p className="eyebrow">{ru.miniApp.search.eyebrow}</p>
           <h1 className="font-display text-3xl font-semibold">{ru.miniApp.search.title}</h1>
         </div>
-        <Button variant="ghost" aria-label={ru.miniApp.search.filters}>
+        <Button
+          variant="ghost"
+          aria-label={ru.miniApp.search.filters}
+          onClick={() => setFiltersOpen((value) => !value)}
+        >
           <SlidersHorizontal className="h-5 w-5" />
         </Button>
       </div>
+      {premium.data ? (
+        <p className="mb-3 text-center text-xs text-muted">
+          {ru.miniApp.search.dailyUsage(
+            premium.data.usage.profileViews,
+            premium.data.usage.profileViewLimit,
+            premium.data.usage.superLikes,
+            premium.data.usage.superLikeLimit,
+          )}
+        </p>
+      ) : null}
+      {filtersOpen && preferences.data ? (
+        preferences.data.premium ? (
+          <SearchFilters
+            preferences={preferences.data}
+            onSaved={() => {
+              setFiltersOpen(false);
+              setIndex(0);
+              void profiles.refetch();
+            }}
+          />
+        ) : (
+          <Card className="mb-4 p-4 text-sm text-soft">{ru.miniApp.search.premiumFiltersOnly}</Card>
+        )
+      ) : null}
       <AnimatePresence mode="wait">
         <motion.div
           key={current.id}
@@ -129,7 +181,12 @@ export function SearchPage() {
         </motion.div>
       </AnimatePresence>
       <div className="swipe-actions">
-        <Button variant="ghost" aria-label={ru.miniApp.search.rewind}>
+        <Button
+          variant="ghost"
+          aria-label={ru.miniApp.search.rewind}
+          onClick={() => rewind.mutate()}
+          disabled={!premium.data?.premium || rewind.isPending}
+        >
           <RotateCcw />
         </Button>
         <Button
@@ -155,13 +212,194 @@ export function SearchPage() {
         </Button>
       </div>
       <div className="mt-3 flex justify-center gap-6 text-xs text-muted">
-        <button className="inline-flex gap-1">
+        <button
+          className="inline-flex gap-1"
+          onClick={() => {
+            if (window.confirm(ru.miniApp.search.blockConfirm)) block.mutate(current.user_id);
+          }}
+        >
           <Ban className="h-3.5 w-3.5" /> {ru.miniApp.search.block}
         </button>
-        <button className="inline-flex gap-1">
+        <button
+          className="inline-flex gap-1"
+          onClick={() => {
+            const description = window.prompt(ru.miniApp.search.reportPrompt) ?? '';
+            if (!description) return;
+            report.mutate({
+              reportedUserId: current.user_id,
+              category: 'other',
+              description,
+            });
+          }}
+        >
           <Flag className="h-3.5 w-3.5" /> {ru.miniApp.search.report}
         </button>
       </div>
     </div>
+  );
+}
+
+function SearchFilters({
+  preferences,
+  onSaved,
+}: {
+  preferences: SearchPreferences;
+  onSaved: () => void;
+}) {
+  const queryClient = useQueryClient();
+  const ageOptions: SearchPreferencesInput['ageGroups'] = [
+    'under_16',
+    '16_17',
+    '18_20',
+    '21_25',
+    '26_plus',
+  ];
+  const [ageGroups, setAgeGroups] = useState<SearchPreferencesInput['ageGroups']>(
+    list(preferences.age_groups) as SearchPreferencesInput['ageGroups'],
+  );
+  const [genres, setGenres] = useState(list(preferences.genres).join(', '));
+  const [fandoms, setFandoms] = useState(list(preferences.fandoms).join(', '));
+  const [writingStyles, setWritingStyles] = useState(list(preferences.writing_styles).join(', '));
+  const [activityLevels, setActivityLevels] = useState(
+    list(preferences.activity_levels).join(', '),
+  );
+  const [onlyOnline, setOnlyOnline] = useState(Boolean(preferences.only_online));
+  const [onlyWithPhoto, setOnlyWithPhoto] = useState(Boolean(preferences.only_with_photo));
+  const [filterSetName, setFilterSetName] = useState('');
+  const filterSets = useQuery({ queryKey: ['filter-sets'], queryFn: api.filterSets });
+  const save = useMutation({
+    mutationFn: (input: SearchPreferencesInput) => api.saveSearchPreferences(input),
+    onSuccess: onSaved,
+  });
+  const split = (value: string) =>
+    value
+      .split(',')
+      .map((item) => item.trim())
+      .filter(Boolean);
+  const currentInput = (): SearchPreferencesInput => ({
+    ageGroups,
+    languages: [],
+    genres: split(genres),
+    fandoms: split(fandoms),
+    writingStyles: split(writingStyles),
+    activityLevels: split(activityLevels),
+    onlyOnline,
+    onlyWithPhoto,
+  });
+  const saveSet = useMutation({
+    mutationFn: () => api.saveFilterSet(filterSetName, currentInput()),
+    onSuccess: () => {
+      setFilterSetName('');
+      void queryClient.invalidateQueries({ queryKey: ['filter-sets'] });
+    },
+  });
+  const activateSet = useMutation({
+    mutationFn: api.activateFilterSet,
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ['search-preferences'] });
+      onSaved();
+    },
+  });
+  const deleteSet = useMutation({
+    mutationFn: api.deleteFilterSet,
+    onSuccess: () => void queryClient.invalidateQueries({ queryKey: ['filter-sets'] }),
+  });
+  return (
+    <Card className="mb-4 space-y-3 p-4">
+      <p className="text-sm font-semibold">{ru.miniApp.search.filterAge}</p>
+      <div className="flex flex-wrap gap-2">
+        {ageOptions.map((age, index) => (
+          <button
+            key={age}
+            className={`tag ${ageGroups.includes(age) ? 'status-pill' : ''}`}
+            onClick={() =>
+              setAgeGroups((current) =>
+                current.includes(age) ? current.filter((item) => item !== age) : [...current, age],
+              )
+            }
+          >
+            {ru.miniApp.profile.ageOptions[index]}
+          </button>
+        ))}
+      </div>
+      {[
+        [genres, setGenres, ru.miniApp.search.filterGenres],
+        [fandoms, setFandoms, ru.miniApp.search.filterFandoms],
+        [writingStyles, setWritingStyles, ru.miniApp.search.filterWritingStyles],
+        [activityLevels, setActivityLevels, ru.miniApp.search.filterActivity],
+      ].map(([value, setter, placeholder]) => (
+        <input
+          key={String(placeholder)}
+          className="input-field"
+          value={String(value)}
+          onChange={(event) => (setter as (value: string) => void)(event.target.value)}
+          placeholder={String(placeholder)}
+        />
+      ))}
+      <label className="setting-row">
+        {ru.miniApp.search.onlyOnline}
+        <input
+          type="checkbox"
+          checked={onlyOnline}
+          onChange={(event) => setOnlyOnline(event.target.checked)}
+        />
+      </label>
+      <label className="setting-row">
+        {ru.miniApp.search.onlyWithPhoto}
+        <input
+          type="checkbox"
+          checked={onlyWithPhoto}
+          onChange={(event) => setOnlyWithPhoto(event.target.checked)}
+        />
+      </label>
+      <Button
+        loading={save.isPending}
+        onClick={() =>
+          save.mutate({
+            ...currentInput(),
+          })
+        }
+      >
+        {ru.miniApp.search.saveFilters}
+      </Button>
+      <div className="border-t border-white/10 pt-3">
+        <p className="mb-2 text-sm font-semibold">{ru.miniApp.search.savedFilterSets}</p>
+        <div className="flex gap-2">
+          <input
+            className="input-field"
+            value={filterSetName}
+            maxLength={40}
+            onChange={(event) => setFilterSetName(event.target.value)}
+            placeholder={ru.miniApp.search.filterSetName}
+          />
+          <Button
+            variant="secondary"
+            disabled={!filterSetName.trim()}
+            loading={saveSet.isPending}
+            onClick={() => saveSet.mutate()}
+          >
+            {ru.miniApp.search.saveFilterSet}
+          </Button>
+        </div>
+        <div className="mt-2 space-y-2">
+          {filterSets.data?.map((item) => (
+            <div className="setting-row" key={item.id}>
+              <span>
+                {item.name}
+                {item.is_active ? ' ✓' : ''}
+              </span>
+              <span className="flex gap-2">
+                <button onClick={() => activateSet.mutate(item.id)}>
+                  {ru.miniApp.search.activateFilterSet}
+                </button>
+                <button onClick={() => deleteSet.mutate(item.id)}>
+                  {ru.miniApp.search.deleteFilterSet}
+                </button>
+              </span>
+            </div>
+          ))}
+        </div>
+      </div>
+    </Card>
   );
 }

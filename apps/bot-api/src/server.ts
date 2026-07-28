@@ -375,6 +375,59 @@ export async function buildServer(env: AppEnv): Promise<FastifyInstance> {
       .parse(request.query);
     return dataApi.execute('search.list', { userId: session.userId, limit: query.limit });
   });
+  app.get('/api/search/preferences', async (request) => {
+    const session = await authenticate(request);
+    return dataApi.execute('search.preferences.get', { userId: session.userId });
+  });
+  app.put('/api/search/preferences', async (request) => {
+    const session = await mutateSafe(request);
+    const body = z
+      .object({
+        ageGroups: z.array(z.enum(['under_16', '16_17', '18_20', '21_25', '26_plus'])).max(5),
+        languages: z.array(z.string().min(1).max(40)).max(10),
+        genres: z.array(z.string().min(1).max(80)).max(20),
+        fandoms: z.array(z.string().min(1).max(120)).max(20),
+        writingStyles: z.array(z.string().min(1).max(40)).max(10),
+        activityLevels: z.array(z.string().min(1).max(40)).max(10),
+        onlyOnline: z.boolean(),
+        onlyWithPhoto: z.boolean(),
+      })
+      .parse(request.body);
+    return dataApi.execute('search.preferences.update', { userId: session.userId, ...body });
+  });
+  app.get('/api/search/filter-sets', async (request) => {
+    const session = await authenticate(request);
+    return dataApi.execute('search.filterSets.list', { userId: session.userId });
+  });
+  app.post('/api/search/filter-sets', async (request) => {
+    const session = await mutateSafe(request);
+    const body = z
+      .object({
+        name: z.string().trim().min(1).max(40),
+        filters: z.object({
+          ageGroups: z.array(z.enum(['under_16', '16_17', '18_20', '21_25', '26_plus'])).max(5),
+          languages: z.array(z.string().min(1).max(40)).max(10),
+          genres: z.array(z.string().min(1).max(80)).max(20),
+          fandoms: z.array(z.string().min(1).max(120)).max(20),
+          writingStyles: z.array(z.string().min(1).max(40)).max(10),
+          activityLevels: z.array(z.string().min(1).max(40)).max(10),
+          onlyOnline: z.boolean(),
+          onlyWithPhoto: z.boolean(),
+        }),
+      })
+      .parse(request.body);
+    return dataApi.execute('search.filterSets.save', { userId: session.userId, ...body });
+  });
+  app.post('/api/search/filter-sets/:filterSetId/activate', async (request) => {
+    const session = await mutateSafe(request);
+    const { filterSetId } = z.object({ filterSetId: z.string().uuid() }).parse(request.params);
+    return dataApi.execute('search.filterSets.activate', { userId: session.userId, filterSetId });
+  });
+  app.delete('/api/search/filter-sets/:filterSetId', async (request) => {
+    const session = await mutateSafe(request);
+    const { filterSetId } = z.object({ filterSetId: z.string().uuid() }).parse(request.params);
+    return dataApi.execute('search.filterSets.delete', { userId: session.userId, filterSetId });
+  });
   app.post('/api/search/state', async (request) => {
     const session = await mutateSafe(request);
     const body = z.object({ enabled: z.boolean() }).parse(request.body);
@@ -392,6 +445,58 @@ export async function buildServer(env: AppEnv): Promise<FastifyInstance> {
       action: body.action,
       source: 'miniapp',
       idempotencyKey: request.id,
+    });
+  });
+  app.post('/api/swipes/rewind', async (request) => {
+    const session = await mutateSafe(request);
+    return dataApi.execute('swipes.rewind', { userId: session.userId });
+  });
+  app.get('/api/swipes/incoming', async (request) => {
+    const session = await authenticate(request);
+    return dataApi.execute('swipes.incoming', { userId: session.userId, limit: 50 });
+  });
+  app.get('/api/premium/status', async (request) => {
+    const session = await authenticate(request);
+    return dataApi.execute('premium.status', { userId: session.userId });
+  });
+  app.post('/api/premium/boost', async (request) => {
+    const session = await mutateSafe(request);
+    return dataApi.execute('premium.boost', { userId: session.userId });
+  });
+  app.get('/api/premium/stats', async (request) => {
+    const session = await authenticate(request);
+    return dataApi.execute('premium.stats', { userId: session.userId });
+  });
+  app.get('/api/premium/profile-variants', async (request) => {
+    const session = await authenticate(request);
+    return dataApi.execute('premium.profileVariants.list', { userId: session.userId });
+  });
+  app.post('/api/premium/profile-variants', async (request) => {
+    const session = await mutateSafe(request);
+    const body = z
+      .object({
+        name: z.string().trim().min(1).max(40),
+        shortHeadline: z.string().trim().min(3).max(120),
+        about: z.string().trim().min(20).max(2_000),
+        plots: z.string().max(2_000),
+      })
+      .parse(request.body);
+    return dataApi.execute('premium.profileVariants.save', { userId: session.userId, ...body });
+  });
+  app.post('/api/premium/profile-variants/:variantId/activate', async (request) => {
+    const session = await mutateSafe(request);
+    const { variantId } = z.object({ variantId: z.string().uuid() }).parse(request.params);
+    return dataApi.execute('premium.profileVariants.activate', {
+      userId: session.userId,
+      variantId,
+    });
+  });
+  app.delete('/api/premium/profile-variants/:variantId', async (request) => {
+    const session = await mutateSafe(request);
+    const { variantId } = z.object({ variantId: z.string().uuid() }).parse(request.params);
+    return dataApi.execute('premium.profileVariants.delete', {
+      userId: session.userId,
+      variantId,
     });
   });
   app.get('/api/conversations', async (request) => {
@@ -807,7 +912,17 @@ export async function buildServer(env: AppEnv): Promise<FastifyInstance> {
     const session = await requireAdmin(request, true);
     const params = z
       .object({
-        key: z.enum(['search_limit', 'relay_rate_limit', 'support_text', 'maintenance_text']),
+        key: z.enum([
+          'search_limit',
+          'relay_rate_limit',
+          'free_daily_profile_limit',
+          'premium_daily_profile_limit',
+          'free_super_like_limit',
+          'premium_super_like_limit',
+          'boost_cooldown_days',
+          'support_text',
+          'maintenance_text',
+        ]),
       })
       .parse(request.params);
     const body = z.object({ value: z.string().max(4_000) }).parse(request.body);

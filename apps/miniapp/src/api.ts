@@ -65,11 +65,56 @@ export const api = {
       body: JSON.stringify(profile),
     }),
   search: () => request<SearchProfile[]>('/search?limit=20'),
+  searchPreferences: () => request<SearchPreferences>('/search/preferences'),
+  saveSearchPreferences: (preferences: SearchPreferencesInput) =>
+    request<{ updated: true }>('/search/preferences', {
+      method: 'PUT',
+      body: JSON.stringify(preferences),
+    }),
+  filterSets: () => request<SavedFilterSet[]>('/search/filter-sets'),
+  saveFilterSet: (name: string, filters: SearchPreferencesInput) =>
+    request<SavedFilterSet>('/search/filter-sets', {
+      method: 'POST',
+      body: JSON.stringify({ name, filters }),
+    }),
+  activateFilterSet: (filterSetId: string) =>
+    request<{ activated: true }>(`/search/filter-sets/${filterSetId}/activate`, {
+      method: 'POST',
+      body: '{}',
+    }),
+  deleteFilterSet: (filterSetId: string) =>
+    request<{ deleted: true }>(`/search/filter-sets/${filterSetId}`, { method: 'DELETE' }),
   swipe: (targetUserId: string, action: 'like' | 'skip' | 'super_like' | 'rewind') =>
     request<{ matched: boolean; matchId?: string }>('/swipes', {
       method: 'POST',
       body: JSON.stringify({ targetUserId, action }),
     }),
+  rewind: () =>
+    request<{ rewound: true; targetUserId: string }>('/swipes/rewind', {
+      method: 'POST',
+      body: '{}',
+    }),
+  incomingLikes: () => request<IncomingLike[]>('/swipes/incoming'),
+  premiumStatus: () => request<PremiumStatus>('/premium/status'),
+  premiumBoost: () =>
+    request<{ boosted: true }>('/premium/boost', {
+      method: 'POST',
+      body: '{}',
+    }),
+  premiumStats: () => request<PremiumStats>('/premium/stats'),
+  profileVariants: () => request<ProfileVariant[]>('/premium/profile-variants'),
+  saveProfileVariant: (input: ProfileVariantInput) =>
+    request<{ id: string }>('/premium/profile-variants', {
+      method: 'POST',
+      body: JSON.stringify(input),
+    }),
+  activateProfileVariant: (variantId: string) =>
+    request<{ activated: true }>(`/premium/profile-variants/${variantId}/activate`, {
+      method: 'POST',
+      body: '{}',
+    }),
+  deleteProfileVariant: (variantId: string) =>
+    request<{ deleted: true }>(`/premium/profile-variants/${variantId}`, { method: 'DELETE' }),
   conversations: () => request<Conversation[]>('/conversations'),
   matches: () => request<Match[]>('/matches'),
   block: (blockedUserId: string, reason = 'user_request') =>
@@ -244,6 +289,77 @@ export interface SearchProfile {
   activity_frequency: string;
   compatibility: number;
   is_premium: number;
+}
+
+export interface SearchPreferences {
+  premium: boolean;
+  age_groups: string;
+  languages: string;
+  genres: string;
+  fandoms: string;
+  writing_styles: string;
+  activity_levels: string;
+  only_online: number;
+  only_with_photo: number;
+}
+
+export interface SearchPreferencesInput {
+  ageGroups: Array<'under_16' | '16_17' | '18_20' | '21_25' | '26_plus'>;
+  languages: string[];
+  genres: string[];
+  fandoms: string[];
+  writingStyles: string[];
+  activityLevels: string[];
+  onlyOnline: boolean;
+  onlyWithPhoto: boolean;
+}
+
+export interface SavedFilterSet {
+  id: string;
+  name: string;
+  filters: string;
+  is_active: number;
+}
+
+export interface IncomingLike extends SearchProfile {
+  swipe_id: string;
+  action: 'like' | 'super_like';
+  created_at: string;
+}
+
+export interface PremiumStatus {
+  premium: boolean;
+  endsAt?: string;
+  earlyAccess: boolean;
+  usage: {
+    profileViews: number;
+    profileViewLimit: number;
+    superLikes: number;
+    superLikeLimit: number;
+  };
+}
+
+export interface ProfileVariant {
+  id: string;
+  name: string;
+  short_headline: string;
+  about: string;
+  plots: string;
+  is_active: number;
+}
+
+export interface ProfileVariantInput {
+  name: string;
+  shortHeadline: string;
+  about: string;
+  plots: string;
+}
+
+export interface PremiumStats {
+  viewsToday: number;
+  viewsSevenDays: number;
+  viewsTotal: number;
+  incomingLikes: number;
 }
 
 export interface Conversation {
@@ -437,7 +553,16 @@ export interface FeatureFlag {
 }
 
 export interface AdminConfig {
-  key: 'search_limit' | 'relay_rate_limit' | 'support_text' | 'maintenance_text';
+  key:
+    | 'search_limit'
+    | 'relay_rate_limit'
+    | 'free_daily_profile_limit'
+    | 'premium_daily_profile_limit'
+    | 'free_super_like_limit'
+    | 'premium_super_like_limit'
+    | 'boost_cooldown_days'
+    | 'support_text'
+    | 'maintenance_text';
   value: string;
   updated_at?: string;
 }

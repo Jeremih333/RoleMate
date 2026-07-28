@@ -37,6 +37,36 @@ async function assertAdmin(env: Env, adminUserId: string): Promise<void> {
   }
 }
 
+async function premiumEnd(env: Env, userId: string): Promise<string | null> {
+  const entitlement = await env.DB.prepare(
+    `SELECT max(ends_at) AS ends_at FROM premium_entitlements
+     WHERE user_id = ?1 AND status = 'active' AND ends_at > CURRENT_TIMESTAMP`,
+  )
+    .bind(userId)
+    .first<{ ends_at: string | null }>();
+  return entitlement?.ends_at ?? null;
+}
+
+async function requirePremium(env: Env, userId: string): Promise<string> {
+  const endsAt = await premiumEnd(env, userId);
+  if (!endsAt) throw new ApiError(403, 'PREMIUM_REQUIRED', 'Premium is required');
+  return endsAt;
+}
+
+async function configInt(
+  env: Env,
+  key: string,
+  fallback: number,
+  minimum = 1,
+  maximum = 10_000,
+): Promise<number> {
+  const row = await env.DB.prepare('SELECT value FROM app_config WHERE key = ?1')
+    .bind(key)
+    .first<{ value: string }>();
+  const parsed = Number(row?.value ?? fallback);
+  return Number.isInteger(parsed) && parsed >= minimum && parsed <= maximum ? parsed : fallback;
+}
+
 const handlers: { [K in WorkerOperation]: Handler<K> } = {
   'users.upsert': async (env, input) => {
     const existing = await env.DB.prepare(
@@ -143,9 +173,22 @@ const handlers: { [K in WorkerOperation]: Handler<K> } = {
       .bind(input.userId)
       .first();
     if (!settings) throw new ApiError(404, 'SETTINGS_NOT_FOUND', 'Settings not found');
-    return settings;
+    const premium = Boolean(await premiumEnd(env, input.userId));
+    return premium
+      ? { ...settings, premium }
+      : { ...settings, premium, show_online_status: 1, show_premium_badge: 1 };
   },
   'settings.update': async (env, input) => {
+    if (
+      (!input.showOnlineStatus || !input.showPremiumBadge) &&
+      !(await premiumEnd(env, input.userId))
+    ) {
+      throw new ApiError(
+        403,
+        'PREMIUM_REQUIRED',
+        'Hiding online status and the Premium badge requires Premium',
+      );
+    }
     const result = await env.DB.prepare(
       `UPDATE user_settings SET
          notifications_enabled = ?2, match_notifications_enabled = ?3,
@@ -324,6 +367,147 @@ const handlers: { [K in WorkerOperation]: Handler<K> } = {
     if (!profile) throw new ApiError(404, 'PROFILE_NOT_FOUND', 'Profile not found');
     return profile;
   },
+  'search.preferences.get': async (env, input) => {
+    const premium = Boolean(await premiumEnd(env, input.userId));
+    const preferences = await env.DB.prepare(
+      `SELECT age_groups, languages, genres, fandoms, writing_styles,
+              activity_levels, only_online, only_with_photo
+       FROM search_preferences WHERE user_id = ?1`,
+    )
+      .bind(input.userId)
+      .first();
+    return {
+      premium,
+      ...(preferences ?? {
+        age_groups: '[]',
+        languages: '[]',
+        genres: '[]',
+        fandoms: '[]',
+        writing_styles: '[]',
+        activity_levels: '[]',
+        only_online: 0,
+        only_with_photo: 0,
+      }),
+    };
+  },
+  'search.preferences.update': async (env, input) => {
+    await requirePremium(env, input.userId);
+    await env.DB.prepare(
+      `INSERT INTO search_preferences (
+         user_id, age_groups, languages, genres, fandoms, writing_styles,
+         activity_levels, only_online, only_with_photo
+       ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
+       ON CONFLICT(user_id) DO UPDATE SET
+         age_groups = excluded.age_groups, languages = excluded.languages,
+         genres = excluded.genres, fandoms = excluded.fandoms,
+         writing_styles = excluded.writing_styles,
+         activity_levels = excluded.activity_levels,
+         only_online = excluded.only_online, only_with_photo = excluded.only_with_photo,
+         updated_at = CURRENT_TIMESTAMP`,
+    )
+      .bind(
+        input.userId,
+        json(input.ageGroups),
+        json(input.languages),
+        json(input.genres),
+        json(input.fandoms),
+        json(input.writingStyles),
+        json(input.activityLevels),
+        input.onlyOnline ? 1 : 0,
+        input.onlyWithPhoto ? 1 : 0,
+      )
+      .run();
+    return { updated: true };
+  },
+  'search.filterSets.list': async (env, input) => {
+    await requirePremium(env, input.userId);
+    return (
+      await env.DB.prepare(
+        `SELECT id, name, filters, is_active, created_at, updated_at
+         FROM saved_filter_sets WHERE user_id = ?1
+         ORDER BY is_active DESC, updated_at DESC`,
+      )
+        .bind(input.userId)
+        .all()
+    ).results;
+  },
+  'search.filterSets.save': async (env, input) => {
+    await requirePremium(env, input.userId);
+    const id = crypto.randomUUID();
+    await env.DB.prepare(
+      `INSERT INTO saved_filter_sets (id, user_id, name, filters)
+       VALUES (?1, ?2, ?3, ?4)
+       ON CONFLICT(user_id, name) DO UPDATE SET
+         filters = excluded.filters, updated_at = CURRENT_TIMESTAMP`,
+    )
+      .bind(id, input.userId, input.name, json(input.filters))
+      .run();
+    const row = await env.DB.prepare(
+      'SELECT id, name, filters, is_active FROM saved_filter_sets WHERE user_id = ?1 AND name = ?2',
+    )
+      .bind(input.userId, input.name)
+      .first();
+    return row;
+  },
+  'search.filterSets.activate': async (env, input) => {
+    await requirePremium(env, input.userId);
+    const row = await env.DB.prepare(
+      'SELECT filters FROM saved_filter_sets WHERE id = ?1 AND user_id = ?2',
+    )
+      .bind(input.filterSetId, input.userId)
+      .first<{ filters: string }>();
+    if (!row) throw new ApiError(404, 'FILTER_SET_NOT_FOUND', 'Saved filter set not found');
+    const filters = JSON.parse(row.filters) as {
+      ageGroups: string[];
+      languages: string[];
+      genres: string[];
+      fandoms: string[];
+      writingStyles: string[];
+      activityLevels: string[];
+      onlyOnline: boolean;
+      onlyWithPhoto: boolean;
+    };
+    await env.DB.batch([
+      env.DB.prepare(
+        `INSERT INTO search_preferences (
+           user_id, age_groups, languages, genres, fandoms, writing_styles,
+           activity_levels, only_online, only_with_photo
+         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
+         ON CONFLICT(user_id) DO UPDATE SET
+           age_groups = excluded.age_groups, languages = excluded.languages,
+           genres = excluded.genres, fandoms = excluded.fandoms,
+           writing_styles = excluded.writing_styles,
+           activity_levels = excluded.activity_levels,
+           only_online = excluded.only_online, only_with_photo = excluded.only_with_photo,
+           updated_at = CURRENT_TIMESTAMP`,
+      ).bind(
+        input.userId,
+        json(filters.ageGroups),
+        json(filters.languages),
+        json(filters.genres),
+        json(filters.fandoms),
+        json(filters.writingStyles),
+        json(filters.activityLevels),
+        filters.onlyOnline ? 1 : 0,
+        filters.onlyWithPhoto ? 1 : 0,
+      ),
+      env.DB.prepare(
+        'UPDATE saved_filter_sets SET is_active = CASE WHEN id = ?1 THEN 1 ELSE 0 END WHERE user_id = ?2',
+      ).bind(input.filterSetId, input.userId),
+    ]);
+    return { activated: true };
+  },
+  'search.filterSets.delete': async (env, input) => {
+    await requirePremium(env, input.userId);
+    const result = await env.DB.prepare(
+      'DELETE FROM saved_filter_sets WHERE id = ?1 AND user_id = ?2',
+    )
+      .bind(input.filterSetId, input.userId)
+      .run();
+    if (result.meta.changes !== 1)
+      throw new ApiError(404, 'FILTER_SET_NOT_FOUND', 'Saved filter set not found');
+    return { deleted: true };
+  },
   'search.list': async (env, input) => {
     const viewer = await env.DB.prepare(
       'SELECT age_group, fandoms, genres, languages FROM profiles WHERE user_id = ?1',
@@ -331,15 +515,55 @@ const handlers: { [K in WorkerOperation]: Handler<K> } = {
       .bind(input.userId)
       .first<{ age_group: string; fandoms: string; genres: string; languages: string }>();
     if (!viewer) throw new ApiError(409, 'PROFILE_REQUIRED', 'Create a profile first');
+    const premium = Boolean(await premiumEnd(env, input.userId));
+    const preferences = premium
+      ? await env.DB.prepare(
+          `SELECT age_groups, languages, genres, fandoms, writing_styles,
+                  activity_levels, only_online, only_with_photo
+           FROM search_preferences WHERE user_id = ?1`,
+        )
+          .bind(input.userId)
+          .first<{
+            age_groups: string;
+            languages: string;
+            genres: string;
+            fandoms: string;
+            writing_styles: string;
+            activity_levels: string;
+            only_online: number;
+            only_with_photo: number;
+          }>()
+      : null;
+    const viewedToday = await env.DB.prepare(
+      `SELECT COUNT(*) AS total FROM profile_views
+       WHERE viewer_user_id = ?1 AND viewed_on = date('now')`,
+    )
+      .bind(input.userId)
+      .first<{ total: number }>();
+    const configuredLimit = await env.DB.prepare(`SELECT value FROM app_config WHERE key = ?1`)
+      .bind(premium ? 'premium_daily_profile_limit' : 'free_daily_profile_limit')
+      .first<{ value: string }>();
+    const dailyLimit = Number(configuredLimit?.value ?? (premium ? 100 : 20));
+    const remaining = Math.max(0, dailyLimit - Number(viewedToday?.total ?? 0));
+    if (remaining === 0)
+      throw new ApiError(429, 'DAILY_VIEW_LIMIT', 'Daily profile view limit reached');
+    const ageGroups = preferences?.age_groups ?? '[]';
+    const genres = preferences?.genres ?? '[]';
+    const fandoms = preferences?.fandoms ?? '[]';
+    const writingStyles = preferences?.writing_styles ?? '[]';
+    const activityLevels = preferences?.activity_levels ?? '[]';
     const results = await env.DB.prepare(
       `SELECT p.id, p.user_id, p.display_name, p.age_group, p.short_headline,
               p.about, p.fandoms, p.genres, p.writing_style, p.average_post_length,
               p.activity_frequency, u.last_activity_at,
-              CASE WHEN pe.id IS NULL THEN 0 ELSE 1 END AS is_premium
+              CASE WHEN EXISTS (
+                SELECT 1 FROM premium_entitlements pe
+                JOIN user_settings settings ON settings.user_id = p.user_id
+                WHERE pe.user_id = p.user_id AND pe.status = 'active'
+                  AND pe.ends_at > CURRENT_TIMESTAMP AND settings.show_premium_badge = 1
+              ) THEN 1 ELSE 0 END AS is_premium
        FROM profiles p
        JOIN users u ON u.id = p.user_id
-       LEFT JOIN premium_entitlements pe ON pe.user_id = p.user_id
-         AND pe.status = 'active' AND pe.ends_at > CURRENT_TIMESTAMP
        WHERE p.user_id <> ?1 AND p.moderation_status = 'approved' AND p.is_active = 1
          AND u.is_banned = 0 AND u.is_search_enabled = 1 AND u.deleted_at IS NULL
          AND NOT EXISTS (
@@ -352,19 +576,59 @@ const handlers: { [K in WorkerOperation]: Handler<K> } = {
            WHERE s.actor_user_id = ?1 AND s.target_user_id = p.user_id
              AND s.action IN ('like', 'skip', 'super_like')
          )
-       ORDER BY is_premium DESC, u.last_activity_at DESC
+         AND (json_array_length(?4) = 0 OR p.age_group IN (SELECT value FROM json_each(?4)))
+         AND (json_array_length(?5) = 0 OR EXISTS (
+           SELECT 1 FROM json_each(p.genres) candidate
+           WHERE candidate.value IN (SELECT value FROM json_each(?5))
+         ))
+         AND (json_array_length(?6) = 0 OR EXISTS (
+           SELECT 1 FROM json_each(p.fandoms) candidate
+           WHERE candidate.value IN (SELECT value FROM json_each(?6))
+         ))
+         AND (json_array_length(?7) = 0 OR p.writing_style IN (
+           SELECT value FROM json_each(?7)
+         ))
+         AND (json_array_length(?8) = 0 OR p.activity_frequency IN (
+           SELECT value FROM json_each(?8)
+         ))
+         AND (?9 = 0 OR u.last_activity_at >= datetime('now', '-15 minutes'))
+         AND (?10 = 0 OR EXISTS (
+           SELECT 1 FROM profile_media pm
+           WHERE pm.profile_id = p.id AND pm.moderation_status = 'approved'
+         ))
+         AND (
+           p.age_group = ?11
+           OR (
+             ?11 IN ('18_20', '21_25', '26_plus')
+             AND p.age_group IN ('18_20', '21_25', '26_plus')
+           )
+         )
+       ORDER BY CASE WHEN p.last_boosted_at >= datetime('now', '-7 day') THEN 1 ELSE 0 END DESC,
+                is_premium DESC, u.last_activity_at DESC
        LIMIT min(
-         ?2,
+         ?2, ?3,
          COALESCE((
            SELECT CAST(value AS INTEGER) FROM app_config WHERE key = 'search_limit'
          ), ?2)
        )`,
     )
-      .bind(input.userId, input.limit)
+      .bind(
+        input.userId,
+        input.limit,
+        remaining,
+        ageGroups,
+        genres,
+        fandoms,
+        writingStyles,
+        activityLevels,
+        preferences?.only_online ?? 0,
+        preferences?.only_with_photo ?? 0,
+        viewer.age_group,
+      )
       .all<Record<string, unknown>>();
     const viewerFandoms = parseJsonArray(viewer.fandoms);
     const viewerGenres = parseJsonArray(viewer.genres);
-    return results.results.map((row) => {
+    const response = results.results.map((row) => {
       const fandoms = parseJsonArray(typeof row.fandoms === 'string' ? row.fandoms : '[]');
       const genres = parseJsonArray(typeof row.genres === 'string' ? row.genres : '[]');
       const shared =
@@ -372,10 +636,49 @@ const handlers: { [K in WorkerOperation]: Handler<K> } = {
         genres.filter((item) => viewerGenres.includes(item)).length * 10;
       return { ...row, compatibility: Math.min(100, 35 + shared) };
     });
+    if (response.length) {
+      await env.DB.batch(
+        response.map((row) =>
+          env.DB.prepare(
+            `INSERT OR IGNORE INTO profile_views
+               (id, viewer_user_id, viewed_user_id)
+             VALUES (?1, ?2, ?3)`,
+          ).bind(
+            crypto.randomUUID(),
+            input.userId,
+            String((row as Record<string, unknown>).user_id),
+          ),
+        ),
+      );
+    }
+    return response;
   },
   'swipes.create': async (env, input) => {
     if (input.userId === input.targetUserId) {
       throw new ApiError(400, 'INVALID_TARGET', 'Invalid target');
+    }
+    if (input.action === 'rewind') {
+      throw new ApiError(400, 'USE_REWIND_OPERATION', 'Use rewind operation');
+    }
+    if (input.action === 'super_like') {
+      const premium = Boolean(await premiumEnd(env, input.userId));
+      const used = await env.DB.prepare(
+        `SELECT COUNT(*) AS total FROM swipes
+         WHERE actor_user_id = ?1 AND action = 'super_like'
+           AND created_at >= datetime('now', 'start of day')`,
+      )
+        .bind(input.userId)
+        .first<{ total: number }>();
+      const dailyLimit = await configInt(
+        env,
+        premium ? 'premium_super_like_limit' : 'free_super_like_limit',
+        premium ? 5 : 1,
+        1,
+        100,
+      );
+      if (Number(used?.total ?? 0) >= dailyLimit) {
+        throw new ApiError(429, 'SUPER_LIKE_LIMIT', 'Daily super-like limit reached');
+      }
     }
     const swipeId = crypto.randomUUID();
     await env.DB.prepare(
@@ -431,6 +734,225 @@ const handlers: { [K in WorkerOperation]: Handler<K> } = {
       .bind(userA, userB)
       .first<{ id: string }>();
     return { matched: true, matchId: match?.id };
+  },
+  'swipes.rewind': async (env, input) => {
+    await requirePremium(env, input.userId);
+    const swipe = await env.DB.prepare(
+      `SELECT id, target_user_id FROM swipes
+       WHERE actor_user_id = ?1 AND action = 'skip'
+         AND created_at >= datetime('now', '-1 day')
+       ORDER BY created_at DESC LIMIT 1`,
+    )
+      .bind(input.userId)
+      .first<{ id: string; target_user_id: string }>();
+    if (!swipe) throw new ApiError(404, 'NOTHING_TO_REWIND', 'No skipped profile to rewind');
+    await env.DB.prepare('DELETE FROM swipes WHERE id = ?1 AND actor_user_id = ?2')
+      .bind(swipe.id, input.userId)
+      .run();
+    return { rewound: true, targetUserId: swipe.target_user_id };
+  },
+  'swipes.incoming': async (env, input) => {
+    await requirePremium(env, input.userId);
+    return (
+      await env.DB.prepare(
+        `SELECT s.id AS swipe_id, s.action, s.created_at,
+                p.id, p.user_id, p.display_name, p.short_headline,
+                p.about, p.fandoms, p.genres
+         FROM swipes s
+         JOIN users u ON u.id = s.actor_user_id
+         JOIN profiles p ON p.user_id = s.actor_user_id
+         WHERE s.target_user_id = ?1 AND s.action IN ('like', 'super_like')
+           AND u.is_banned = 0 AND u.deleted_at IS NULL
+           AND p.is_active = 1 AND p.moderation_status = 'approved'
+           AND NOT EXISTS (
+             SELECT 1 FROM swipes own
+             WHERE own.actor_user_id = ?1 AND own.target_user_id = s.actor_user_id
+               AND own.action IN ('like', 'super_like')
+           )
+         ORDER BY CASE s.action WHEN 'super_like' THEN 0 ELSE 1 END,
+                  s.created_at DESC LIMIT ?2`,
+      )
+        .bind(input.userId, input.limit)
+        .all()
+    ).results;
+  },
+  'premium.status': async (env, input) => {
+    const endsAt = await premiumEnd(env, input.userId);
+    const [views, superLikes] = await Promise.all([
+      env.DB.prepare(
+        `SELECT COUNT(*) AS total FROM profile_views
+         WHERE viewer_user_id = ?1 AND viewed_on = date('now')`,
+      )
+        .bind(input.userId)
+        .first<{ total: number }>(),
+      env.DB.prepare(
+        `SELECT COUNT(*) AS total FROM swipes
+         WHERE actor_user_id = ?1 AND action = 'super_like'
+           AND created_at >= datetime('now', 'start of day')`,
+      )
+        .bind(input.userId)
+        .first<{ total: number }>(),
+    ]);
+    const premium = Boolean(endsAt);
+    const [profileViewLimit, superLikeLimit] = await Promise.all([
+      configInt(
+        env,
+        premium ? 'premium_daily_profile_limit' : 'free_daily_profile_limit',
+        premium ? 100 : 20,
+        1,
+        1_000,
+      ),
+      configInt(
+        env,
+        premium ? 'premium_super_like_limit' : 'free_super_like_limit',
+        premium ? 5 : 1,
+        1,
+        100,
+      ),
+    ]);
+    return {
+      premium,
+      endsAt,
+      earlyAccess: premium
+        ? Boolean(
+            (
+              await env.DB.prepare(
+                "SELECT enabled FROM feature_flags WHERE key = 'premium_early_access'",
+              ).first<{ enabled: number }>()
+            )?.enabled,
+          )
+        : false,
+      usage: {
+        profileViews: Number(views?.total ?? 0),
+        profileViewLimit,
+        superLikes: Number(superLikes?.total ?? 0),
+        superLikeLimit,
+      },
+    };
+  },
+  'premium.boost': async (env, input) => {
+    await requirePremium(env, input.userId);
+    const profile = await env.DB.prepare(
+      'SELECT id, last_boosted_at FROM profiles WHERE user_id = ?1',
+    )
+      .bind(input.userId)
+      .first<{ id: string; last_boosted_at: string | null }>();
+    if (!profile) throw new ApiError(404, 'PROFILE_NOT_FOUND', 'Profile not found');
+    const cooldownDays = await configInt(env, 'boost_cooldown_days', 7, 1, 365);
+    if (
+      profile.last_boosted_at &&
+      Date.parse(profile.last_boosted_at.replace(' ', 'T') + 'Z') >
+        Date.now() - cooldownDays * 86_400_000
+    ) {
+      throw new ApiError(429, 'BOOST_COOLDOWN', 'Boost is available once every seven days');
+    }
+    await env.DB.prepare('UPDATE profiles SET last_boosted_at = CURRENT_TIMESTAMP WHERE id = ?1')
+      .bind(profile.id)
+      .run();
+    return { boosted: true };
+  },
+  'premium.stats': async (env, input) => {
+    await requirePremium(env, input.userId);
+    const [today, sevenDays, total, incoming] = await Promise.all([
+      env.DB.prepare(
+        `SELECT COUNT(*) AS total FROM profile_views
+         WHERE viewed_user_id = ?1 AND viewed_on = date('now')`,
+      )
+        .bind(input.userId)
+        .first<{ total: number }>(),
+      env.DB.prepare(
+        `SELECT COUNT(*) AS total FROM profile_views
+         WHERE viewed_user_id = ?1 AND viewed_on >= date('now', '-6 day')`,
+      )
+        .bind(input.userId)
+        .first<{ total: number }>(),
+      env.DB.prepare('SELECT COUNT(*) AS total FROM profile_views WHERE viewed_user_id = ?1')
+        .bind(input.userId)
+        .first<{ total: number }>(),
+      env.DB.prepare(
+        `SELECT COUNT(*) AS total FROM swipes
+         WHERE target_user_id = ?1 AND action IN ('like', 'super_like')`,
+      )
+        .bind(input.userId)
+        .first<{ total: number }>(),
+    ]);
+    return {
+      viewsToday: Number(today?.total ?? 0),
+      viewsSevenDays: Number(sevenDays?.total ?? 0),
+      viewsTotal: Number(total?.total ?? 0),
+      incomingLikes: Number(incoming?.total ?? 0),
+    };
+  },
+  'premium.profileVariants.list': async (env, input) => {
+    await requirePremium(env, input.userId);
+    return (
+      await env.DB.prepare(
+        `SELECT id, name, short_headline, about, plots, is_active, created_at, updated_at
+         FROM profile_variants WHERE user_id = ?1
+         ORDER BY is_active DESC, updated_at DESC`,
+      )
+        .bind(input.userId)
+        .all()
+    ).results;
+  },
+  'premium.profileVariants.save': async (env, input) => {
+    await requirePremium(env, input.userId);
+    const count = await env.DB.prepare(
+      'SELECT COUNT(*) AS total FROM profile_variants WHERE user_id = ?1',
+    )
+      .bind(input.userId)
+      .first<{ total: number }>();
+    const exists = await env.DB.prepare(
+      'SELECT id FROM profile_variants WHERE user_id = ?1 AND name = ?2',
+    )
+      .bind(input.userId, input.name)
+      .first<{ id: string }>();
+    if (!exists && Number(count?.total ?? 0) >= 5) {
+      throw new ApiError(409, 'PROFILE_VARIANT_LIMIT', 'Up to five profile variants are allowed');
+    }
+    const id = exists?.id ?? crypto.randomUUID();
+    await env.DB.prepare(
+      `INSERT INTO profile_variants
+         (id, user_id, name, short_headline, about, plots)
+       VALUES (?1, ?2, ?3, ?4, ?5, ?6)
+       ON CONFLICT(user_id, name) DO UPDATE SET
+         short_headline = excluded.short_headline, about = excluded.about,
+         plots = excluded.plots, updated_at = CURRENT_TIMESTAMP`,
+    )
+      .bind(id, input.userId, input.name, input.shortHeadline, input.about, input.plots)
+      .run();
+    return { id };
+  },
+  'premium.profileVariants.activate': async (env, input) => {
+    await requirePremium(env, input.userId);
+    const variant = await env.DB.prepare(
+      `SELECT short_headline, about, plots FROM profile_variants
+       WHERE id = ?1 AND user_id = ?2`,
+    )
+      .bind(input.variantId, input.userId)
+      .first<{ short_headline: string; about: string; plots: string }>();
+    if (!variant) throw new ApiError(404, 'PROFILE_VARIANT_NOT_FOUND', 'Profile variant not found');
+    await env.DB.batch([
+      env.DB.prepare(
+        `UPDATE profiles SET short_headline = ?2, about = ?3, plots = ?4,
+           updated_at = CURRENT_TIMESTAMP WHERE user_id = ?1`,
+      ).bind(input.userId, variant.short_headline, variant.about, variant.plots),
+      env.DB.prepare(
+        'UPDATE profile_variants SET is_active = CASE WHEN id = ?1 THEN 1 ELSE 0 END WHERE user_id = ?2',
+      ).bind(input.variantId, input.userId),
+    ]);
+    return { activated: true };
+  },
+  'premium.profileVariants.delete': async (env, input) => {
+    await requirePremium(env, input.userId);
+    const result = await env.DB.prepare(
+      'DELETE FROM profile_variants WHERE id = ?1 AND user_id = ?2',
+    )
+      .bind(input.variantId, input.userId)
+      .run();
+    if (result.meta.changes !== 1)
+      throw new ApiError(404, 'PROFILE_VARIANT_NOT_FOUND', 'Profile variant not found');
+    return { deleted: true };
   },
   'matches.list': async (env, input) => {
     const rows = await env.DB.prepare(
@@ -1794,6 +2316,11 @@ const handlers: { [K in WorkerOperation]: Handler<K> } = {
            VALUES
              ('search_limit', '20'),
              ('relay_rate_limit', '20'),
+             ('free_daily_profile_limit', '20'),
+             ('premium_daily_profile_limit', '100'),
+             ('free_super_like_limit', '1'),
+             ('premium_super_like_limit', '5'),
+             ('boost_cooldown_days', '7'),
              ('support_text', ''),
              ('maintenance_text', '')
          )
@@ -1806,7 +2333,15 @@ const handlers: { [K in WorkerOperation]: Handler<K> } = {
   'admin.config.update': async (env, input, requestId) => {
     await assertAdmin(env, input.adminUserId);
     if (
-      ['search_limit', 'relay_rate_limit'].includes(input.key) &&
+      [
+        'search_limit',
+        'relay_rate_limit',
+        'free_daily_profile_limit',
+        'premium_daily_profile_limit',
+        'free_super_like_limit',
+        'premium_super_like_limit',
+        'boost_cooldown_days',
+      ].includes(input.key) &&
       (!/^\d+$/.test(input.value) || Number(input.value) < 1 || Number(input.value) > 100)
     ) {
       throw new ApiError(400, 'CONFIG_VALUE_INVALID', 'Limit must be between 1 and 100');

@@ -165,6 +165,7 @@ export const ru = {
       preparing: 'Готовим пространство…',
       invalidData: 'Не удалось подтвердить вход через Telegram. Закрой Mini App и открой заново.',
       retry: 'Повторить вход',
+      errorCode: 'Код ошибки',
     },
     navigation: {
       home: 'Главная',

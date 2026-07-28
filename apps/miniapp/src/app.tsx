@@ -61,7 +61,9 @@ function AuthGate({ children }: { children: ReactNode }) {
         <h1>{ru.miniApp.auth.title}</h1>
         <p>{auth.error.message}</p>
         {auth.error instanceof ApiError ? (
-          <small className="error-code">Код: {auth.error.code}</small>
+          <small className="error-code">
+            {ru.miniApp.auth.errorCode}: {auth.error.code}
+          </small>
         ) : null}
         <Button type="button" loading={auth.isFetching} onClick={() => void auth.refetch()}>
           {ru.miniApp.auth.retry}

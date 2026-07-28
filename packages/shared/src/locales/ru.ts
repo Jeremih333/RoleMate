@@ -1,6 +1,10 @@
 import { FULL_FOOTER, PROMO_HANDLE, SHORT_FOOTER, SUPPORT_HANDLE } from '../constants.js';
 
 export const ru = {
+  brand: {
+    name: 'RoleMate',
+    premium: 'RoleMate Premium',
+  },
   bot: {
     menu: {
       search: '🔎 Найти со-ролевика',
@@ -298,6 +302,7 @@ export const ru = {
       timezone: 'Часовой пояс в формате UTC+3',
       activeHours: 'Обычно активен',
       fandoms: 'Фандомы',
+      fandomsPlaceholder: 'Arcane, Cyberpunk 2077',
       genres: 'Жанры',
       genresPlaceholder: 'драма, киберпанк, приключения',
       ideas: 'Идеи и сеттинги',
@@ -351,6 +356,7 @@ export const ru = {
       closeChatConfirm:
         'Завершить этот анонимный чат? После этого отправлять новые сообщения будет нельзя.',
       premiumEyebrow: 'больше пространства для историй',
+      premiumTitle: 'RoleMate Premium',
       premiumDescription:
         'Расширенные фильтры, входящие симпатии, возврат анкет и мягкий boost — безопасность и модерация остаются одинаковыми для всех.',
       premiumFeatures: [

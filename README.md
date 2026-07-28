@@ -79,7 +79,9 @@ powershell -ExecutionPolicy Bypass -File toolkit/verify.ps1
 ```
 
 `toolkit/` создан до реализации проекта и содержит повторяемые audit,
-secret-scan и verification-инструменты. Полная матрица: [TESTING.md](TESTING.md).
+secret-scan и verification-инструменты. Уровни проверок описаны в
+[TESTING.md](TESTING.md), а текущее соответствие Definition of Done — в
+[docs/COMPLETION_MATRIX.md](docs/COMPLETION_MATRIX.md).
 
 ## Развёртывание
 

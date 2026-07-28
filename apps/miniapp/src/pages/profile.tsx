@@ -333,7 +333,7 @@ export function ProfileEditorPage() {
           <span>{ru.miniApp.profile.fandoms}</span>
           <input
             className={field}
-            placeholder="Arcane, Cyberpunk 2077"
+            placeholder={ru.miniApp.profile.fandomsPlaceholder}
             value={form.watch('fandoms').join(', ')}
             onChange={(event) => form.setValue('fandoms', commaList(event.target.value))}
           />

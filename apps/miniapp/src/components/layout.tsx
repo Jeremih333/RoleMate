@@ -19,10 +19,10 @@ export function Layout({ children }: { children: ReactNode }) {
   return (
     <div className="app-shell">
       <header className="topbar">
-        <Link href="/" className="brand" aria-label="RoleMate">
+        <Link href="/" className="brand" aria-label={ru.brand.name}>
           <span className="brand-mark">R</span>
           <span>
-            <strong>RoleMate</strong>
+            <strong>{ru.brand.name}</strong>
             <small>{ru.miniApp.navigation.tagline}</small>
           </span>
         </Link>

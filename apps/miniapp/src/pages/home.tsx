@@ -1,7 +1,7 @@
 import { useQuery } from '@tanstack/react-query';
 import { ArrowRight, BookOpen, Crown, Heart, MessageCircle, Sparkles, Users } from 'lucide-react';
 import { Link } from 'wouter';
-import { ru } from '@rolemate/shared';
+import { PROMO_CHAT_URL, ru } from '@rolemate/shared';
 import { api } from '../api.js';
 import { Card, SectionTitle, Skeleton } from '../components/ui.js';
 
@@ -101,7 +101,7 @@ export function HomePage() {
           <Card className="feature-card premium-card">
             <Crown />
             <div>
-              <strong>RoleMate Premium</strong>
+              <strong>{ru.brand.premium}</strong>
               <small>{ru.miniApp.home.premiumDescription}</small>
             </div>
             <Sparkles className="ml-auto opacity-60" />
@@ -119,7 +119,7 @@ export function HomePage() {
         </Link>
       </section>
 
-      <a href="https://t.me/piarchaticksss" className="promo-strip">
+      <a href={PROMO_CHAT_URL} className="promo-strip">
         <span className="brand-mark small">P</span>
         <span>
           <strong>{ru.miniApp.home.promoTitle}</strong>

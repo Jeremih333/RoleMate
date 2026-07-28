@@ -107,6 +107,7 @@ export async function buildServer(env: AppEnv): Promise<FastifyInstance> {
     secret: env.INTERNAL_API_SECRET,
   });
   const bot = createBot(env, dataApi);
+  if (env.TELEGRAM_BOT_TOKEN) await bot.init();
   const stars = new TelegramStarsProvider(bot);
   let broadcastTimer: NodeJS.Timeout | undefined;
   let broadcastDispatching = false;
@@ -224,7 +225,7 @@ export async function buildServer(env: AppEnv): Promise<FastifyInstance> {
   });
   await app.register(swagger, {
     openapi: {
-      info: { title: 'RoleMate API', version: '0.1.0' },
+      info: { title: `${env.BOT_NAME} API`, version: '0.1.0' },
       servers: env.PUBLIC_BASE_URL ? [{ url: env.PUBLIC_BASE_URL }] : [],
     },
   });

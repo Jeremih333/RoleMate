@@ -254,7 +254,7 @@ export function PremiumPage() {
       <section className="premium-hero">
         <Crown className="h-10 w-10" />
         <p className="eyebrow">{ru.miniApp.community.premiumEyebrow}</p>
-        <h1 className="font-display text-5xl font-semibold">RoleMate Premium</h1>
+        <h1 className="font-display text-5xl font-semibold">{ru.miniApp.community.premiumTitle}</h1>
         <p>{ru.miniApp.community.premiumDescription}</p>
       </section>
       <div className="mt-6 grid gap-3 sm:grid-cols-2">

@@ -63,8 +63,14 @@ async function upsertUser(context: Context, dataApi: DataApiClient, referralCode
   });
 }
 
-export function createBot(env: AppEnv, dataApi: DataApiClient): Bot {
-  const bot = new Bot(env.TELEGRAM_BOT_TOKEN || '0:development');
+export function createBot(
+  env: AppEnv,
+  dataApi: DataApiClient,
+  telegramFetch: typeof fetch = fetch,
+): Bot {
+  const bot = new Bot(env.TELEGRAM_BOT_TOKEN || '0:development', {
+    client: { fetch: telegramFetch },
+  });
   const relayWindows = new Map<number, { startedAt: number; count: number }>();
   const selectedChats = new Map<number, string>();
   let runtimeCache: {

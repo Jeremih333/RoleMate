@@ -18,6 +18,8 @@
   health, SPA, Telegram-аватар и security gates, затем завершает созданные процессы.
 - `configure-cloudflare-app.ps1` — в видимом защищённом prompt принимает bot token
   и задаёт четыре production secret через Wrangler, не записывая значения.
+- `connect-telegram-production.ps1` — безопасно подключает production webhook и
+  кнопку Mini App, затем проверяет состояние webhook без вывода токена.
 
 Все скрипты завершаются ненулевым кодом при обнаружении ошибки и подходят для
 локального запуска и CI.

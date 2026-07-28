@@ -93,7 +93,6 @@ export async function validateTelegramInitData(
   const receivedHash = parameters.get('hash') ?? '';
   if (!/^[a-f\d]{64}$/i.test(receivedHash)) throw new Error('Invalid initData hash');
   parameters.delete('hash');
-  parameters.delete('signature');
   const dataCheckString = [...parameters.entries()]
     .sort(([left], [right]) => left.localeCompare(right))
     .map(([key, value]) => `${key}=${value}`)

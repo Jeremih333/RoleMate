@@ -1042,7 +1042,16 @@ export async function buildServer(
             : errorMessage === 'UNAUTHENTICATED' || errorMessage === 'INVALID_CSRF'
               ? errorMessage
               : 'INTERNAL_ERROR';
-    if (status >= 500) request.log.error({ err: error, requestId: request.id }, 'request failed');
+    if (status >= 500) {
+      request.log.error(
+        {
+          errorName: error instanceof Error ? error.name : 'UnknownError',
+          errorMessage,
+          requestId: request.id,
+        },
+        'request failed',
+      );
+    }
     return reply.code(status).send({
       error: code,
       message: status >= 500 ? ru.api.internalError : errorMessage,

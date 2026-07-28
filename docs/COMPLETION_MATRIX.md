@@ -18,13 +18,13 @@
 
 | Требование                                 | Статус                                | Авторитетное доказательство / следующий gate                                                                                                                            |
 | ------------------------------------------ | ------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Telegram-бот работает                      | Реализовано, ждёт production-проверки | grammY/Fastify; интеграционный тест реального webhook-контура проверяет инициализацию, `/start`, кнопки и оформление                                                    |
-| Mini App работает                          | Реализовано, ждёт production-проверки | production Vite build и 18 Playwright-проверок на Android/iPhone/desktop                                                                                                |
+| Telegram-бот работает                      | Подтверждено частично                 | production webhook и меню активны; integration проверяет `/start`, кнопки и оформление; ручной пользовательский проход остаётся                                         |
+| Mini App работает                          | Подтверждено                          | production URL отвечает 200, assets загружены; 18 Playwright-проверок на Android/iPhone/desktop                                                                         |
 | Production и preview D1 созданы            | Подтверждено                          | `rolemate-production` (`b43f7694-2383-43ed-9993-ea37af18ec71`) и `rolemate-preview` (`f67fcb4e-16ee-4154-b5d9-0ee897972dbd`)                                            |
 | Миграции применены                         | Подтверждено                          | `0001`–`0007` применены к обеим D1; `PRAGMA foreign_key_check` пуст                                                                                                     |
 | Data API Worker развёрнут                  | Подтверждено                          | `https://rolemate-data-api.carreljeremih.workers.dev`; signed HMAC smoke возвращает readiness и каталог продуктов                                                       |
-| Основной App Worker готов к deploy         | Подтверждено локально                 | Worker-native runtime, service binding, Static Assets и Cron собираются в 465 КБ raw / 86 КБ gzip и проходят реальный `workerd` smoke                                   |
-| Telegram webhook активен                   | Финальный проход                      | Worker endpoint и secret validation подтверждены локально; production webhook включается после установки Worker secrets                                                 |
+| Основной App Worker развёрнут              | Подтверждено                          | `https://rolemate-app.carreljeremih.workers.dev`; version `af7f7727-97f1-447e-8fa9-f6fccf573fda`, startup 24 мс, Cron активен                                           |
+| Telegram webhook активен                   | Подтверждено                          | `setWebhook`, Mini App menu и `getWebhookInfo` прошли; production endpoint отклоняет forged secret с 401                                                                |
 | Все кнопки работают                        | Реализовано, ждёт production-проверки | маршруты bot callbacks/commands и Mini App actions реализованы; финальный ручной button-by-button проход после webhook                                                  |
 | Анкеты создаются и редактируются           | Подтверждено локально                 | полная Zod-схема, D1 integration и Playwright regression существующих значений                                                                                          |
 | Поиск работает                             | Подтверждено локально                 | scoring/age/block/moderation/media gates, D1 integration и UI E2E                                                                                                       |
@@ -44,18 +44,17 @@
 | Ссылка поддержки указана                   | Подтверждено                          | централизованная конфигурация и тексты ведут на `@odinnadsat`                                                                                                           |
 | Подпись пиар-чата добавлена                | Подтверждено                          | централизованные full/short footers и подпись Mini App; исключена из пользовательского relay                                                                            |
 | Production Worker bundle собирается        | Подтверждено                          | Cloudflare dry-run: 465 КБ raw / 86 КБ gzip; Docker сохранён только как необязательный fallback                                                                         |
-| Health checks проходят                     | Подтверждено частично                 | Data API production readiness и App Worker local `workerd` live/static/security smoke проходят; production App Worker проверяется после deploy                          |
-| Автотесты проходят                         | Подтверждено локально                 | 36 unit/integration/migration и 18 E2E прошли; новый webhook regression увеличивает bot-api suite с 1 до 4 тестов                                                       |
+| Health checks проходят                     | Подтверждено                          | production `/health/live`, `/health/startup`, `/health/ready` отвечают 200; D1 dependency сообщает `true`                                                               |
+| Автотесты проходят                         | Подтверждено локально                 | 37 unit/integration/migration и 18 E2E прошли; modern Telegram `signature` покрыта отдельным regression                                                                 |
 | Security checks проходят                   | Подтверждено локально                 | secret scan, auth/HMAC/replay/admin/contact/privacy checks и dependency audit без известных high/critical                                                               |
 | Полный README создан                       | Подтверждено                          | архитектура, env, D1, два Worker, webhook, Mini App, Stars, referrals, CAPTCHA, admin, tests и troubleshooting                                                          |
-| Финальный verification report создан       | Финальный проход                      | создаётся с фактическим App Worker URL, webhook status, health и ручной regression evidence                                                                             |
+| Финальный verification report создан       | Подтверждено                          | `FINAL_VERIFICATION_REPORT.md` фиксирует production evidence и честно перечисляет оставшиеся ручные/CI gates                                                            |
 
 ## Незакрытые внешние gates
 
-1. Задать четыре App Worker secret интерактивно и выполнить production deploy.
-2. Дать явное разрешение исправить порядок clean-runner CI: перед `lint` собрать
+1. Дать явное разрешение исправить порядок clean-runner CI: перед `lint` собрать
    `@rolemate/shared`. Без разрешения workflow не изменяется.
-3. После Cloudflare deploy настроить Telegram webhook и Mini App URL, затем
-   пройти Stars/refund и ручную production-регрессию.
-4. Отправить выбранные Telegram Premium-эмодзи боту, получить реальные
+2. Вручную пройти `/start`, создание анкеты, мэтч, relay, Stars/refund и все
+   кнопки с двумя реальными Telegram-пользователями.
+3. Отправить выбранные Telegram Premium-эмодзи боту, получить реальные
    `custom_emoji_id` и заполнить `TELEGRAM_CUSTOM_EMOJI_IDS`.

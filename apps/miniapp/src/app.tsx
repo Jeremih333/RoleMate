@@ -2,8 +2,9 @@ import { type ReactNode, useEffect } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { ru } from '@rolemate/shared';
 import { Redirect, Route, Switch } from 'wouter';
-import { api } from './api.js';
+import { api, ApiError } from './api.js';
 import { Layout } from './components/layout.js';
+import { Button } from './components/ui.js';
 import { AdminPage } from './pages/admin.js';
 import {
   ChatsPage,
@@ -59,6 +60,12 @@ function AuthGate({ children }: { children: ReactNode }) {
         <span className="brand-mark large">R</span>
         <h1>{ru.miniApp.auth.title}</h1>
         <p>{auth.error.message}</p>
+        {auth.error instanceof ApiError ? (
+          <small className="error-code">Код: {auth.error.code}</small>
+        ) : null}
+        <Button type="button" loading={auth.isFetching} onClick={() => void auth.refetch()}>
+          {ru.miniApp.auth.retry}
+        </Button>
       </div>
     );
   if (!storedUser) {

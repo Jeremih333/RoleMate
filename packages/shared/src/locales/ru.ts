@@ -163,6 +163,8 @@ export const ru = {
       opening: 'Открываем следующую историю…',
       title: 'RoleMate открывается в Telegram',
       preparing: 'Готовим пространство…',
+      invalidData: 'Не удалось подтвердить вход через Telegram. Закрой Mini App и открой заново.',
+      retry: 'Повторить вход',
     },
     navigation: {
       home: 'Главная',

@@ -216,3 +216,24 @@ describe('Telegram webhook integration', () => {
     await app.close();
   });
 });
+
+describe('Mini App authentication errors', () => {
+  it('returns a safe retryable 401 for invalid Telegram initData', async () => {
+    const { fetchMock } = telegramAndDataFetch();
+    vi.stubGlobal('fetch', fetchMock);
+    const app = await buildServer(testEnv());
+
+    const response = await app.inject({
+      method: 'POST',
+      url: '/api/auth/telegram',
+      payload: { initData: 'hash=invalid' },
+    });
+
+    expect(response.statusCode).toBe(401);
+    expect(response.json()).toMatchObject({
+      error: 'INVALID_INIT_DATA',
+      message: ru.miniApp.auth.invalidData,
+    });
+    await app.close();
+  });
+});

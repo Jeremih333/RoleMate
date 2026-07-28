@@ -1018,6 +1018,10 @@ export async function buildServer(
 
   app.setErrorHandler((error, request, reply) => {
     const errorMessage = error instanceof Error ? error.message : 'UNKNOWN_ERROR';
+    const invalidTelegramInitData =
+      errorMessage.startsWith('Invalid initData') ||
+      errorMessage === 'Expired initData' ||
+      errorMessage === 'Missing initData user';
     const status =
       error instanceof DataApiError
         ? error.status
@@ -1029,9 +1033,11 @@ export async function buildServer(
               ? 413
               : errorMessage === 'UNAUTHENTICATED'
                 ? 401
-                : errorMessage === 'INVALID_CSRF'
-                  ? 403
-                  : 500;
+                : invalidTelegramInitData
+                  ? 401
+                  : errorMessage === 'INVALID_CSRF'
+                    ? 403
+                    : 500;
     const code =
       error instanceof DataApiError
         ? error.code
@@ -1041,7 +1047,9 @@ export async function buildServer(
             ? errorMessage
             : errorMessage === 'UNAUTHENTICATED' || errorMessage === 'INVALID_CSRF'
               ? errorMessage
-              : 'INTERNAL_ERROR';
+              : invalidTelegramInitData
+                ? 'INVALID_INIT_DATA'
+                : 'INTERNAL_ERROR';
     if (status >= 500) {
       request.log.error(
         {
@@ -1054,7 +1062,12 @@ export async function buildServer(
     }
     return reply.code(status).send({
       error: code,
-      message: status >= 500 ? ru.api.internalError : errorMessage,
+      message:
+        status >= 500
+          ? ru.api.internalError
+          : invalidTelegramInitData
+            ? ru.miniApp.auth.invalidData
+            : errorMessage,
       requestId: request.id,
     });
   });

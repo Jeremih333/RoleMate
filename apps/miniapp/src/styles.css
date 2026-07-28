@@ -681,6 +681,11 @@ label > small {
   font-family: 'Cormorant Garamond', serif;
   font-size: 30px;
 }
+.splash .error-code {
+  color: var(--muted);
+  font-size: 10px;
+  letter-spacing: 0.08em;
+}
 
 @media (min-width: 700px) {
   .page {

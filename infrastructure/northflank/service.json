@@ -61,8 +61,7 @@
     "INTERNAL_SERVICE_ID": "rolemate-bot-api",
     "YOOKASSA_ENABLED": "false",
     "YOOKASSA_DIGITAL_PREMIUM_ENABLED": "false",
-    "DEPLOYMENT_ENV": "production",
-    "COMMIT_SHA": "a6fe01e"
+    "DEPLOYMENT_ENV": "production"
   },
   "healthChecks": [
     {

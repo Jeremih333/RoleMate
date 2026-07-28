@@ -172,7 +172,8 @@ export const api = {
   adminModerateUser: (
     userId: string,
     input: {
-      action: 'warn' | 'temporary_ban' | 'permanent_ban' | 'unban' | 'disable_profile';
+      action:
+        'warn' | 'temporary_ban' | 'permanent_ban' | 'unban' | 'disable_profile' | 'reset_captcha';
       reason: string;
       bannedUntil?: string;
     },
@@ -214,6 +215,12 @@ export const api = {
     request<{ updated: true }>(`/admin/flags/${encodeURIComponent(key)}`, {
       method: 'PUT',
       body: JSON.stringify({ enabled, payload: {} }),
+    }),
+  adminConfig: () => request<AdminConfig[]>('/admin/config'),
+  adminUpdateConfig: (key: AdminConfig['key'], value: string) =>
+    request<{ updated: true }>(`/admin/config/${key}`, {
+      method: 'PUT',
+      body: JSON.stringify({ value }),
     }),
   adminAudit: () => request<AuditEntry[]>('/admin/audit?limit=50'),
   deleteAccount: () =>
@@ -427,6 +434,12 @@ export interface FeatureFlag {
   key: string;
   enabled: number;
   payload: string;
+}
+
+export interface AdminConfig {
+  key: 'search_limit' | 'relay_rate_limit' | 'support_text' | 'maintenance_text';
+  value: string;
+  updated_at?: string;
 }
 
 export interface AuditEntry {

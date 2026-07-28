@@ -186,6 +186,7 @@ export const workerOperations = {
   }),
   'sessions.get': z.object({ sessionHash: z.string().length(64) }),
   'sessions.revoke': z.object({ sessionHash: z.string().length(64) }),
+  'system.runtime': z.object({}),
   'admin.dashboard': z.object({ adminUserId: z.string().uuid() }),
   'admin.users.list': z
     .object({
@@ -267,7 +268,14 @@ export const workerOperations = {
   'admin.user.moderate': z.object({
     adminUserId: z.string().uuid(),
     targetUserId: z.string().uuid(),
-    action: z.enum(['warn', 'temporary_ban', 'permanent_ban', 'unban', 'disable_profile']),
+    action: z.enum([
+      'warn',
+      'temporary_ban',
+      'permanent_ban',
+      'unban',
+      'disable_profile',
+      'reset_captcha',
+    ]),
     reason: z.string().min(3).max(1_000),
     bannedUntil: z.string().datetime().optional(),
   }),
@@ -307,6 +315,12 @@ export const workerOperations = {
     key: z.string().min(1).max(64),
     enabled: z.boolean(),
     payload: z.record(z.unknown()).default({}),
+  }),
+  'admin.config.list': z.object({ adminUserId: z.string().uuid() }),
+  'admin.config.update': z.object({
+    adminUserId: z.string().uuid(),
+    key: z.enum(['search_limit', 'relay_rate_limit', 'support_text', 'maintenance_text']),
+    value: z.string().max(4_000),
   }),
   'admin.audit.list': z.object({ adminUserId: z.string().uuid() }).merge(paginationSchema),
   'admin.audit': z.object({

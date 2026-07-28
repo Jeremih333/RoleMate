@@ -353,7 +353,12 @@ const handlers: { [K in WorkerOperation]: Handler<K> } = {
              AND s.action IN ('like', 'skip', 'super_like')
          )
        ORDER BY is_premium DESC, u.last_activity_at DESC
-       LIMIT ?2`,
+       LIMIT min(
+         ?2,
+         COALESCE((
+           SELECT CAST(value AS INTEGER) FROM app_config WHERE key = 'search_limit'
+         ), ?2)
+       )`,
     )
       .bind(input.userId, input.limit)
       .all<Record<string, unknown>>();
@@ -469,7 +474,10 @@ const handlers: { [K in WorkerOperation]: Handler<K> } = {
     const relay = await env.DB.prepare(
       `SELECT c.id AS conversation_id, sender.id AS sender_user_id,
               recipient.telegram_user_id AS destination_chat_id,
-              other_cp.is_muted AS recipient_muted
+              other_cp.is_muted AS recipient_muted,
+              COALESCE((
+                SELECT CAST(value AS INTEGER) FROM app_config WHERE key = 'relay_rate_limit'
+              ), 20) AS relay_rate_limit
        FROM users sender
        JOIN conversation_participants own_cp ON own_cp.user_id = sender.id
        JOIN conversations c ON c.id = own_cp.conversation_id
@@ -492,6 +500,7 @@ const handlers: { [K in WorkerOperation]: Handler<K> } = {
         sender_user_id: string;
         destination_chat_id: number;
         recipient_muted: number;
+        relay_rate_limit: number;
       }>();
     if (!relay) throw new ApiError(404, 'ACTIVE_CHAT_NOT_FOUND', 'Active chat not found');
     return relay;
@@ -961,6 +970,20 @@ const handlers: { [K in WorkerOperation]: Handler<K> } = {
       .bind(input.sessionHash)
       .run();
     return { revoked: true };
+  },
+  'system.runtime': async (env) => {
+    const [maintenance, text] = await Promise.all([
+      env.DB.prepare("SELECT enabled FROM feature_flags WHERE key = 'maintenance_mode'").first<{
+        enabled: number;
+      }>(),
+      env.DB.prepare("SELECT value FROM app_config WHERE key = 'maintenance_text'").first<{
+        value: string;
+      }>(),
+    ]);
+    return {
+      maintenanceMode: Boolean(maintenance?.enabled),
+      maintenanceText: text?.value ?? '',
+    };
   },
   'broadcasts.claimBatch': async (env, input) => {
     const broadcast = await env.DB.prepare(
@@ -1539,6 +1562,16 @@ const handlers: { [K in WorkerOperation]: Handler<K> } = {
              moderation_reason = ?2, updated_at = CURRENT_TIMESTAMP WHERE user_id = ?1`,
         ).bind(input.targetUserId, input.reason),
       );
+    } else if (input.action === 'reset_captcha') {
+      statements.push(
+        env.DB.prepare(
+          `UPDATE captcha_challenges SET status = 'expired'
+           WHERE user_id = ?1 AND status = 'pending'`,
+        ).bind(input.targetUserId),
+        env.DB.prepare(
+          `UPDATE users SET risk_score = 0, updated_at = CURRENT_TIMESTAMP WHERE id = ?1`,
+        ).bind(input.targetUserId),
+      );
     } else {
       statements.push(
         env.DB.prepare(
@@ -1748,6 +1781,56 @@ const handlers: { [K in WorkerOperation]: Handler<K> } = {
         input.adminUserId,
         json(oldState ?? null),
         json({ key: input.key, enabled: input.enabled, payload: input.payload }),
+        requestId,
+      ),
+    ]);
+    return { updated: true };
+  },
+  'admin.config.list': async (env, input) => {
+    await assertAdmin(env, input.adminUserId);
+    return (
+      await env.DB.prepare(
+        `WITH defaults(key, value) AS (
+           VALUES
+             ('search_limit', '20'),
+             ('relay_rate_limit', '20'),
+             ('support_text', ''),
+             ('maintenance_text', '')
+         )
+         SELECT d.key, COALESCE(c.value, d.value) AS value, c.updated_at
+         FROM defaults d LEFT JOIN app_config c ON c.key = d.key
+         ORDER BY d.key`,
+      ).all()
+    ).results;
+  },
+  'admin.config.update': async (env, input, requestId) => {
+    await assertAdmin(env, input.adminUserId);
+    if (
+      ['search_limit', 'relay_rate_limit'].includes(input.key) &&
+      (!/^\d+$/.test(input.value) || Number(input.value) < 1 || Number(input.value) > 100)
+    ) {
+      throw new ApiError(400, 'CONFIG_VALUE_INVALID', 'Limit must be between 1 and 100');
+    }
+    const oldState = await env.DB.prepare('SELECT value FROM app_config WHERE key = ?1')
+      .bind(input.key)
+      .first();
+    await env.DB.batch([
+      env.DB.prepare(
+        `INSERT INTO app_config (key, value, is_public)
+         VALUES (?1, ?2, 0)
+         ON CONFLICT(key) DO UPDATE SET value = excluded.value,
+           updated_at = CURRENT_TIMESTAMP`,
+      ).bind(input.key, input.value),
+      env.DB.prepare(
+        `INSERT INTO admin_audit_logs
+           (id, admin_user_id, action, reason, old_state, new_state, request_id, result)
+         VALUES (?1, ?2, 'app_config.update', ?3, ?4, ?5, ?6, 'success')`,
+      ).bind(
+        crypto.randomUUID(),
+        input.adminUserId,
+        input.key,
+        json(oldState ?? null),
+        json({ key: input.key, value: input.value }),
         requestId,
       ),
     ]);

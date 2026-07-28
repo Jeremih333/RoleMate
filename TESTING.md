@@ -2,16 +2,17 @@
 
 ## Автоматические уровни
 
-| Уровень    | Команда                         | Что проверяется                                |
-| ---------- | ------------------------------- | ---------------------------------------------- |
-| Static     | `corepack pnpm lint`            | ESLint, React hooks, запрещённые конструкции   |
-| Types      | `corepack pnpm typecheck`       | строгий TypeScript во всех workspace           |
-| Unit       | `corepack pnpm test`            | домен, HMAC, initData, контакты, платежи       |
-| Migrations | `corepack pnpm test:migrations` | все SQL migrations в настоящем SQLite          |
-| E2E        | `corepack pnpm test:e2e`        | API mocks и Mini App на Android/iPhone/desktop |
-| Build      | `corepack pnpm build`           | production bundles                             |
-| Worker     | `wrangler deploy --dry-run`     | Cloudflare Worker bundle                       |
-| Security   | `toolkit/secret-scan.ps1`       | токены/ключи в отслеживаемых исходниках        |
+| Уровень    | Команда                         | Что проверяется                                          |
+| ---------- | ------------------------------- | -------------------------------------------------------- |
+| Static     | `corepack pnpm lint`            | ESLint, React hooks, запрещённые конструкции             |
+| Types      | `corepack pnpm typecheck`       | строгий TypeScript во всех workspace                     |
+| Unit       | `corepack pnpm test`            | домен, HMAC, initData, контакты, платежи                 |
+| Migrations | `corepack pnpm test:migrations` | все SQL migrations в настоящем SQLite                    |
+| E2E        | `corepack pnpm test:e2e`        | API mocks и Mini App на Android/iPhone/desktop           |
+| Build      | `corepack pnpm build`           | production bundles                                       |
+| Worker     | `wrangler deploy --dry-run`     | Cloudflare Worker bundle                                 |
+| Security   | `toolkit/secret-scan.ps1`       | токены/ключи в отслеживаемых исходниках                  |
+| Mock load  | D1 integration suite            | webhook/search/relay/likes/referrals/jobs/session bursts |
 
 `toolkit/verify.ps1` запускает локально применимую совокупность проверок.
 

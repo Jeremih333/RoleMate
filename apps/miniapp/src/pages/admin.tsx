@@ -21,7 +21,7 @@ import {
   Users,
 } from 'lucide-react';
 import { Redirect } from 'wouter';
-import { api } from '../api.js';
+import { api, type AdminConfig } from '../api.js';
 import { Button, Card, SectionTitle, Skeleton } from '../components/ui.js';
 import { useUserStore } from '../store.js';
 
@@ -134,7 +134,8 @@ function UsersQueue() {
   const moderate = useMutation({
     mutationFn: (input: {
       userId: string;
-      action: 'warn' | 'temporary_ban' | 'permanent_ban' | 'unban' | 'disable_profile';
+      action:
+        'warn' | 'temporary_ban' | 'permanent_ban' | 'unban' | 'disable_profile' | 'reset_captcha';
       reason: string;
     }) => api.adminModerateUser(input.userId, input),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ['admin-users'] }),
@@ -219,6 +220,18 @@ function UsersQueue() {
                 }
               >
                 {ru.miniApp.admin.revokePremium}
+              </Button>
+              <Button
+                variant="secondary"
+                onClick={() =>
+                  moderate.mutate({
+                    userId: user.id,
+                    action: 'reset_captcha',
+                    reason: ru.miniApp.admin.ownerResetCaptchaReason,
+                  })
+                }
+              >
+                {ru.miniApp.admin.resetCaptcha}
               </Button>
             </div>
           </Card>
@@ -417,6 +430,33 @@ function Referrals() {
   if (referrals.isLoading) return <Skeleton className="h-72" />;
   return (
     <div className="space-y-3">
+      <Button
+        variant="secondary"
+        onClick={() => {
+          const rows = referrals.data ?? [];
+          const csv = [
+            ['id', 'status', 'referrer', 'referred', 'risk', 'reason'].join(','),
+            ...rows.map((item) =>
+              [
+                item.id,
+                item.status,
+                item.referrer_telegram_id,
+                item.referred_telegram_id,
+                item.referred_risk_events_score,
+                JSON.stringify(item.qualification_reason ?? ''),
+              ].join(','),
+            ),
+          ].join('\n');
+          const url = URL.createObjectURL(new Blob([csv], { type: 'text/csv;charset=utf-8' }));
+          const link = document.createElement('a');
+          link.href = url;
+          link.download = 'rolemate-referrals.csv';
+          link.click();
+          URL.revokeObjectURL(url);
+        }}
+      >
+        {ru.miniApp.admin.exportCsv}
+      </Button>
       {referrals.data?.map((referral) => (
         <Card key={referral.id} className="p-4">
           <div className="flex justify-between gap-3">
@@ -666,27 +706,70 @@ function SystemStatus() {
 function Flags() {
   const queryClient = useQueryClient();
   const flags = useQuery({ queryKey: ['admin-flags'], queryFn: api.adminFlags });
+  const config = useQuery({ queryKey: ['admin-config'], queryFn: api.adminConfig });
   const update = useMutation({
     mutationFn: (input: { key: string; enabled: boolean }) =>
       api.adminUpdateFlag(input.key, input.enabled),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ['admin-flags'] }),
   });
   return (
-    <div className="space-y-3">
-      {flags.data?.map((flag) => (
-        <Card key={flag.key} className="setting-row">
-          <span className="flex items-center gap-2">
-            <Flag className="h-4 w-4" /> {flag.key}
-          </span>
-          <input
-            type="checkbox"
-            checked={Boolean(flag.enabled)}
-            onChange={(event) => update.mutate({ key: flag.key, enabled: event.target.checked })}
-            disabled={flag.key === 'yookassa_digital_premium'}
-          />
-        </Card>
-      ))}
+    <div className="space-y-6">
+      <div className="space-y-3">
+        {flags.data?.map((flag) => (
+          <Card key={flag.key} className="setting-row">
+            <span className="flex items-center gap-2">
+              <Flag className="h-4 w-4" /> {flag.key}
+            </span>
+            <input
+              type="checkbox"
+              checked={Boolean(flag.enabled)}
+              onChange={(event) => update.mutate({ key: flag.key, enabled: event.target.checked })}
+              disabled={flag.key === 'yookassa_digital_premium'}
+            />
+          </Card>
+        ))}
+      </div>
+      <div className="space-y-3">
+        {config.data?.map((item) => (
+          <ConfigEditor key={item.key} item={item} />
+        ))}
+      </div>
     </div>
+  );
+}
+
+function ConfigEditor({ item }: { item: AdminConfig }) {
+  const queryClient = useQueryClient();
+  const [value, setValue] = useState(item.value);
+  const update = useMutation({
+    mutationFn: () => api.adminUpdateConfig(item.key, value),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['admin-config'] }),
+  });
+  return (
+    <Card className="p-4">
+      <label className="block text-sm text-soft">
+        {ru.miniApp.admin.configLabels[item.key]}
+        {item.key.endsWith('_text') ? (
+          <textarea
+            className="input-field mt-2 min-h-24"
+            value={value}
+            onChange={(event) => setValue(event.target.value)}
+          />
+        ) : (
+          <input
+            className="input-field mt-2"
+            type="number"
+            min={1}
+            max={100}
+            value={value}
+            onChange={(event) => setValue(event.target.value)}
+          />
+        )}
+      </label>
+      <Button className="mt-3" onClick={() => update.mutate()} loading={update.isPending}>
+        {ru.miniApp.admin.saveConfig}
+      </Button>
+    </Card>
   );
 }
 

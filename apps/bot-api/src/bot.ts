@@ -67,6 +67,11 @@ export function createBot(env: AppEnv, dataApi: DataApiClient): Bot {
   const bot = new Bot(env.TELEGRAM_BOT_TOKEN || '0:development');
   const relayWindows = new Map<number, { startedAt: number; count: number }>();
   const selectedChats = new Map<number, string>();
+  let runtimeCache: {
+    maintenanceMode: boolean;
+    maintenanceText: string;
+    expiresAt: number;
+  } | null = null;
 
   function styledEntities(text: string) {
     const entities: Array<{
@@ -129,7 +134,30 @@ export function createBot(env: AppEnv, dataApi: DataApiClient): Bot {
     return previous(method, payload, signal);
   });
 
-  function relayAllowed(telegramUserId: number): boolean {
+  bot.use(async (context, next) => {
+    if (
+      context.from?.id === OWNER_TELEGRAM_ID ||
+      context.update.pre_checkout_query ||
+      context.message?.successful_payment
+    ) {
+      await next();
+      return;
+    }
+    if (!runtimeCache || runtimeCache.expiresAt < Date.now()) {
+      const state = await dataApi.execute<{
+        maintenanceMode: boolean;
+        maintenanceText: string;
+      }>('system.runtime', {});
+      runtimeCache = { ...state, expiresAt: Date.now() + 30_000 };
+    }
+    if (runtimeCache.maintenanceMode) {
+      await context.reply(runtimeCache.maintenanceText || ru.api.maintenance);
+      return;
+    }
+    await next();
+  });
+
+  function relayAllowed(telegramUserId: number, limit = 20): boolean {
     const now = Date.now();
     const current = relayWindows.get(telegramUserId);
     if (!current || now - current.startedAt >= 60_000) {
@@ -137,7 +165,7 @@ export function createBot(env: AppEnv, dataApi: DataApiClient): Bot {
       return true;
     }
     current.count += 1;
-    return current.count <= 20;
+    return current.count <= limit;
   }
 
   async function resolveRelay(telegramUserId: number) {
@@ -147,6 +175,7 @@ export function createBot(env: AppEnv, dataApi: DataApiClient): Bot {
       sender_user_id: string;
       destination_chat_id: number;
       recipient_muted: number;
+      relay_rate_limit: number;
     }>('conversations.resolveRelay', {
       telegramUserId,
       ...(conversationId ? { conversationId } : {}),
@@ -673,12 +702,13 @@ export function createBot(env: AppEnv, dataApi: DataApiClient): Bot {
       await context.reply(ru.contactBlocked);
       return;
     }
-    if (!context.from || !relayAllowed(context.from.id)) {
-      await context.reply(ru.bot.relayRateLimit);
-      return;
-    }
+    if (!context.from) return;
     try {
       const target = await resolveRelay(context.from.id);
+      if (!relayAllowed(context.from.id, target.relay_rate_limit)) {
+        await context.reply(ru.bot.relayRateLimit);
+        return;
+      }
       const replyMessageId = await resolveReply(
         target.conversation_id,
         context.chat.id,
@@ -725,10 +755,7 @@ export function createBot(env: AppEnv, dataApi: DataApiClient): Bot {
       'message:document',
     ],
     async (context) => {
-      if (!context.from || !relayAllowed(context.from.id)) {
-        await context.reply(ru.bot.relayRateLimit);
-        return;
-      }
+      if (!context.from) return;
       const caption = 'caption' in context.message ? context.message.caption : undefined;
       if (caption && containsContact(caption)) {
         await context.reply(ru.contactBlocked);
@@ -736,6 +763,10 @@ export function createBot(env: AppEnv, dataApi: DataApiClient): Bot {
       }
       try {
         const target = await resolveRelay(context.from.id);
+        if (!relayAllowed(context.from.id, target.relay_rate_limit)) {
+          await context.reply(ru.bot.relayRateLimit);
+          return;
+        }
         const replyMessageId = await resolveReply(
           target.conversation_id,
           context.chat.id,

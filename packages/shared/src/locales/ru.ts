@@ -130,6 +130,8 @@ export const ru = {
     rateLimit: 'Слишком много запросов. Попробуй немного позже.',
     internalError: 'Внутренняя ошибка сервиса',
     shortDescription: 'Анонимный поиск со-ролевиков',
+    maintenance:
+      '🛠 RoleMate временно находится на обслуживании. Основные функции скоро снова будут доступны.',
   },
   miniApp: {
     auth: {
@@ -368,6 +370,8 @@ export const ru = {
       grantPremium: 'Выдать Premium',
       ownerRevokeReason: 'Ручной отзыв владельцем',
       revokePremium: 'Отозвать Premium',
+      resetCaptcha: 'Сбросить CAPTCHA',
+      ownerResetCaptchaReason: 'Сброс CAPTCHA и risk score владельцем',
       ownerApprovedReason: 'Проверено владельцем',
       rejectionReasonPrompt: 'Причина отклонения',
       ownerArchivedReason: 'Архивировано владельцем',
@@ -390,6 +394,7 @@ export const ru = {
       confirmReferral: 'Подтвердить',
       rejectReferral: 'Отклонить',
       revokeReferral: 'Отменить награду',
+      exportCsv: 'Экспорт CSV',
       broadcastTitle: 'Название рассылки',
       broadcastMessage: 'Текст сообщения',
       broadcastSegment: 'Сегмент',
@@ -429,6 +434,13 @@ export const ru = {
       enabled: 'Включён',
       disabled: 'Выключен',
       noData: 'Записей пока нет.',
+      configLabels: {
+        search_limit: 'Лимит анкет в выдаче',
+        relay_rate_limit: 'Лимит relay-сообщений в минуту',
+        support_text: 'Текст поддержки',
+        maintenance_text: 'Текст режима обслуживания',
+      },
+      saveConfig: 'Сохранить параметр',
     },
   },
   welcome: [

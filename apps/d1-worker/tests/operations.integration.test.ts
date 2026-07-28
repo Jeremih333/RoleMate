@@ -232,6 +232,56 @@ describe('D1 domain operations', () => {
     await expect(
       executeOperation(env, 'admin.dashboard', { adminUserId: adminId }, crypto.randomUUID()),
     ).resolves.toMatchObject({ users: 2 });
+
+    await executeOperation(
+      env,
+      'risk.record',
+      { userId, type: 'admin_reset_test', scoreDelta: 40, metadata: {} },
+      crypto.randomUUID(),
+    );
+    await executeOperation(
+      env,
+      'captcha.create',
+      {
+        userId,
+        challengeHash: 'a'.repeat(64),
+        expiresAt: new Date(Date.now() + 60_000).toISOString(),
+      },
+      crypto.randomUUID(),
+    );
+    await executeOperation(
+      env,
+      'admin.user.moderate',
+      {
+        adminUserId: adminId,
+        targetUserId: userId,
+        action: 'reset_captcha',
+        reason: 'Owner reset after manual verification',
+      },
+      crypto.randomUUID(),
+    );
+    expect(sqlite.prepare('SELECT risk_score FROM users WHERE id = ?').get(userId)).toEqual({
+      risk_score: 0,
+    });
+    expect(
+      sqlite.prepare('SELECT status FROM captcha_challenges WHERE user_id = ?').get(userId),
+    ).toEqual({ status: 'expired' });
+
+    await executeOperation(
+      env,
+      'admin.config.update',
+      { adminUserId: adminId, key: 'relay_rate_limit', value: '12' },
+      crypto.randomUUID(),
+    );
+    const config = (await executeOperation(
+      env,
+      'admin.config.list',
+      { adminUserId: adminId },
+      crypto.randomUUID(),
+    )) as Array<{ key: string; value: string }>;
+    expect(config).toContainEqual(
+      expect.objectContaining({ key: 'relay_rate_limit', value: '12' }),
+    );
   });
 
   it('protects broadcasts with dry run and an exact confirmation phrase', async () => {
@@ -524,6 +574,164 @@ describe('D1 domain operations', () => {
         .prepare('SELECT status FROM premium_entitlements WHERE payment_order_id = ?')
         .get(order.orderId),
     ).toEqual({ status: 'revoked' });
+  });
+
+  it('handles mocked webhook, search, relay, referral, notification, and session bursts', async () => {
+    const users = await Promise.all(
+      Array.from({ length: 10 }, (_, index) => onboard(6000 + index)),
+    );
+
+    const webhookClaims = await Promise.all(
+      Array.from({ length: 40 }, () =>
+        executeOperation(env, 'telegramUpdates.claim', { updateId: 6000 }, crypto.randomUUID()),
+      ),
+    );
+    expect(webhookClaims.filter((result) => (result as { claimed: boolean }).claimed)).toHaveLength(
+      1,
+    );
+
+    const searches = await Promise.all(
+      Array.from({ length: 30 }, () =>
+        executeOperation(env, 'search.list', { userId: users[0], limit: 20 }, crypto.randomUUID()),
+      ),
+    );
+    expect(searches.every((result) => Array.isArray(result))).toBe(true);
+
+    await Promise.all(
+      users.slice(1).map((targetUserId, index) =>
+        executeOperation(
+          env,
+          'swipes.create',
+          {
+            userId: users[0],
+            targetUserId,
+            action: 'like',
+            source: 'miniapp',
+            idempotencyKey: `load-like-${String(index).padStart(16, '0')}`,
+          },
+          crypto.randomUUID(),
+        ),
+      ),
+    );
+    const repeatSwipe = {
+      userId: users[1],
+      targetUserId: users[0],
+      action: 'like' as const,
+      source: 'bot' as const,
+      idempotencyKey: 'load-repeat-callback-0001',
+    };
+    await Promise.all(
+      Array.from({ length: 20 }, () =>
+        executeOperation(env, 'swipes.create', repeatSwipe, crypto.randomUUID()),
+      ),
+    );
+    expect(
+      sqlite
+        .prepare('SELECT COUNT(*) AS total FROM swipes WHERE idempotency_key = ?')
+        .get(repeatSwipe.idempotencyKey),
+    ).toEqual({ total: 1 });
+
+    const conversation = sqlite.prepare('SELECT id FROM conversations LIMIT 1').get() as {
+      id: string;
+    };
+    await Promise.all(
+      Array.from({ length: 30 }, (_, index) =>
+        executeOperation(
+          env,
+          'conversations.mapMessage',
+          {
+            conversationId: conversation.id,
+            senderUserId: users[0],
+            sourceChatId: 6000,
+            sourceMessageId: index + 1,
+            destinationChatId: 6001,
+            destinationMessageId: index + 100,
+            messageType: 'text',
+          },
+          crypto.randomUUID(),
+        ),
+      ),
+    );
+    expect(sqlite.prepare('SELECT COUNT(*) AS total FROM relay_messages').get()).toEqual({
+      total: 30,
+    });
+
+    const insertNotification = sqlite.prepare(
+      "INSERT INTO notifications (id, user_id, type, payload) VALUES (?, ?, 'load', '{}')",
+    );
+    sqlite.transaction(() => {
+      for (let index = 0; index < 100; index += 1) {
+        insertNotification.run(crypto.randomUUID(), users[index % users.length]);
+      }
+    })();
+    expect(
+      sqlite.prepare("SELECT COUNT(*) AS total FROM notifications WHERE status = 'pending'").get(),
+    ).toEqual({ total: 100 });
+
+    const referrer = await upsert(6100);
+    const summary = (await executeOperation(
+      env,
+      'referrals.summary',
+      { userId: referrer, botUsername: 'r0lemate_bot' },
+      crypto.randomUUID(),
+    )) as { link: string };
+    const referralCode = summary.link.split('ref_')[1];
+    await Promise.all(
+      Array.from({ length: 5 }, async (_, index) => {
+        const referred = (await executeOperation(
+          env,
+          'users.upsert',
+          {
+            telegramUser: { id: 6110 + index, first_name: `Referral ${index}` },
+            referralCode,
+          },
+          crypto.randomUUID(),
+        )) as { userId: string };
+        await executeOperation(
+          env,
+          'users.acceptRules',
+          { userId: referred.userId, ageGroup: '21_25' },
+          crypto.randomUUID(),
+        );
+        await executeOperation(
+          env,
+          'profiles.upsert',
+          { userId: referred.userId, profile },
+          crypto.randomUUID(),
+        );
+      }),
+    );
+    expect(
+      sqlite.prepare("SELECT COUNT(*) AS total FROM referrals WHERE status = 'qualified'").get(),
+    ).toEqual({ total: 5 });
+
+    await Promise.all(
+      Array.from({ length: 20 }, (_, index) => {
+        const sessionHash = index.toString(16).padStart(64, '0');
+        return executeOperation(
+          env,
+          'sessions.create',
+          {
+            userId: users[index % users.length],
+            sessionHash,
+            csrfHash: (index + 100).toString(16).padStart(64, '0'),
+            expiresAt: new Date(Date.now() + 60_000).toISOString(),
+          },
+          crypto.randomUUID(),
+        );
+      }),
+    );
+    const reconnects = await Promise.all(
+      Array.from({ length: 20 }, (_, index) =>
+        executeOperation(
+          env,
+          'sessions.get',
+          { sessionHash: index.toString(16).padStart(64, '0') },
+          crypto.randomUUID(),
+        ),
+      ),
+    );
+    expect(reconnects).toHaveLength(20);
   });
 
   it('qualifies a referral once and grants exactly one day of Premium', async () => {

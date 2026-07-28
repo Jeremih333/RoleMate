@@ -110,6 +110,11 @@ export async function buildServer(env: AppEnv): Promise<FastifyInstance> {
   const stars = new TelegramStarsProvider(bot);
   let broadcastTimer: NodeJS.Timeout | undefined;
   let broadcastDispatching = false;
+  let runtimeCache: {
+    maintenanceMode: boolean;
+    maintenanceText: string;
+    expiresAt: number;
+  } | null = null;
 
   await app.register(cookie, {
     secret: env.SESSION_SECRET,
@@ -171,6 +176,28 @@ export async function buildServer(env: AppEnv): Promise<FastifyInstance> {
     origin: env.ALLOWED_ORIGINS.split(',').map((value) => value.trim()),
     credentials: true,
     methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+  });
+  app.addHook('preHandler', async (request, reply) => {
+    if (
+      !request.url.startsWith('/api/') ||
+      request.url.startsWith('/api/admin/') ||
+      request.url.startsWith('/api/auth/')
+    ) {
+      return;
+    }
+    if (!runtimeCache || runtimeCache.expiresAt < Date.now()) {
+      const state = await dataApi.execute<{
+        maintenanceMode: boolean;
+        maintenanceText: string;
+      }>('system.runtime', {});
+      runtimeCache = { ...state, expiresAt: Date.now() + 30_000 };
+    }
+    if (runtimeCache.maintenanceMode) {
+      return reply.code(503).send({
+        error: 'MAINTENANCE_MODE',
+        message: runtimeCache.maintenanceText || ru.api.maintenance,
+      });
+    }
   });
   await app.register(helmet, {
     contentSecurityPolicy: {
@@ -649,7 +676,14 @@ export async function buildServer(env: AppEnv): Promise<FastifyInstance> {
     const params = z.object({ userId: z.string().uuid() }).parse(request.params);
     const body = z
       .object({
-        action: z.enum(['warn', 'temporary_ban', 'permanent_ban', 'unban', 'disable_profile']),
+        action: z.enum([
+          'warn',
+          'temporary_ban',
+          'permanent_ban',
+          'unban',
+          'disable_profile',
+          'reset_captcha',
+        ]),
         reason: z.string().min(3).max(1_000),
         bannedUntil: z.string().datetime().optional(),
       })
@@ -764,6 +798,24 @@ export async function buildServer(env: AppEnv): Promise<FastifyInstance> {
     });
     await writeAdminAudit(request, session.userId, 'feature_flag.update', params.key);
     return result;
+  });
+  app.get('/api/admin/config', async (request) => {
+    const session = await requireAdmin(request);
+    return dataApi.execute('admin.config.list', { adminUserId: session.userId });
+  });
+  app.put('/api/admin/config/:key', async (request) => {
+    const session = await requireAdmin(request, true);
+    const params = z
+      .object({
+        key: z.enum(['search_limit', 'relay_rate_limit', 'support_text', 'maintenance_text']),
+      })
+      .parse(request.params);
+    const body = z.object({ value: z.string().max(4_000) }).parse(request.body);
+    return dataApi.execute('admin.config.update', {
+      adminUserId: session.userId,
+      key: params.key,
+      value: body.value,
+    });
   });
   app.get('/api/admin/audit', async (request) => {
     const session = await requireAdmin(request);

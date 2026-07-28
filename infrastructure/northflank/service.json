@@ -1,0 +1,100 @@
+{
+  "name": "RoleMate",
+  "description": "RoleMate Telegram bot API and Mini App",
+  "billing": {
+    "deploymentPlan": "nf-compute-10",
+    "buildPlan": "nf-compute-400"
+  },
+  "deployment": {
+    "instances": 1,
+    "docker": {
+      "configType": "default"
+    },
+    "storage": {
+      "ephemeralStorage": {
+        "storageSize": 1024
+      }
+    }
+  },
+  "ports": [
+    {
+      "name": "http",
+      "internalPort": 3000,
+      "public": true,
+      "protocol": "HTTP"
+    }
+  ],
+  "buildSource": "git",
+  "vcsData": {
+    "projectUrl": "https://github.com/Jeremih333/RoleMate",
+    "projectType": "github",
+    "accountLogin": "Jeremih333",
+    "projectBranch": "main"
+  },
+  "buildSettings": {
+    "storage": {
+      "ephemeralStorage": {
+        "storageSize": 16384
+      }
+    },
+    "dockerfile": {
+      "buildEngine": "buildkit",
+      "dockerFilePath": "/Dockerfile",
+      "dockerWorkDir": "/",
+      "buildkit": {
+        "useCache": true,
+        "cacheStorageSize": 16384
+      }
+    }
+  },
+  "runtimeEnvironment": {
+    "NODE_ENV": "production",
+    "HOST": "0.0.0.0",
+    "PORT": "3000",
+    "LOG_LEVEL": "info",
+    "BOT_NAME": "RoleMate",
+    "BOT_USERNAME": "r0lemate_bot",
+    "OWNER_TELEGRAM_ID": "1040929628",
+    "SUPPORT_URL": "https://t.me/odinnadsat",
+    "PROMO_CHAT_URL": "https://t.me/piarchaticksss",
+    "D1_WORKER_URL": "https://rolemate-data-api.carreljeremih.workers.dev",
+    "INTERNAL_SERVICE_ID": "rolemate-bot-api",
+    "YOOKASSA_ENABLED": "false",
+    "YOOKASSA_DIGITAL_PREMIUM_ENABLED": "false",
+    "DEPLOYMENT_ENV": "production",
+    "COMMIT_SHA": "a6fe01e"
+  },
+  "healthChecks": [
+    {
+      "protocol": "HTTP",
+      "type": "startupProbe",
+      "path": "/health/startup",
+      "port": 3000,
+      "initialDelaySeconds": 5,
+      "periodSeconds": 10,
+      "timeoutSeconds": 5,
+      "failureThreshold": 12
+    },
+    {
+      "protocol": "HTTP",
+      "type": "readinessProbe",
+      "path": "/health/ready",
+      "port": 3000,
+      "initialDelaySeconds": 5,
+      "periodSeconds": 15,
+      "timeoutSeconds": 5,
+      "failureThreshold": 3,
+      "successThreshold": 1
+    },
+    {
+      "protocol": "HTTP",
+      "type": "livenessProbe",
+      "path": "/health/live",
+      "port": 3000,
+      "initialDelaySeconds": 20,
+      "periodSeconds": 30,
+      "timeoutSeconds": 5,
+      "failureThreshold": 3
+    }
+  ]
+}

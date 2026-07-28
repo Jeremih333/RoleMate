@@ -72,6 +72,17 @@ async function mockApi(page: Page, admin = false): Promise<void> {
         moderation_status: 'approved',
       },
       '/api/profile/media': [],
+      '/api/settings': {
+        notifications_enabled: 1,
+        match_notifications_enabled: 1,
+        message_notifications_enabled: 1,
+        referral_notifications_enabled: 1,
+        premium_notifications_enabled: 1,
+        privacy_shield_enabled: 1,
+        show_online_status: 1,
+        show_premium_badge: 1,
+        theme: 'telegram',
+      },
       '/api/referrals': {
         link: 'https://t.me/rolemate_bot?start=ref_example',
         rewardDays: 2,
@@ -169,6 +180,14 @@ test('profile editor loads existing values without destructive defaults', async 
   );
   await expect(page.locator('textarea[name="about"]')).toHaveValue(/Люблю сложные сюжеты/);
   await expect(page.locator('select[name="ageGroup"]')).toHaveValue('21_25');
+});
+
+test('account deletion requires the exact confirmation phrase', async ({ page }) => {
+  await mockApi(page);
+  await page.goto('/settings');
+  page.once('dialog', (dialog) => void dialog.accept('УДАЛИТЬ'));
+  await page.getByRole('button', { name: 'Удалить аккаунт и данные' }).click();
+  await expect(page.getByText('Аккаунт и пользовательские данные удалены.')).toBeVisible();
 });
 
 test('owner sees the protected dashboard', async ({ page }) => {

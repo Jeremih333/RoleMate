@@ -216,22 +216,71 @@ const handlers: { [K in WorkerOperation]: Handler<K> } = {
     return { updated: true };
   },
   'users.delete': async (env, input) => {
+    const identity = await env.DB.prepare('SELECT telegram_user_id FROM users WHERE id = ?1')
+      .bind(input.userId)
+      .first<{ telegram_user_id: number }>();
+    if (identity?.telegram_user_id === 1_040_929_628) {
+      throw new ApiError(403, 'OWNER_ACCOUNT_PROTECTED', 'Owner account cannot be self-deleted');
+    }
     await env.DB.batch([
       env.DB.prepare(
-        `UPDATE users SET status = 'deleted', is_search_enabled = 0, deleted_at = CURRENT_TIMESTAMP,
-           telegram_username = NULL, telegram_first_name = 'Удалённый пользователь',
-           updated_at = CURRENT_TIMESTAMP WHERE id = ?1`,
+        `UPDATE reports SET description = NULL, evidence_snapshot = '[]',
+           profile_id = NULL, conversation_id = NULL
+         WHERE reporter_user_id = ?1 OR reported_user_id = ?1`,
       ).bind(input.userId),
+      env.DB.prepare(
+        `UPDATE risk_events SET user_id = NULL, metadata = '{}'
+         WHERE user_id = ?1`,
+      ).bind(input.userId),
+      env.DB.prepare(
+        `UPDATE payment_orders SET status = 'expired', updated_at = CURRENT_TIMESTAMP
+         WHERE user_id = ?1 AND status IN ('pending', 'precheckout_approved')`,
+      ).bind(input.userId),
+      env.DB.prepare(
+        `UPDATE premium_entitlements SET status = 'revoked', updated_at = CURRENT_TIMESTAMP
+         WHERE user_id = ?1 AND status = 'active'`,
+      ).bind(input.userId),
+      env.DB.prepare('DELETE FROM notifications WHERE user_id = ?1').bind(input.userId),
+      env.DB.prepare('DELETE FROM captcha_challenges WHERE user_id = ?1').bind(input.userId),
+      env.DB.prepare('DELETE FROM broadcast_deliveries WHERE user_id = ?1').bind(input.userId),
+      env.DB.prepare(
+        'DELETE FROM profile_views WHERE viewer_user_id = ?1 OR viewed_user_id = ?1',
+      ).bind(input.userId),
+      env.DB.prepare('DELETE FROM saved_filter_sets WHERE user_id = ?1').bind(input.userId),
+      env.DB.prepare('DELETE FROM profile_variants WHERE user_id = ?1').bind(input.userId),
+      env.DB.prepare(
+        'DELETE FROM referrals WHERE referrer_user_id = ?1 OR referred_user_id = ?1',
+      ).bind(input.userId),
+      env.DB.prepare('DELETE FROM referral_codes WHERE user_id = ?1').bind(input.userId),
+      env.DB.prepare('DELETE FROM blocks WHERE blocker_user_id = ?1 OR blocked_user_id = ?1').bind(
+        input.userId,
+      ),
+      env.DB.prepare('DELETE FROM swipes WHERE actor_user_id = ?1 OR target_user_id = ?1').bind(
+        input.userId,
+      ),
+      env.DB.prepare('DELETE FROM matches WHERE user_a_id = ?1 OR user_b_id = ?1').bind(
+        input.userId,
+      ),
       env.DB.prepare(
         'DELETE FROM profile_media WHERE profile_id IN (SELECT id FROM profiles WHERE user_id = ?1)',
       ).bind(input.userId),
       env.DB.prepare('DELETE FROM profiles WHERE user_id = ?1').bind(input.userId),
-      env.DB.prepare(
-        `UPDATE conversations SET status = 'closed', closed_at = CURRENT_TIMESTAMP
-           WHERE id IN (SELECT conversation_id FROM conversation_participants WHERE user_id = ?1)`,
-      ).bind(input.userId),
+      env.DB.prepare('DELETE FROM search_preferences WHERE user_id = ?1').bind(input.userId),
+      env.DB.prepare('DELETE FROM user_settings WHERE user_id = ?1').bind(input.userId),
+      env.DB.prepare("DELETE FROM app_config WHERE key = 'age_group:' || ?1").bind(input.userId),
       env.DB.prepare('DELETE FROM web_sessions WHERE user_id = ?1').bind(input.userId),
       env.DB.prepare('DELETE FROM refresh_tokens WHERE user_id = ?1').bind(input.userId),
+      env.DB.prepare(
+        `UPDATE users SET
+           telegram_user_id = -(abs(random() % 900000000000000000) + 1),
+           telegram_username = NULL, telegram_first_name = 'Удалённый пользователь',
+           telegram_language_code = NULL, status = 'deleted', role = 'user',
+           is_verified = 0, is_onboarding_completed = 0, is_age_confirmed = 0,
+           is_rules_accepted = 0, is_search_enabled = 0, is_banned = 0,
+           ban_reason = NULL, banned_until = NULL, risk_score = 0,
+           deleted_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP
+         WHERE id = ?1 AND deleted_at IS NULL`,
+      ).bind(input.userId),
     ]);
     return { deleted: true };
   },

@@ -310,6 +310,98 @@ describe('D1 domain operations', () => {
     ).rejects.toMatchObject<ApiError>({ code: 'MEDIA_NOT_FOUND' });
   });
 
+  it('deletes user content, pseudonymizes the tombstone, and permits a fresh registration', async () => {
+    const userId = await onboard(2060);
+    const otherUserId = await onboard(2061);
+    await executeOperation(
+      env,
+      'profiles.media.add',
+      {
+        userId,
+        telegramFileId: 'delete-test-file',
+        telegramFileUniqueId: 'delete-test-unique',
+        mediaType: 'photo',
+      },
+      crypto.randomUUID(),
+    );
+    await executeOperation(
+      env,
+      'swipes.create',
+      {
+        userId,
+        targetUserId: otherUserId,
+        action: 'like',
+        source: 'miniapp',
+        idempotencyKey: 'delete-user-first-like-0001',
+      },
+      crypto.randomUUID(),
+    );
+    await executeOperation(
+      env,
+      'swipes.create',
+      {
+        userId: otherUserId,
+        targetUserId: userId,
+        action: 'like',
+        source: 'miniapp',
+        idempotencyKey: 'delete-user-second-like-001',
+      },
+      crypto.randomUUID(),
+    );
+    sqlite
+      .prepare("INSERT INTO notifications (id, user_id, type, payload) VALUES (?, ?, 'test', '{}')")
+      .run(crypto.randomUUID(), userId);
+
+    await expect(
+      executeOperation(env, 'users.delete', { userId }, crypto.randomUUID()),
+    ).resolves.toEqual({ deleted: true });
+
+    const tombstone = sqlite
+      .prepare(
+        `SELECT telegram_user_id, telegram_username, telegram_first_name, status, deleted_at
+         FROM users WHERE id = ?`,
+      )
+      .get(userId) as {
+      telegram_user_id: number;
+      telegram_username: string | null;
+      telegram_first_name: string;
+      status: string;
+      deleted_at: string;
+    };
+    expect(tombstone).toMatchObject({
+      telegram_username: null,
+      telegram_first_name: 'Удалённый пользователь',
+      status: 'deleted',
+    });
+    expect(tombstone.telegram_user_id).toBeLessThan(0);
+    expect(tombstone.deleted_at).toBeTruthy();
+    const remnants: Array<[string, string, unknown[]]> = [
+      ['profiles', 'SELECT COUNT(*) AS total FROM profiles WHERE user_id = ?', [userId]],
+      [
+        'profile_media',
+        'SELECT COUNT(*) AS total FROM profile_media WHERE telegram_file_unique_id = ?',
+        ['delete-test-unique'],
+      ],
+      [
+        'swipes',
+        'SELECT COUNT(*) AS total FROM swipes WHERE actor_user_id = ? OR target_user_id = ?',
+        [userId, userId],
+      ],
+      [
+        'matches',
+        'SELECT COUNT(*) AS total FROM matches WHERE user_a_id = ? OR user_b_id = ?',
+        [userId, userId],
+      ],
+      ['notifications', 'SELECT COUNT(*) AS total FROM notifications WHERE user_id = ?', [userId]],
+    ];
+    for (const [label, query, bindings] of remnants) {
+      const total = (sqlite.prepare(query).get(...bindings) as { total: number }).total;
+      expect(total, label).toBe(0);
+    }
+    const freshUserId = await upsert(2060);
+    expect(freshUserId).not.toBe(userId);
+  });
+
   it('authorizes admin operations from persisted role and owner identity', async () => {
     const userId = await upsert(2003);
     await expect(

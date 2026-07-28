@@ -448,6 +448,7 @@ export function SettingsPage() {
   const [form, setForm] = useState<SettingsInput | null>(null);
   const save = useMutation({ mutationFn: api.saveSettings });
   const searchState = useMutation({ mutationFn: api.setSearchEnabled });
+  const deleteAccount = useMutation({ mutationFn: api.deleteAccount });
   useEffect(() => {
     if (!settings.data) return;
     setForm({
@@ -532,6 +533,25 @@ export function SettingsPage() {
             <p className="mt-1 text-sm text-muted">{ru.miniApp.community.anonymityDescription}</p>
           </div>
         </div>
+      </Card>
+      <Card className="mt-4 border border-red-400/20 p-5">
+        <strong>{ru.miniApp.community.deleteAccountTitle}</strong>
+        <p className="mt-1 text-sm text-muted">{ru.miniApp.community.deleteAccountDescription}</p>
+        <Button
+          className="mt-3"
+          variant="secondary"
+          loading={deleteAccount.isPending}
+          disabled={deleteAccount.isSuccess}
+          onClick={() => {
+            const confirmation = window.prompt(ru.miniApp.community.deleteAccountPrompt);
+            if (confirmation === ru.api.deleteConfirmation) deleteAccount.mutate();
+          }}
+        >
+          {ru.miniApp.community.deleteAccountButton}
+        </Button>
+        {deleteAccount.isSuccess ? (
+          <p className="mt-3 text-sm text-soft">{ru.miniApp.community.deleteAccountDone}</p>
+        ) : null}
       </Card>
       <p className="mt-6 text-center text-xs text-muted">{ru.miniApp.attribution}</p>
     </div>

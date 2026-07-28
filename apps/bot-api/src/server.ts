@@ -646,10 +646,11 @@ export async function buildServer(env: AppEnv): Promise<FastifyInstance> {
     request.log.info({ userId: session.userId, action: body.action }, 'turnstile completed');
     return { passed: true };
   });
-  app.delete('/api/account', async (request) => {
+  app.delete('/api/account', async (request, reply) => {
     const session = await mutate(request);
     deleteBodySchema.parse(request.body);
     await dataApi.execute('users.delete', { userId: session.userId });
+    reply.clearCookie('rm_session', { path: '/' });
     return { deleted: true };
   });
   app.get('/api/admin/dashboard', async (request) => {

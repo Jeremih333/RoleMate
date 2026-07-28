@@ -8,7 +8,12 @@ import rateLimit from '@fastify/rate-limit';
 import staticFiles from '@fastify/static';
 import swagger from '@fastify/swagger';
 import swaggerUi from '@fastify/swagger-ui';
-import { OWNER_TELEGRAM_ID, profileSchema, validateTelegramInitData } from '@rolemate/shared';
+import {
+  OWNER_TELEGRAM_ID,
+  profileSchema,
+  sha256,
+  validateTelegramInitData,
+} from '@rolemate/shared';
 import { z } from 'zod';
 import { createBot } from './bot.js';
 import { DataApiError, DataApiClient } from './d1-client.js';
@@ -47,6 +52,17 @@ const reportBodySchema = z.object({
     'other',
   ]),
   description: z.string().max(1_500).default(''),
+});
+const settingsBodySchema = z.object({
+  notificationsEnabled: z.boolean(),
+  matchNotificationsEnabled: z.boolean(),
+  messageNotificationsEnabled: z.boolean(),
+  referralNotificationsEnabled: z.boolean(),
+  premiumNotificationsEnabled: z.boolean(),
+  privacyShieldEnabled: z.boolean(),
+  showOnlineStatus: z.boolean(),
+  showPremiumBadge: z.boolean(),
+  theme: z.enum(['telegram', 'light', 'dark']),
 });
 
 async function verifyTurnstile(secret: string, token: string, remoteIp?: string): Promise<boolean> {
@@ -148,18 +164,35 @@ export async function buildServer(env: AppEnv): Promise<FastifyInstance> {
   const requireAdmin = async (request: FastifyRequest, csrf = false) => {
     const session = csrf ? await mutate(request) : await authenticate(request);
     if (session.telegramUserId !== OWNER_TELEGRAM_ID || session.role !== 'admin') {
+      const ipSignalHash = await sha256(`${env.SESSION_SECRET}:${request.ip}`);
       await dataApi
         .execute('risk.record', {
           userId: session.userId,
           type: 'unauthorized_admin_access',
           scoreDelta: 15,
-          metadata: { path: request.url, requestId: request.id },
+          metadata: { path: request.url, requestId: request.id, ipSignalHash },
         })
         .catch(() => undefined);
       throw new DataApiError('FORBIDDEN', 'Forbidden', 403);
     }
     return session;
   };
+  const writeAdminAudit = async (
+    request: FastifyRequest,
+    adminUserId: string,
+    action: string,
+    reason: string,
+    targetUserId?: string,
+  ) =>
+    dataApi.execute('admin.audit', {
+      adminUserId,
+      action,
+      reason,
+      ...(targetUserId ? { targetUserId } : {}),
+      ipSignalHash: await sha256(`${env.SESSION_SECRET}:${request.ip}`),
+      userAgent: String(request.headers['user-agent'] ?? '').slice(0, 512),
+      requestId: request.id,
+    });
 
   app.get('/health/live', () => ({ status: 'ok' }));
   app.get('/health/startup', async (_request, reply) => {
@@ -191,7 +224,20 @@ export async function buildServer(env: AppEnv): Promise<FastifyInstance> {
         return reply.code(401).send({ ok: false });
       }
       const update = request.body as Parameters<typeof bot.handleUpdate>[0];
-      await bot.handleUpdate(update);
+      const updateId = (update as { update_id?: unknown }).update_id;
+      if (!Number.isInteger(updateId)) return reply.code(400).send({ ok: false });
+      const claim = await dataApi.execute<{ claimed: boolean }>('telegramUpdates.claim', {
+        updateId: updateId as number,
+      });
+      if (!claim.claimed) return reply.code(200).send({ ok: true, duplicate: true });
+      try {
+        await bot.handleUpdate(update);
+      } catch (error) {
+        await dataApi
+          .execute('telegramUpdates.release', { updateId: updateId as number })
+          .catch(() => undefined);
+        throw error;
+      }
       return reply.code(200).send({ ok: true });
     },
   );
@@ -247,6 +293,14 @@ export async function buildServer(env: AppEnv): Promise<FastifyInstance> {
       .parse(request.query);
     return dataApi.execute('search.list', { userId: session.userId, limit: query.limit });
   });
+  app.post('/api/search/state', async (request) => {
+    const session = await mutateSafe(request);
+    const body = z.object({ enabled: z.boolean() }).parse(request.body);
+    return dataApi.execute('users.setSearchEnabled', {
+      userId: session.userId,
+      enabled: body.enabled,
+    });
+  });
   app.post('/api/swipes', async (request) => {
     const session = await mutateSafe(request);
     const body = swipeBodySchema.parse(request.body);
@@ -261,6 +315,27 @@ export async function buildServer(env: AppEnv): Promise<FastifyInstance> {
   app.get('/api/conversations', async (request) => {
     const session = await authenticate(request);
     return dataApi.execute('conversations.list', { userId: session.userId, limit: 50 });
+  });
+  app.get('/api/matches', async (request) => {
+    const session = await authenticate(request);
+    return dataApi.execute('matches.list', { userId: session.userId, limit: 50 });
+  });
+  app.post('/api/conversations/:conversationId/contact-reveal', async (request) => {
+    const session = await mutateSafe(request);
+    const params = z.object({ conversationId: z.string().uuid() }).parse(request.params);
+    return dataApi.execute('conversations.requestContact', {
+      userId: session.userId,
+      conversationId: params.conversationId,
+    });
+  });
+  app.get('/api/settings', async (request) => {
+    const session = await authenticate(request);
+    return dataApi.execute('settings.get', { userId: session.userId });
+  });
+  app.put('/api/settings', async (request) => {
+    const session = await mutate(request);
+    const settings = settingsBodySchema.parse(request.body);
+    return dataApi.execute('settings.update', { userId: session.userId, ...settings });
   });
   app.post('/api/blocks', async (request) => {
     const session = await mutateSafe(request);
@@ -349,6 +424,181 @@ export async function buildServer(env: AppEnv): Promise<FastifyInstance> {
     const session = await requireAdmin(request);
     return dataApi.execute('admin.dashboard', { adminUserId: session.userId });
   });
+  app.get('/api/admin/users', async (request) => {
+    const session = await requireAdmin(request);
+    const query = z
+      .object({
+        q: z.string().max(128).default(''),
+        limit: z.coerce.number().int().min(1).max(100).default(50),
+      })
+      .parse(request.query);
+    return dataApi.execute('admin.users.list', {
+      adminUserId: session.userId,
+      query: query.q,
+      limit: query.limit,
+    });
+  });
+  app.get('/api/admin/profiles', async (request) => {
+    const session = await requireAdmin(request);
+    const query = z
+      .object({
+        status: z
+          .enum(['draft', 'pending', 'approved', 'rejected', 'paused', 'archived', 'all'])
+          .default('pending'),
+        limit: z.coerce.number().int().min(1).max(100).default(50),
+      })
+      .parse(request.query);
+    return dataApi.execute('admin.profiles.list', {
+      adminUserId: session.userId,
+      status: query.status,
+      limit: query.limit,
+    });
+  });
+  app.get('/api/admin/reports', async (request) => {
+    const session = await requireAdmin(request);
+    const query = z
+      .object({
+        status: z.enum(['open', 'reviewing', 'resolved', 'dismissed', 'all']).default('open'),
+        limit: z.coerce.number().int().min(1).max(100).default(50),
+      })
+      .parse(request.query);
+    return dataApi.execute('admin.reports.list', {
+      adminUserId: session.userId,
+      status: query.status,
+      limit: query.limit,
+    });
+  });
+  app.post('/api/admin/users/:userId/moderate', async (request) => {
+    const session = await requireAdmin(request, true);
+    const params = z.object({ userId: z.string().uuid() }).parse(request.params);
+    const body = z
+      .object({
+        action: z.enum(['warn', 'temporary_ban', 'permanent_ban', 'unban', 'disable_profile']),
+        reason: z.string().min(3).max(1_000),
+        bannedUntil: z.string().datetime().optional(),
+      })
+      .parse(request.body);
+    const result = await dataApi.execute('admin.user.moderate', {
+      adminUserId: session.userId,
+      targetUserId: params.userId,
+      ...body,
+    });
+    await writeAdminAudit(
+      request,
+      session.userId,
+      `user.${body.action}`,
+      body.reason,
+      params.userId,
+    );
+    return result;
+  });
+  app.post('/api/admin/profiles/:profileId/moderate', async (request) => {
+    const session = await requireAdmin(request, true);
+    const params = z.object({ profileId: z.string().uuid() }).parse(request.params);
+    const body = z
+      .object({
+        status: z.enum(['approved', 'rejected', 'paused', 'archived']),
+        reason: z.string().min(3).max(1_000),
+      })
+      .parse(request.body);
+    const result = await dataApi.execute('admin.profile.moderate', {
+      adminUserId: session.userId,
+      profileId: params.profileId,
+      ...body,
+    });
+    await writeAdminAudit(request, session.userId, `profile.${body.status}`, body.reason);
+    return result;
+  });
+  app.post('/api/admin/reports/:reportId/resolve', async (request) => {
+    const session = await requireAdmin(request, true);
+    const params = z.object({ reportId: z.string().uuid() }).parse(request.params);
+    const body = z
+      .object({
+        status: z.enum(['reviewing', 'resolved', 'dismissed']),
+        resolution: z.string().min(3).max(1_000),
+      })
+      .parse(request.body);
+    const result = await dataApi.execute('admin.report.resolve', {
+      adminUserId: session.userId,
+      reportId: params.reportId,
+      ...body,
+    });
+    await writeAdminAudit(request, session.userId, `report.${body.status}`, body.resolution);
+    return result;
+  });
+  app.post('/api/admin/users/:userId/premium/grant', async (request) => {
+    const session = await requireAdmin(request, true);
+    const params = z.object({ userId: z.string().uuid() }).parse(request.params);
+    const body = z
+      .object({
+        durationDays: z.number().int().min(1).max(365),
+        reason: z.string().min(3).max(1_000),
+      })
+      .parse(request.body);
+    const result = await dataApi.execute('admin.premium.grant', {
+      adminUserId: session.userId,
+      targetUserId: params.userId,
+      durationDays: body.durationDays,
+      reason: body.reason,
+      idempotencyKey: request.id,
+    });
+    await writeAdminAudit(request, session.userId, 'premium.grant', body.reason, params.userId);
+    return result;
+  });
+  app.post('/api/admin/users/:userId/premium/revoke', async (request) => {
+    const session = await requireAdmin(request, true);
+    const params = z.object({ userId: z.string().uuid() }).parse(request.params);
+    const body = z.object({ reason: z.string().min(3).max(1_000) }).parse(request.body);
+    const result = await dataApi.execute('admin.premium.revoke', {
+      adminUserId: session.userId,
+      targetUserId: params.userId,
+      reason: body.reason,
+    });
+    await writeAdminAudit(request, session.userId, 'premium.revoke', body.reason, params.userId);
+    return result;
+  });
+  app.put('/api/admin/products/:productId', async (request) => {
+    const session = await requireAdmin(request, true);
+    const params = z.object({ productId: z.string().uuid() }).parse(request.params);
+    const body = z
+      .object({ starsAmount: z.number().int().min(1).max(10_000), isActive: z.boolean() })
+      .parse(request.body);
+    const result = await dataApi.execute('admin.products.update', {
+      adminUserId: session.userId,
+      productId: params.productId,
+      ...body,
+    });
+    await writeAdminAudit(request, session.userId, 'product.update', 'admin_update');
+    return result;
+  });
+  app.get('/api/admin/flags', async (request) => {
+    const session = await requireAdmin(request);
+    return dataApi.execute('admin.flags.list', { adminUserId: session.userId });
+  });
+  app.put('/api/admin/flags/:key', async (request) => {
+    const session = await requireAdmin(request, true);
+    const params = z.object({ key: z.string().min(1).max(64) }).parse(request.params);
+    const body = z
+      .object({ enabled: z.boolean(), payload: z.record(z.unknown()).default({}) })
+      .parse(request.body);
+    const result = await dataApi.execute('admin.flags.update', {
+      adminUserId: session.userId,
+      key: params.key,
+      ...body,
+    });
+    await writeAdminAudit(request, session.userId, 'feature_flag.update', params.key);
+    return result;
+  });
+  app.get('/api/admin/audit', async (request) => {
+    const session = await requireAdmin(request);
+    const query = z
+      .object({ limit: z.coerce.number().int().min(1).max(100).default(50) })
+      .parse(request.query);
+    return dataApi.execute('admin.audit.list', {
+      adminUserId: session.userId,
+      limit: query.limit,
+    });
+  });
   app.post('/api/admin/payments/:orderId/refund', async (request) => {
     const session = await requireAdmin(request, true);
     const params = z.object({ orderId: z.string().uuid() }).parse(request.params);
@@ -365,13 +615,7 @@ export async function buildServer(env: AppEnv): Promise<FastifyInstance> {
       orderId: params.orderId,
       providerEventId: `admin:${request.id}`,
     });
-    await dataApi.execute('admin.audit', {
-      adminUserId: session.userId,
-      action: 'payment.refund',
-      reason: 'admin_request',
-      newState: { orderId: params.orderId, status: 'refunded' },
-      requestId: request.id,
-    });
+    await writeAdminAudit(request, session.userId, 'payment.refund', params.orderId);
     return { refunded: true };
   });
 

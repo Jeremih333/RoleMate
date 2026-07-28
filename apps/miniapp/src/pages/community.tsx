@@ -1,21 +1,63 @@
-import { useMutation, useQuery } from '@tanstack/react-query';
-import { Check, Copy, Crown, Gift, Heart, MessageCircle, ShieldCheck } from 'lucide-react';
-import { api } from '../api.js';
+import { useEffect, useState } from 'react';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import {
+  AlertTriangle,
+  Ban,
+  Check,
+  Copy,
+  Crown,
+  ExternalLink,
+  Gift,
+  Heart,
+  MessageCircle,
+  Save,
+  ShieldCheck,
+} from 'lucide-react';
+import { api, type SettingsInput } from '../api.js';
 import { Button, Card, EmptyState, SectionTitle, Skeleton } from '../components/ui.js';
 import { getTelegram } from '../telegram.js';
 
 export function MatchesPage() {
+  const matches = useQuery({ queryKey: ['matches'], queryFn: api.matches });
+  if (matches.isLoading) return <Skeleton className="h-80" />;
+  if (!matches.data?.length)
+    return (
+      <EmptyState
+        icon={<Heart className="h-7 w-7" />}
+        title="Здесь появятся взаимные симпатии"
+        description="Отмечай интересные анкеты. Когда симпатия станет взаимной, мы откроем анонимный чат."
+      />
+    );
   return (
-    <EmptyState
-      icon={<Heart className="h-7 w-7" />}
-      title="Здесь появятся взаимные симпатии"
-      description="Отмечай интересные анкеты. Когда симпатия станет взаимной, мы откроем анонимный чат."
-    />
+    <div>
+      <SectionTitle eyebrow="взаимный интерес">Симпатии</SectionTitle>
+      <div className="space-y-3">
+        {matches.data.map((match) => (
+          <Card key={match.id} className="flex items-center gap-4 p-4">
+            <span className="avatar">{match.display_name?.slice(0, 1) ?? 'R'}</span>
+            <div className="min-w-0 flex-1">
+              <strong>{match.display_name ?? 'Со-ролевик'}</strong>
+              <p className="truncate text-sm text-muted">{match.short_headline}</p>
+            </div>
+            <a className="button button-secondary" href="/chats">
+              <MessageCircle className="h-4 w-4" />
+            </a>
+          </Card>
+        ))}
+      </div>
+    </div>
   );
 }
 
 export function ChatsPage() {
+  const queryClient = useQueryClient();
   const chats = useQuery({ queryKey: ['conversations'], queryFn: api.conversations });
+  const block = useMutation({
+    mutationFn: (userId: string) => api.block(userId),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['conversations'] }),
+  });
+  const report = useMutation({ mutationFn: api.report });
+  const reveal = useMutation({ mutationFn: api.requestContactReveal });
   if (chats.isLoading) return <Skeleton className="h-80" />;
   if (!chats.data?.length)
     return (
@@ -30,13 +72,68 @@ export function ChatsPage() {
       <SectionTitle eyebrow="анонимно и безопасно">Чаты</SectionTitle>
       <div className="space-y-3">
         {chats.data.map((chat) => (
-          <Card key={chat.id} className="flex items-center gap-4 p-4">
-            <span className="avatar">{chat.anonymous_alias.slice(-1)}</span>
-            <div>
-              <strong>{chat.anonymous_alias}</strong>
-              <p className="text-sm text-muted">Нажми, чтобы продолжить историю</p>
+          <Card key={chat.id} className="p-4">
+            <div className="flex items-center gap-4">
+              <span className="avatar">{chat.anonymous_alias.slice(-1)}</span>
+              <div className="min-w-0 flex-1">
+                <strong>{chat.anonymous_alias}</strong>
+                <p className="truncate text-sm text-muted">
+                  {chat.short_headline ?? 'Продолжай историю в диалоге с ботом'}
+                </p>
+              </div>
+              <span className="activity-dot" />
             </div>
-            <span className="activity-dot ml-auto" />
+            <div className="mt-4 flex flex-wrap gap-2">
+              <Button
+                variant="secondary"
+                onClick={() => reveal.mutate(chat.id)}
+                loading={reveal.isPending}
+              >
+                <ExternalLink className="h-4 w-4" /> Обмен контактами
+              </Button>
+              <Button
+                variant="secondary"
+                onClick={() => {
+                  const description = window.prompt('Кратко опиши нарушение') ?? '';
+                  if (!description) return;
+                  report.mutate({
+                    reportedUserId: chat.other_user_id,
+                    conversationId: chat.id,
+                    category: 'other',
+                    description,
+                  });
+                }}
+              >
+                <AlertTriangle className="h-4 w-4" /> Жалоба
+              </Button>
+              <Button
+                variant="secondary"
+                onClick={() => {
+                  if (window.confirm('Заблокировать пользователя и закрыть чат?')) {
+                    block.mutate(chat.other_user_id);
+                  }
+                }}
+                loading={block.isPending}
+              >
+                <Ban className="h-4 w-4" /> Блокировать
+              </Button>
+            </div>
+            {reveal.data?.revealed ? (
+              <p className="mt-3 text-sm text-soft">
+                Взаимное согласие получено:{' '}
+                {reveal.data.contacts
+                  ?.map((contact) => contact.username)
+                  .filter(Boolean)
+                  .join(', ') || 'username у собеседника не указан'}
+              </p>
+            ) : reveal.isSuccess ? (
+              <p className="mt-3 text-sm text-muted">
+                Запрос отправлен. Ждём согласия собеседника.
+              </p>
+            ) : null}
+            {report.data ? (
+              <p className="mt-3 text-sm text-soft">Жалоба отправлена: {report.data.reportId}</p>
+            ) : null}
           </Card>
         ))}
       </div>
@@ -138,23 +235,76 @@ export function ReferralsPage() {
 }
 
 export function SettingsPage() {
+  const settings = useQuery({ queryKey: ['settings'], queryFn: api.settings });
+  const [form, setForm] = useState<SettingsInput | null>(null);
+  const save = useMutation({ mutationFn: api.saveSettings });
+  const searchState = useMutation({ mutationFn: api.setSearchEnabled });
+  useEffect(() => {
+    if (!settings.data) return;
+    setForm({
+      notificationsEnabled: Boolean(settings.data.notifications_enabled),
+      matchNotificationsEnabled: Boolean(settings.data.match_notifications_enabled),
+      messageNotificationsEnabled: Boolean(settings.data.message_notifications_enabled),
+      referralNotificationsEnabled: Boolean(settings.data.referral_notifications_enabled),
+      premiumNotificationsEnabled: Boolean(settings.data.premium_notifications_enabled),
+      privacyShieldEnabled: Boolean(settings.data.privacy_shield_enabled),
+      showOnlineStatus: Boolean(settings.data.show_online_status),
+      showPremiumBadge: Boolean(settings.data.show_premium_badge),
+      theme: settings.data.theme,
+    });
+  }, [settings.data]);
+  if (!form) return <Skeleton className="h-96" />;
+  const toggles: Array<[keyof SettingsInput, string]> = [
+    ['notificationsEnabled', 'Все уведомления'],
+    ['matchNotificationsEnabled', 'Уведомления о мэтчах'],
+    ['messageNotificationsEnabled', 'Уведомления о сообщениях'],
+    ['referralNotificationsEnabled', 'Реферальные награды'],
+    ['premiumNotificationsEnabled', 'Напоминания Premium'],
+    ['privacyShieldEnabled', 'Privacy Shield'],
+    ['showOnlineStatus', 'Показывать статус активности'],
+    ['showPremiumBadge', 'Показывать Premium-значок'],
+  ];
   return (
     <div>
       <SectionTitle eyebrow="контроль в твоих руках">Настройки</SectionTitle>
       <div className="space-y-3">
-        {[
-          ['Уведомления о мэтчах', true],
-          ['Уведомления о сообщениях', true],
-          ['Privacy Shield', true],
-          ['Показывать статус активности', true],
-          ['Показывать Premium-значок', true],
-        ].map(([label, checked]) => (
-          <Card key={String(label)} className="setting-row">
-            <span>{String(label)}</span>
-            <input type="checkbox" defaultChecked={Boolean(checked)} />
+        {toggles.map(([key, label]) => (
+          <Card key={key} className="setting-row">
+            <span>{label}</span>
+            <input
+              type="checkbox"
+              checked={Boolean(form[key])}
+              onChange={(event) => setForm({ ...form, [key]: event.target.checked })}
+            />
           </Card>
         ))}
+        <Card className="setting-row">
+          <span>Тема</span>
+          <select
+            className="input-field max-w-40"
+            value={form.theme}
+            onChange={(event) =>
+              setForm({ ...form, theme: event.target.value as SettingsInput['theme'] })
+            }
+          >
+            <option value="telegram">Telegram</option>
+            <option value="light">Светлая</option>
+            <option value="dark">Тёмная</option>
+          </select>
+        </Card>
       </div>
+      <div className="mt-4 flex flex-wrap gap-2">
+        <Button onClick={() => save.mutate(form)} loading={save.isPending}>
+          <Save className="h-4 w-4" /> Сохранить
+        </Button>
+        <Button variant="secondary" onClick={() => searchState.mutate(false)}>
+          Приостановить поиск
+        </Button>
+        <Button variant="secondary" onClick={() => searchState.mutate(true)}>
+          Возобновить поиск
+        </Button>
+      </div>
+      {save.isSuccess ? <p className="mt-3 text-sm text-soft">Настройки сохранены.</p> : null}
       <Card className="mt-4 p-5">
         <div className="flex gap-3">
           <ShieldCheck className="text-lilac" />

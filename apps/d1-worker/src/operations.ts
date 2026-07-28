@@ -28,6 +28,15 @@ function parseJsonArray(value: string): string[] {
   }
 }
 
+async function assertAdmin(env: Env, adminUserId: string): Promise<void> {
+  const admin = await env.DB.prepare('SELECT role, telegram_user_id FROM users WHERE id = ?1')
+    .bind(adminUserId)
+    .first<{ role: string; telegram_user_id: number }>();
+  if (admin?.role !== 'admin' || admin.telegram_user_id !== 1_040_929_628) {
+    throw new ApiError(403, 'FORBIDDEN', 'Forbidden');
+  }
+}
+
 const handlers: { [K in WorkerOperation]: Handler<K> } = {
   'users.upsert': async (env, input) => {
     const existing = await env.DB.prepare(
@@ -108,6 +117,60 @@ const handlers: { [K in WorkerOperation]: Handler<K> } = {
       .bind(`age_group:${input.userId}`, input.ageGroup)
       .run();
     return { accepted: true };
+  },
+  'users.setSearchEnabled': async (env, input) => {
+    const result = await env.DB.prepare(
+      `UPDATE users SET is_search_enabled = ?2, status = CASE WHEN ?2 = 1 THEN 'active' ELSE 'paused' END,
+         updated_at = CURRENT_TIMESTAMP
+       WHERE id = ?1 AND is_banned = 0 AND deleted_at IS NULL
+         AND (?2 = 0 OR (is_onboarding_completed = 1 AND is_age_confirmed = 1 AND is_rules_accepted = 1))`,
+    )
+      .bind(input.userId, input.enabled ? 1 : 0)
+      .run();
+    if (result.meta.changes !== 1) {
+      throw new ApiError(409, 'SEARCH_STATE_REJECTED', 'Search state cannot be changed');
+    }
+    await env.DB.prepare(
+      `UPDATE profiles SET is_active = ?2, updated_at = CURRENT_TIMESTAMP
+       WHERE user_id = ?1 AND moderation_status = 'approved'`,
+    )
+      .bind(input.userId, input.enabled ? 1 : 0)
+      .run();
+    return { enabled: input.enabled };
+  },
+  'settings.get': async (env, input) => {
+    const settings = await env.DB.prepare('SELECT * FROM user_settings WHERE user_id = ?1')
+      .bind(input.userId)
+      .first();
+    if (!settings) throw new ApiError(404, 'SETTINGS_NOT_FOUND', 'Settings not found');
+    return settings;
+  },
+  'settings.update': async (env, input) => {
+    const result = await env.DB.prepare(
+      `UPDATE user_settings SET
+         notifications_enabled = ?2, match_notifications_enabled = ?3,
+         message_notifications_enabled = ?4, referral_notifications_enabled = ?5,
+         premium_notifications_enabled = ?6, privacy_shield_enabled = ?7,
+         show_online_status = ?8, show_premium_badge = ?9, theme = ?10,
+         updated_at = CURRENT_TIMESTAMP
+       WHERE user_id = ?1`,
+    )
+      .bind(
+        input.userId,
+        input.notificationsEnabled ? 1 : 0,
+        input.matchNotificationsEnabled ? 1 : 0,
+        input.messageNotificationsEnabled ? 1 : 0,
+        input.referralNotificationsEnabled ? 1 : 0,
+        input.premiumNotificationsEnabled ? 1 : 0,
+        input.privacyShieldEnabled ? 1 : 0,
+        input.showOnlineStatus ? 1 : 0,
+        input.showPremiumBadge ? 1 : 0,
+        input.theme,
+      )
+      .run();
+    if (result.meta.changes !== 1)
+      throw new ApiError(404, 'SETTINGS_NOT_FOUND', 'Settings not found');
+    return { updated: true };
   },
   'users.delete': async (env, input) => {
     await env.DB.batch([
@@ -364,13 +427,37 @@ const handlers: { [K in WorkerOperation]: Handler<K> } = {
       .first<{ id: string }>();
     return { matched: true, matchId: match?.id };
   },
+  'matches.list': async (env, input) => {
+    const rows = await env.DB.prepare(
+      `SELECT m.id, m.status, m.matched_at, c.id AS conversation_id,
+              other.id AS other_user_id, p.display_name, p.short_headline,
+              p.fandoms, p.genres
+       FROM matches m
+       JOIN users other ON other.id = CASE WHEN m.user_a_id = ?1 THEN m.user_b_id ELSE m.user_a_id END
+       LEFT JOIN profiles p ON p.user_id = other.id
+       LEFT JOIN conversations c ON c.match_id = m.id
+       WHERE (m.user_a_id = ?1 OR m.user_b_id = ?1)
+         AND m.status = 'active' AND other.is_banned = 0 AND other.deleted_at IS NULL
+       ORDER BY m.matched_at DESC LIMIT ?2`,
+    )
+      .bind(input.userId, input.limit)
+      .all();
+    return rows.results;
+  },
   'conversations.list': async (env, input) => {
     const rows = await env.DB.prepare(
       `SELECT c.id, c.status, c.contact_reveal_status, c.last_message_at,
-              cp.anonymous_alias
+              other_cp.anonymous_alias, other.id AS other_user_id,
+              p.display_name, p.short_headline
        FROM conversations c
-       JOIN conversation_participants cp ON cp.conversation_id = c.id
-       WHERE cp.user_id = ?1 AND cp.left_at IS NULL
+       JOIN conversation_participants own_cp
+         ON own_cp.conversation_id = c.id AND own_cp.user_id = ?1
+       JOIN conversation_participants other_cp
+         ON other_cp.conversation_id = c.id AND other_cp.user_id <> ?1
+       JOIN users other ON other.id = other_cp.user_id
+       LEFT JOIN profiles p ON p.user_id = other.id
+       WHERE own_cp.left_at IS NULL AND other_cp.left_at IS NULL
+         AND other.is_banned = 0 AND other.deleted_at IS NULL
        ORDER BY COALESCE(c.last_message_at, c.created_at) DESC LIMIT ?2`,
     )
       .bind(input.userId, input.limit)
@@ -444,6 +531,62 @@ const handlers: { [K in WorkerOperation]: Handler<K> } = {
     ]);
     return { id };
   },
+  'conversations.requestContact': async (env, input) => {
+    const participant = await env.DB.prepare(
+      `SELECT 1 AS found FROM conversation_participants cp
+       JOIN conversations c ON c.id = cp.conversation_id
+       WHERE cp.conversation_id = ?1 AND cp.user_id = ?2
+         AND cp.left_at IS NULL AND c.status = 'active'`,
+    )
+      .bind(input.conversationId, input.userId)
+      .first();
+    if (!participant) throw new ApiError(404, 'CONVERSATION_NOT_FOUND', 'Conversation not found');
+
+    await env.DB.prepare(
+      `UPDATE conversation_participants
+       SET contact_reveal_requested = 1, contact_reveal_approved = 1
+       WHERE conversation_id = ?1 AND user_id = ?2`,
+    )
+      .bind(input.conversationId, input.userId)
+      .run();
+    const approvals = await env.DB.prepare(
+      `SELECT COUNT(*) AS total,
+              SUM(CASE WHEN contact_reveal_approved = 1 THEN 1 ELSE 0 END) AS approved
+       FROM conversation_participants
+       WHERE conversation_id = ?1 AND left_at IS NULL`,
+    )
+      .bind(input.conversationId)
+      .first<{ total: number; approved: number }>();
+    const revealed = Number(approvals?.total ?? 0) === 2 && Number(approvals?.approved ?? 0) === 2;
+    if (!revealed) {
+      await env.DB.prepare(
+        `UPDATE conversations SET contact_reveal_status = 'requested' WHERE id = ?1`,
+      )
+        .bind(input.conversationId)
+        .run();
+      return { revealed: false };
+    }
+    await env.DB.prepare(
+      `UPDATE conversations SET contact_reveal_status = 'revealed' WHERE id = ?1`,
+    )
+      .bind(input.conversationId)
+      .run();
+    const contacts = await env.DB.prepare(
+      `SELECT u.id AS user_id, u.telegram_username
+       FROM conversation_participants cp
+       JOIN users u ON u.id = cp.user_id
+       WHERE cp.conversation_id = ?1`,
+    )
+      .bind(input.conversationId)
+      .all<{ user_id: string; telegram_username: string | null }>();
+    return {
+      revealed: true,
+      contacts: contacts.results.map((row) => ({
+        userId: row.user_id,
+        username: row.telegram_username ? `@${String(row.telegram_username)}` : null,
+      })),
+    };
+  },
   'blocks.create': async (env, input) => {
     await env.DB.batch([
       env.DB.prepare(
@@ -498,6 +641,20 @@ const handlers: { [K in WorkerOperation]: Handler<K> } = {
         : []),
     ]);
     return { riskEventId: id };
+  },
+  'telegramUpdates.claim': async (env, input) => {
+    const result = await env.DB.prepare(
+      'INSERT OR IGNORE INTO processed_telegram_updates (update_id) VALUES (?1)',
+    )
+      .bind(input.updateId)
+      .run();
+    return { claimed: result.meta.changes === 1 };
+  },
+  'telegramUpdates.release': async (env, input) => {
+    await env.DB.prepare('DELETE FROM processed_telegram_updates WHERE update_id = ?1')
+      .bind(input.updateId)
+      .run();
+    return { released: true };
   },
   'products.list': async (env, input) => {
     const query = input.activeOnly
@@ -754,44 +911,395 @@ const handlers: { [K in WorkerOperation]: Handler<K> } = {
     return { revoked: true };
   },
   'admin.dashboard': async (env, input) => {
-    const admin = await env.DB.prepare('SELECT role, telegram_user_id FROM users WHERE id = ?1')
-      .bind(input.adminUserId)
-      .first<{ role: string; telegram_user_id: number }>();
-    if (admin?.role !== 'admin' || admin.telegram_user_id !== 1_040_929_628) {
-      throw new ApiError(403, 'FORBIDDEN', 'Forbidden');
-    }
-    const [users, profiles, matches, conversations, reports, premium, payments] =
-      await env.DB.batch([
-        env.DB.prepare('SELECT COUNT(*) AS total FROM users WHERE deleted_at IS NULL'),
-        env.DB.prepare(
-          "SELECT COUNT(*) AS total FROM profiles WHERE moderation_status = 'approved'",
-        ),
-        env.DB.prepare("SELECT COUNT(*) AS total FROM matches WHERE status = 'active'"),
-        env.DB.prepare("SELECT COUNT(*) AS total FROM conversations WHERE status = 'active'"),
-        env.DB.prepare("SELECT COUNT(*) AS total FROM reports WHERE status = 'open'"),
-        env.DB.prepare(
-          "SELECT COUNT(DISTINCT user_id) AS total FROM premium_entitlements WHERE status = 'active' AND ends_at > CURRENT_TIMESTAMP",
-        ),
-        env.DB.prepare("SELECT COUNT(*) AS total FROM payment_orders WHERE status = 'paid'"),
-      ]);
+    await assertAdmin(env, input.adminUserId);
+    const [
+      users,
+      newUsers,
+      activeUsers,
+      profiles,
+      matches,
+      conversations,
+      reports,
+      banned,
+      premium,
+      payments,
+      referrals,
+      captcha,
+      pendingJobs,
+      failedJobs,
+    ] = await env.DB.batch([
+      env.DB.prepare('SELECT COUNT(*) AS total FROM users WHERE deleted_at IS NULL'),
+      env.DB.prepare(
+        "SELECT COUNT(*) AS total FROM users WHERE created_at >= datetime('now', '-1 day')",
+      ),
+      env.DB.prepare(
+        "SELECT COUNT(*) AS total FROM users WHERE last_activity_at >= datetime('now', '-1 day') AND deleted_at IS NULL",
+      ),
+      env.DB.prepare("SELECT COUNT(*) AS total FROM profiles WHERE moderation_status = 'approved'"),
+      env.DB.prepare("SELECT COUNT(*) AS total FROM matches WHERE status = 'active'"),
+      env.DB.prepare("SELECT COUNT(*) AS total FROM conversations WHERE status = 'active'"),
+      env.DB.prepare("SELECT COUNT(*) AS total FROM reports WHERE status = 'open'"),
+      env.DB.prepare('SELECT COUNT(*) AS total FROM users WHERE is_banned = 1'),
+      env.DB.prepare(
+        "SELECT COUNT(DISTINCT user_id) AS total FROM premium_entitlements WHERE status = 'active' AND ends_at > CURRENT_TIMESTAMP",
+      ),
+      env.DB.prepare("SELECT COUNT(*) AS total FROM payment_orders WHERE status = 'paid'"),
+      env.DB.prepare("SELECT COUNT(*) AS total FROM referrals WHERE status = 'qualified'"),
+      env.DB.prepare(
+        "SELECT COUNT(*) AS total FROM captcha_challenges WHERE created_at >= datetime('now', '-1 day')",
+      ),
+      env.DB.prepare("SELECT COUNT(*) AS total FROM background_jobs WHERE status = 'pending'"),
+      env.DB.prepare('SELECT COUNT(*) AS total FROM job_failures'),
+    ]);
     const total = (result: D1Result | undefined) =>
       Number((result?.results[0] as { total?: number } | undefined)?.total ?? 0);
     return {
       users: total(users),
+      newUsers24h: total(newUsers),
+      activeUsers24h: total(activeUsers),
       profiles: total(profiles),
       matches: total(matches),
       conversations: total(conversations),
       openReports: total(reports),
+      bannedUsers: total(banned),
       premiumUsers: total(premium),
       starsPayments: total(payments),
+      qualifiedReferrals: total(referrals),
+      captcha24h: total(captcha),
+      pendingJobs: total(pendingJobs),
+      failedJobs: total(failedJobs),
     };
   },
+  'admin.users.list': async (env, input) => {
+    await assertAdmin(env, input.adminUserId);
+    const pattern = `%${input.query.replaceAll('%', '\\%').replaceAll('_', '\\_')}%`;
+    return (
+      await env.DB.prepare(
+        `SELECT u.id, u.telegram_user_id, u.telegram_username, u.telegram_first_name,
+                u.status, u.role, u.is_banned, u.ban_reason, u.banned_until,
+                u.risk_score, u.last_activity_at, u.created_at,
+                p.display_name, p.moderation_status,
+                pe.ends_at AS premium_ends_at
+         FROM users u
+         LEFT JOIN profiles p ON p.user_id = u.id
+         LEFT JOIN premium_entitlements pe ON pe.id = (
+           SELECT id FROM premium_entitlements
+           WHERE user_id = u.id AND status = 'active' AND ends_at > CURRENT_TIMESTAMP
+           ORDER BY ends_at DESC LIMIT 1
+         )
+         WHERE u.deleted_at IS NULL
+           AND (?2 = '' OR CAST(u.telegram_user_id AS TEXT) LIKE ?3 ESCAPE '\\'
+             OR COALESCE(u.telegram_username, '') LIKE ?3 ESCAPE '\\'
+             OR COALESCE(p.display_name, '') LIKE ?3 ESCAPE '\\')
+         ORDER BY u.created_at DESC LIMIT ?4`,
+      )
+        .bind(input.adminUserId, input.query, pattern, input.limit)
+        .all()
+    ).results;
+  },
+  'admin.profiles.list': async (env, input) => {
+    await assertAdmin(env, input.adminUserId);
+    return (
+      await env.DB.prepare(
+        `SELECT p.*, u.telegram_user_id, u.telegram_username, u.risk_score
+         FROM profiles p JOIN users u ON u.id = p.user_id
+         WHERE (?2 = 'all' OR p.moderation_status = ?2)
+         ORDER BY p.updated_at DESC LIMIT ?3`,
+      )
+        .bind(input.adminUserId, input.status, input.limit)
+        .all()
+    ).results;
+  },
+  'admin.reports.list': async (env, input) => {
+    await assertAdmin(env, input.adminUserId);
+    return (
+      await env.DB.prepare(
+        `SELECT r.*, reporter.telegram_user_id AS reporter_telegram_id,
+                reported.telegram_user_id AS reported_telegram_id,
+                p.display_name AS reported_display_name
+         FROM reports r
+         JOIN users reporter ON reporter.id = r.reporter_user_id
+         JOIN users reported ON reported.id = r.reported_user_id
+         LEFT JOIN profiles p ON p.user_id = reported.id
+         WHERE (?2 = 'all' OR r.status = ?2)
+         ORDER BY CASE r.status WHEN 'open' THEN 0 WHEN 'reviewing' THEN 1 ELSE 2 END,
+                  r.created_at DESC LIMIT ?3`,
+      )
+        .bind(input.adminUserId, input.status, input.limit)
+        .all()
+    ).results;
+  },
+  'admin.user.moderate': async (env, input, requestId) => {
+    await assertAdmin(env, input.adminUserId);
+    const oldState = await env.DB.prepare(
+      'SELECT status, is_banned, ban_reason, banned_until FROM users WHERE id = ?1',
+    )
+      .bind(input.targetUserId)
+      .first();
+    if (!oldState) throw new ApiError(404, 'USER_NOT_FOUND', 'User not found');
+    const statements: D1PreparedStatement[] = [];
+    if (input.action === 'temporary_ban' || input.action === 'permanent_ban') {
+      statements.push(
+        env.DB.prepare(
+          `UPDATE users SET is_banned = 1, is_search_enabled = 0,
+             ban_reason = ?2, banned_until = ?3, updated_at = CURRENT_TIMESTAMP WHERE id = ?1`,
+        ).bind(
+          input.targetUserId,
+          input.reason,
+          input.action === 'temporary_ban' ? (input.bannedUntil ?? null) : null,
+        ),
+        env.DB.prepare(
+          `UPDATE profiles SET is_active = 0, moderation_status = 'paused',
+             moderation_reason = ?2, updated_at = CURRENT_TIMESTAMP WHERE user_id = ?1`,
+        ).bind(input.targetUserId, input.reason),
+      );
+    } else if (input.action === 'unban') {
+      statements.push(
+        env.DB.prepare(
+          `UPDATE users SET is_banned = 0, ban_reason = NULL, banned_until = NULL,
+             updated_at = CURRENT_TIMESTAMP WHERE id = ?1`,
+        ).bind(input.targetUserId),
+      );
+    } else if (input.action === 'disable_profile') {
+      statements.push(
+        env.DB.prepare(
+          `UPDATE profiles SET is_active = 0, moderation_status = 'paused',
+             moderation_reason = ?2, updated_at = CURRENT_TIMESTAMP WHERE user_id = ?1`,
+        ).bind(input.targetUserId, input.reason),
+      );
+    } else {
+      statements.push(
+        env.DB.prepare(
+          `INSERT INTO notifications (id, user_id, type, payload)
+           VALUES (?1, ?2, 'moderation_warning', ?3)`,
+        ).bind(crypto.randomUUID(), input.targetUserId, json({ reason: input.reason })),
+      );
+    }
+    statements.push(
+      env.DB.prepare(
+        `INSERT INTO moderation_actions
+           (id, admin_user_id, target_user_id, action, reason, metadata)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6)`,
+      ).bind(
+        crypto.randomUUID(),
+        input.adminUserId,
+        input.targetUserId,
+        input.action,
+        input.reason,
+        json({ bannedUntil: input.bannedUntil ?? null }),
+      ),
+      env.DB.prepare(
+        `INSERT INTO admin_audit_logs
+           (id, admin_user_id, target_user_id, action, reason, old_state, new_state, request_id, result)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, 'success')`,
+      ).bind(
+        crypto.randomUUID(),
+        input.adminUserId,
+        input.targetUserId,
+        `user.${input.action}`,
+        input.reason,
+        json(oldState),
+        json({ action: input.action, bannedUntil: input.bannedUntil ?? null }),
+        requestId,
+      ),
+    );
+    await env.DB.batch(statements);
+    return { updated: true };
+  },
+  'admin.profile.moderate': async (env, input, requestId) => {
+    await assertAdmin(env, input.adminUserId);
+    const profile = await env.DB.prepare(
+      'SELECT user_id, moderation_status, is_active FROM profiles WHERE id = ?1',
+    )
+      .bind(input.profileId)
+      .first<{ user_id: string; moderation_status: string; is_active: number }>();
+    if (!profile) throw new ApiError(404, 'PROFILE_NOT_FOUND', 'Profile not found');
+    const isActive = input.status === 'approved' ? 1 : 0;
+    await env.DB.batch([
+      env.DB.prepare(
+        `UPDATE profiles SET moderation_status = ?2, moderation_reason = ?3,
+           is_active = ?4, updated_at = CURRENT_TIMESTAMP WHERE id = ?1`,
+      ).bind(input.profileId, input.status, input.reason, isActive),
+      env.DB.prepare(
+        `UPDATE users SET is_search_enabled = CASE WHEN ?2 = 'approved' THEN is_search_enabled ELSE 0 END,
+           updated_at = CURRENT_TIMESTAMP WHERE id = ?1`,
+      ).bind(profile.user_id, input.status),
+      env.DB.prepare(
+        `INSERT INTO admin_audit_logs
+           (id, admin_user_id, target_user_id, action, reason, old_state, new_state, request_id, result)
+         VALUES (?1, ?2, ?3, 'profile.moderate', ?4, ?5, ?6, ?7, 'success')`,
+      ).bind(
+        crypto.randomUUID(),
+        input.adminUserId,
+        profile.user_id,
+        input.reason,
+        json({ status: profile.moderation_status, isActive: profile.is_active }),
+        json({ status: input.status, isActive }),
+        requestId,
+      ),
+    ]);
+    return { updated: true };
+  },
+  'admin.report.resolve': async (env, input, requestId) => {
+    await assertAdmin(env, input.adminUserId);
+    const report = await env.DB.prepare(
+      'SELECT reported_user_id, status, resolution FROM reports WHERE id = ?1',
+    )
+      .bind(input.reportId)
+      .first<{ reported_user_id: string; status: string; resolution: string | null }>();
+    if (!report) throw new ApiError(404, 'REPORT_NOT_FOUND', 'Report not found');
+    await env.DB.batch([
+      env.DB.prepare(
+        `UPDATE reports SET status = ?2, resolution = ?3, assigned_admin_id = ?4,
+           resolved_at = CASE WHEN ?2 IN ('resolved', 'dismissed') THEN CURRENT_TIMESTAMP ELSE NULL END
+         WHERE id = ?1`,
+      ).bind(input.reportId, input.status, input.resolution, input.adminUserId),
+      env.DB.prepare(
+        `INSERT INTO admin_audit_logs
+           (id, admin_user_id, target_user_id, action, reason, old_state, new_state, request_id, result)
+         VALUES (?1, ?2, ?3, 'report.resolve', ?4, ?5, ?6, ?7, 'success')`,
+      ).bind(
+        crypto.randomUUID(),
+        input.adminUserId,
+        report.reported_user_id,
+        input.resolution,
+        json({ status: report.status, resolution: report.resolution }),
+        json({ status: input.status, resolution: input.resolution }),
+        requestId,
+      ),
+    ]);
+    return { updated: true };
+  },
+  'admin.premium.grant': async (env, input, requestId) => {
+    await assertAdmin(env, input.adminUserId);
+    const grantId = crypto.randomUUID();
+    await env.DB.batch([
+      env.DB.prepare(
+        `INSERT OR IGNORE INTO premium_grants
+           (id, user_id, source, duration_seconds, reference_id, granted_by_user_id)
+         VALUES (?1, ?2, 'admin', ?3, ?4, ?5)`,
+      ).bind(
+        grantId,
+        input.targetUserId,
+        input.durationDays * 86_400,
+        `admin:${input.idempotencyKey}`,
+        input.adminUserId,
+      ),
+      env.DB.prepare(
+        `INSERT OR IGNORE INTO premium_entitlements
+           (id, user_id, source, starts_at, ends_at)
+         VALUES (?1, ?2, 'admin', CURRENT_TIMESTAMP,
+           datetime(max(
+             unixepoch('now'),
+             coalesce((SELECT max(unixepoch(ends_at)) FROM premium_entitlements
+               WHERE user_id = ?2 AND status = 'active' AND ends_at > CURRENT_TIMESTAMP), 0)
+           ) + ?3, 'unixepoch'))`,
+      ).bind(grantId, input.targetUserId, input.durationDays * 86_400),
+      env.DB.prepare(
+        `INSERT INTO admin_audit_logs
+           (id, admin_user_id, target_user_id, action, reason, new_state, request_id, result)
+         VALUES (?1, ?2, ?3, 'premium.grant', ?4, ?5, ?6, 'success')`,
+      ).bind(
+        crypto.randomUUID(),
+        input.adminUserId,
+        input.targetUserId,
+        input.reason,
+        json({ durationDays: input.durationDays, grantId }),
+        requestId,
+      ),
+    ]);
+    return { granted: true, grantId };
+  },
+  'admin.premium.revoke': async (env, input, requestId) => {
+    await assertAdmin(env, input.adminUserId);
+    await env.DB.batch([
+      env.DB.prepare(
+        `UPDATE premium_entitlements SET status = 'revoked', updated_at = CURRENT_TIMESTAMP
+         WHERE user_id = ?1 AND status = 'active'`,
+      ).bind(input.targetUserId),
+      env.DB.prepare(
+        `INSERT INTO admin_audit_logs
+           (id, admin_user_id, target_user_id, action, reason, new_state, request_id, result)
+         VALUES (?1, ?2, ?3, 'premium.revoke', ?4, '{"status":"revoked"}', ?5, 'success')`,
+      ).bind(crypto.randomUUID(), input.adminUserId, input.targetUserId, input.reason, requestId),
+    ]);
+    return { revoked: true };
+  },
+  'admin.products.update': async (env, input, requestId) => {
+    await assertAdmin(env, input.adminUserId);
+    const oldState = await env.DB.prepare(
+      'SELECT stars_amount, is_active FROM products WHERE id = ?1',
+    )
+      .bind(input.productId)
+      .first();
+    if (!oldState) throw new ApiError(404, 'PRODUCT_NOT_FOUND', 'Product not found');
+    await env.DB.batch([
+      env.DB.prepare(
+        `UPDATE products SET stars_amount = ?2, is_active = ?3,
+           updated_at = CURRENT_TIMESTAMP WHERE id = ?1`,
+      ).bind(input.productId, input.starsAmount, input.isActive ? 1 : 0),
+      env.DB.prepare(
+        `INSERT INTO admin_audit_logs
+           (id, admin_user_id, action, reason, old_state, new_state, request_id, result)
+         VALUES (?1, ?2, 'product.update', 'admin_update', ?3, ?4, ?5, 'success')`,
+      ).bind(
+        crypto.randomUUID(),
+        input.adminUserId,
+        json(oldState),
+        json({ starsAmount: input.starsAmount, isActive: input.isActive }),
+        requestId,
+      ),
+    ]);
+    return { updated: true };
+  },
+  'admin.flags.list': async (env, input) => {
+    await assertAdmin(env, input.adminUserId);
+    return (await env.DB.prepare('SELECT * FROM feature_flags ORDER BY key').all()).results;
+  },
+  'admin.flags.update': async (env, input, requestId) => {
+    await assertAdmin(env, input.adminUserId);
+    const oldState = await env.DB.prepare('SELECT * FROM feature_flags WHERE key = ?1')
+      .bind(input.key)
+      .first();
+    await env.DB.batch([
+      env.DB.prepare(
+        `INSERT INTO feature_flags (key, enabled, payload) VALUES (?1, ?2, ?3)
+         ON CONFLICT(key) DO UPDATE SET enabled = excluded.enabled,
+           payload = excluded.payload, updated_at = CURRENT_TIMESTAMP`,
+      ).bind(input.key, input.enabled ? 1 : 0, json(input.payload)),
+      env.DB.prepare(
+        `INSERT INTO admin_audit_logs
+           (id, admin_user_id, action, reason, old_state, new_state, request_id, result)
+         VALUES (?1, ?2, 'feature_flag.update', 'admin_update', ?3, ?4, ?5, 'success')`,
+      ).bind(
+        crypto.randomUUID(),
+        input.adminUserId,
+        json(oldState ?? null),
+        json({ key: input.key, enabled: input.enabled, payload: input.payload }),
+        requestId,
+      ),
+    ]);
+    return { updated: true };
+  },
+  'admin.audit.list': async (env, input) => {
+    await assertAdmin(env, input.adminUserId);
+    return (
+      await env.DB.prepare(
+        `SELECT id, admin_user_id, target_user_id, action, reason, old_state, new_state,
+                request_id, ip_signal_hash, user_agent, result, created_at
+         FROM admin_audit_logs ORDER BY created_at DESC LIMIT ?1`,
+      )
+        .bind(input.limit)
+        .all()
+    ).results;
+  },
   'admin.audit': async (env, input, requestId) => {
+    await assertAdmin(env, input.adminUserId);
     await env.DB.prepare(
       `INSERT INTO admin_audit_logs (
         id, admin_user_id, target_user_id, action, reason,
-        old_state, new_state, request_id, result
-      ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, 'success')`,
+        old_state, new_state, request_id, ip_signal_hash, user_agent, result
+      ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, 'success')`,
     )
       .bind(
         crypto.randomUUID(),
@@ -802,6 +1310,8 @@ const handlers: { [K in WorkerOperation]: Handler<K> } = {
         json(input.oldState ?? null),
         json(input.newState ?? null),
         requestId,
+        input.ipSignalHash ?? null,
+        input.userAgent ?? null,
       )
       .run();
     return { recorded: true };

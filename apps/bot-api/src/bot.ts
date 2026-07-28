@@ -12,20 +12,36 @@ import { DataApiError, type DataApiClient } from './d1-client.js';
 import type { AppEnv } from './env.js';
 
 function mainKeyboard(env: AppEnv, telegramUserId: number): Keyboard {
-  const keyboard = new Keyboard()
-    .text('🔎 Найти со-ролевика')
-    .text('👤 Моя анкета')
-    .row()
-    .text('💌 Симпатии')
-    .text('💬 Анонимные чаты')
-    .row()
-    .text('⭐ Premium')
-    .text('🎁 Пригласить друзей')
-    .row()
-    .text('⚙️ Настройки')
-    .text('ℹ️ Помощь')
-    .row();
-  if (env.MINI_APP_URL) keyboard.webApp('✨ Открыть RoleMate', env.MINI_APP_URL).row();
+  const keyboard = new Keyboard();
+  if (env.MINI_APP_URL) {
+    keyboard
+      .webApp('🔎 Найти со-ролевика', `${env.MINI_APP_URL}/search`)
+      .webApp('👤 Моя анкета', `${env.MINI_APP_URL}/profile`)
+      .row()
+      .webApp('💌 Симпатии', `${env.MINI_APP_URL}/matches`)
+      .webApp('💬 Анонимные чаты', `${env.MINI_APP_URL}/chats`)
+      .row()
+      .webApp('⭐ Premium', `${env.MINI_APP_URL}/premium`)
+      .webApp('🎁 Пригласить друзей', `${env.MINI_APP_URL}/referrals`)
+      .row()
+      .webApp('⚙️ Настройки', `${env.MINI_APP_URL}/settings`)
+      .text('ℹ️ Помощь')
+      .row();
+  } else {
+    keyboard
+      .text('🔎 Найти со-ролевика')
+      .text('👤 Моя анкета')
+      .row()
+      .text('💌 Симпатии')
+      .text('💬 Анонимные чаты')
+      .row()
+      .text('⭐ Premium')
+      .text('🎁 Пригласить друзей')
+      .row()
+      .text('⚙️ Настройки')
+      .text('ℹ️ Помощь')
+      .row();
+  }
   if (telegramUserId === OWNER_TELEGRAM_ID && env.MINI_APP_URL) {
     keyboard.webApp('🛡 Управление', `${env.MINI_APP_URL}/admin`);
   }
@@ -49,6 +65,7 @@ async function upsertUser(context: Context, dataApi: DataApiClient, referralCode
 export function createBot(env: AppEnv, dataApi: DataApiClient): Bot {
   const bot = new Bot(env.TELEGRAM_BOT_TOKEN || '0:development');
   const relayWindows = new Map<number, { startedAt: number; count: number }>();
+  const selectedChats = new Map<number, string>();
 
   function relayAllowed(telegramUserId: number): boolean {
     const now = Date.now();
@@ -62,11 +79,15 @@ export function createBot(env: AppEnv, dataApi: DataApiClient): Bot {
   }
 
   async function resolveRelay(telegramUserId: number) {
+    const conversationId = selectedChats.get(telegramUserId);
     return dataApi.execute<{
       conversation_id: string;
       sender_user_id: string;
       destination_chat_id: number;
-    }>('conversations.resolveRelay', { telegramUserId });
+    }>('conversations.resolveRelay', {
+      telegramUserId,
+      ...(conversationId ? { conversationId } : {}),
+    });
   }
 
   async function resolveReply(
@@ -174,7 +195,12 @@ export function createBot(env: AppEnv, dataApi: DataApiClient): Bot {
   bot.command('search', async (context) => {
     const user = await upsertUser(context, dataApi);
     const profiles = await dataApi.execute<
-      Array<{ display_name: string; short_headline: string; compatibility: number }>
+      Array<{
+        user_id: string;
+        display_name: string;
+        short_headline: string;
+        compatibility: number;
+      }>
     >('search.list', { userId: user.userId, limit: 1 });
     const profile = profiles[0];
     if (!profile) {
@@ -185,25 +211,45 @@ export function createBot(env: AppEnv, dataApi: DataApiClient): Bot {
       `✨ ${profile.display_name}\n${profile.short_headline}\n\nСовместимость: ${profile.compatibility}%`,
       {
         reply_markup: new InlineKeyboard()
-          .text('❌ Пропустить', 'swipe:skip')
-          .text('❤️ Нравится', 'swipe:like'),
+          .text('❌ Пропустить', `swipe:skip:${profile.user_id}`)
+          .text('❤️ Нравится', `swipe:like:${profile.user_id}`),
       },
     );
   });
-  bot.command('matches', (context) =>
-    context.reply('Взаимные симпатии доступны в разделе «Симпатии» Mini App.'),
-  );
+  bot.command('matches', async (context) => {
+    const user = await upsertUser(context, dataApi);
+    const matches = await dataApi.execute<
+      Array<{ display_name?: string; short_headline?: string; conversation_id: string }>
+    >('matches.list', { userId: user.userId, limit: 20 });
+    if (!matches.length) {
+      await context.reply('Взаимных симпатий пока нет. Продолжай поиск через /search.');
+      return;
+    }
+    const keyboard = new InlineKeyboard();
+    for (const match of matches) {
+      keyboard
+        .text(`💌 ${match.display_name ?? 'Со-ролевик'}`, `chat:${match.conversation_id}`)
+        .row();
+    }
+    await context.reply('Твои взаимные симпатии:', { reply_markup: keyboard });
+  });
   bot.command('chats', async (context) => {
     const user = await upsertUser(context, dataApi);
     const chats = await dataApi.execute<Array<{ id: string; anonymous_alias: string }>>(
       'conversations.list',
       { userId: user.userId, limit: 20 },
     );
-    await context.reply(
-      chats.length
-        ? chats.map((chat) => `💬 ${chat.anonymous_alias} · ${chat.id.slice(0, 8)}`).join('\n')
-        : 'Активных анонимных чатов пока нет.',
-    );
+    if (!chats.length) {
+      await context.reply('Активных анонимных чатов пока нет.');
+      return;
+    }
+    const keyboard = new InlineKeyboard();
+    for (const chat of chats) {
+      keyboard.text(`💬 ${chat.anonymous_alias}`, `chat:${chat.id}`).row();
+    }
+    await context.reply('Выбери чат. Следующие сообщения будут отправлены в него анонимно:', {
+      reply_markup: keyboard,
+    });
   });
   bot.command('premium', async (context) => {
     const products = await dataApi.execute<
@@ -311,6 +357,68 @@ export function createBot(env: AppEnv, dataApi: DataApiClient): Bot {
           : {}),
       },
     );
+  });
+  bot.callbackQuery(/^swipe:(like|skip|super_like):([0-9a-f-]{36})$/, async (context) => {
+    const user = await upsertUser(context, dataApi);
+    const action = context.match?.[1] as 'like' | 'skip' | 'super_like';
+    const targetUserId = context.match?.[2] ?? '';
+    const result = await dataApi.execute<{ matched: boolean; matchId?: string }>('swipes.create', {
+      userId: user.userId,
+      targetUserId,
+      action,
+      source: 'bot',
+      idempotencyKey: `bot:${context.update.update_id}:${targetUserId}`,
+    });
+    await context.answerCallbackQuery(
+      result.matched ? 'Это взаимно! Открыт анонимный чат.' : 'Готово',
+    );
+    await context.editMessageReplyMarkup();
+    if (result.matched) await context.reply(ru.match);
+  });
+  bot.callbackQuery(/^chat:([0-9a-f-]{36})$/, async (context) => {
+    if (!context.from) return;
+    selectedChats.set(context.from.id, context.match?.[1] ?? '');
+    await context.answerCallbackQuery('Чат выбран');
+    await context.reply(
+      'Чат выбран. Отправляй текст, фото, GIF, стикеры, voice, video или документы — бот доставит их без ссылки на твой профиль.',
+      {
+        reply_markup: new InlineKeyboard()
+          .text('🤝 Предложить обмен контактами', `contact:${context.match?.[1] ?? ''}`)
+          .row(),
+      },
+    );
+  });
+  bot.callbackQuery(/^contact:([0-9a-f-]{36})$/, async (context) => {
+    const user = await upsertUser(context, dataApi);
+    const result = await dataApi.execute<{
+      revealed: boolean;
+      contacts?: Array<{ userId: string; username: string | null }>;
+    }>('conversations.requestContact', {
+      userId: user.userId,
+      conversationId: context.match?.[1] ?? '',
+    });
+    await context.answerCallbackQuery(result.revealed ? 'Контакты открыты' : 'Запрос отправлен');
+    if (result.revealed) {
+      const other = result.contacts?.find((contact) => contact.userId !== user.userId);
+      await context.reply(
+        other?.username
+          ? `Оба участника согласились. Контакт собеседника: ${other.username}`
+          : 'Оба участника согласились, но у собеседника не указан username.',
+      );
+    } else {
+      await context.reply('Запрос отправлен. Контакт откроется только после взаимного согласия.');
+    }
+  });
+  bot.callbackQuery('account:cancel', async (context) => {
+    await context.answerCallbackQuery('Отменено');
+    await context.editMessageReplyMarkup();
+  });
+  bot.callbackQuery('account:delete', async (context) => {
+    const user = await upsertUser(context, dataApi);
+    await dataApi.execute('users.delete', { userId: user.userId });
+    selectedChats.delete(context.from.id);
+    await context.answerCallbackQuery('Аккаунт удалён');
+    await context.editMessageText('Аккаунт и пользовательский контент удалены.');
   });
   bot.callbackQuery(/^captcha:([0-9a-f-]{36}):(\d+)$/, async (context) => {
     const user = await upsertUser(context, dataApi);

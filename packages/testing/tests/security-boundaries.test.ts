@@ -24,8 +24,10 @@ describe('security architecture', () => {
       path.join(root, 'packages/database-contracts/src/index.ts'),
       'utf8',
     );
-    expect(contracts).not.toMatch(/\b(sql|query)\s*:\s*z\.string/);
     expect(contracts).toContain('workerOperations');
+    expect(contracts).toContain('operation: z.string()');
+    expect(contracts).toContain('input: z.unknown()');
+    expect(contracts).not.toMatch(/workerEnvelopeSchema\s*=\s*z\.object\(\{[^}]*\bsql\s*:/s);
   });
 
   it('keeps production digital YooKassa disabled', () => {

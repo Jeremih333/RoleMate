@@ -64,6 +64,23 @@ export const workerOperations = {
     userId: z.string().uuid(),
     ageGroup: ageGroupSchema,
   }),
+  'users.setSearchEnabled': z.object({
+    userId: z.string().uuid(),
+    enabled: z.boolean(),
+  }),
+  'settings.get': z.object({ userId: z.string().uuid() }),
+  'settings.update': z.object({
+    userId: z.string().uuid(),
+    notificationsEnabled: z.boolean(),
+    matchNotificationsEnabled: z.boolean(),
+    messageNotificationsEnabled: z.boolean(),
+    referralNotificationsEnabled: z.boolean(),
+    premiumNotificationsEnabled: z.boolean(),
+    privacyShieldEnabled: z.boolean(),
+    showOnlineStatus: z.boolean(),
+    showPremiumBadge: z.boolean(),
+    theme: z.enum(['telegram', 'light', 'dark']),
+  }),
   'users.delete': z.object({ userId: z.string().uuid() }),
   'profiles.upsert': z.object({ userId: z.string().uuid(), profile: profileSchema }),
   'profiles.getOwn': z.object({ userId: z.string().uuid() }),
@@ -75,6 +92,7 @@ export const workerOperations = {
     source: z.enum(['bot', 'miniapp']),
     idempotencyKey: z.string().min(16).max(128),
   }),
+  'matches.list': z.object({ userId: z.string().uuid() }).merge(paginationSchema),
   'conversations.list': z.object({ userId: z.string().uuid() }).merge(paginationSchema),
   'conversations.resolveRelay': z.object({
     telegramUserId: z.number().int().positive(),
@@ -95,6 +113,10 @@ export const workerOperations = {
     destinationMessageId: z.number().int(),
     messageType: z.string().min(1).max(32),
   }),
+  'conversations.requestContact': z.object({
+    userId: z.string().uuid(),
+    conversationId: z.string().uuid(),
+  }),
   'blocks.create': z.object({
     blockerUserId: z.string().uuid(),
     blockedUserId: z.string().uuid(),
@@ -114,6 +136,8 @@ export const workerOperations = {
     scoreDelta: z.number().int().min(-100).max(100),
     metadata: z.record(z.unknown()).default({}),
   }),
+  'telegramUpdates.claim': z.object({ updateId: z.number().int().nonnegative() }),
+  'telegramUpdates.release': z.object({ updateId: z.number().int().nonnegative() }),
   'products.list': z.object({ activeOnly: z.boolean().default(true) }),
   'payments.create': z.object({ userId: z.string().uuid() }).merge(createPaymentSchema),
   'payments.getByPayload': z.object({ invoicePayload: z.string().min(1).max(128) }),
@@ -158,6 +182,71 @@ export const workerOperations = {
   'sessions.get': z.object({ sessionHash: z.string().length(64) }),
   'sessions.revoke': z.object({ sessionHash: z.string().length(64) }),
   'admin.dashboard': z.object({ adminUserId: z.string().uuid() }),
+  'admin.users.list': z
+    .object({
+      adminUserId: z.string().uuid(),
+      query: z.string().max(128).default(''),
+    })
+    .merge(paginationSchema),
+  'admin.profiles.list': z
+    .object({
+      adminUserId: z.string().uuid(),
+      status: z
+        .enum(['draft', 'pending', 'approved', 'rejected', 'paused', 'archived', 'all'])
+        .default('pending'),
+    })
+    .merge(paginationSchema),
+  'admin.reports.list': z
+    .object({
+      adminUserId: z.string().uuid(),
+      status: z.enum(['open', 'reviewing', 'resolved', 'dismissed', 'all']).default('open'),
+    })
+    .merge(paginationSchema),
+  'admin.user.moderate': z.object({
+    adminUserId: z.string().uuid(),
+    targetUserId: z.string().uuid(),
+    action: z.enum(['warn', 'temporary_ban', 'permanent_ban', 'unban', 'disable_profile']),
+    reason: z.string().min(3).max(1_000),
+    bannedUntil: z.string().datetime().optional(),
+  }),
+  'admin.profile.moderate': z.object({
+    adminUserId: z.string().uuid(),
+    profileId: z.string().uuid(),
+    status: z.enum(['approved', 'rejected', 'paused', 'archived']),
+    reason: z.string().min(3).max(1_000),
+  }),
+  'admin.report.resolve': z.object({
+    adminUserId: z.string().uuid(),
+    reportId: z.string().uuid(),
+    status: z.enum(['reviewing', 'resolved', 'dismissed']),
+    resolution: z.string().min(3).max(1_000),
+  }),
+  'admin.premium.grant': z.object({
+    adminUserId: z.string().uuid(),
+    targetUserId: z.string().uuid(),
+    durationDays: z.number().int().min(1).max(365),
+    reason: z.string().min(3).max(1_000),
+    idempotencyKey: z.string().min(16).max(128),
+  }),
+  'admin.premium.revoke': z.object({
+    adminUserId: z.string().uuid(),
+    targetUserId: z.string().uuid(),
+    reason: z.string().min(3).max(1_000),
+  }),
+  'admin.products.update': z.object({
+    adminUserId: z.string().uuid(),
+    productId: z.string().uuid(),
+    starsAmount: z.number().int().min(1).max(10_000),
+    isActive: z.boolean(),
+  }),
+  'admin.flags.list': z.object({ adminUserId: z.string().uuid() }),
+  'admin.flags.update': z.object({
+    adminUserId: z.string().uuid(),
+    key: z.string().min(1).max(64),
+    enabled: z.boolean(),
+    payload: z.record(z.unknown()).default({}),
+  }),
+  'admin.audit.list': z.object({ adminUserId: z.string().uuid() }).merge(paginationSchema),
   'admin.audit': z.object({
     adminUserId: z.string().uuid(),
     action: z.string().min(1).max(64),
@@ -165,6 +254,8 @@ export const workerOperations = {
     reason: z.string().max(1_000),
     oldState: z.record(z.unknown()).optional(),
     newState: z.record(z.unknown()).optional(),
+    ipSignalHash: z.string().length(64).optional(),
+    userAgent: z.string().max(512).optional(),
     requestId: z.string().min(1).max(128),
   }),
 } as const;

@@ -30,6 +30,9 @@ try {
     }
 
     Invoke-Step 'format check' { & corepack pnpm format:check }
+    Invoke-Step 'prepare workspace packages' {
+        & corepack pnpm --filter '@rolemate/shared' --filter '@rolemate/database-contracts' build
+    }
     Invoke-Step 'lint' { & corepack pnpm lint }
     Invoke-Step 'typecheck' { & corepack pnpm typecheck }
     Invoke-Step 'unit and integration tests' { & corepack pnpm test }

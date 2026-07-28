@@ -2,16 +2,17 @@ import { zodResolver } from '@hookform/resolvers/zod';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { ArrowRight, Check, Edit3, ImagePlus, Trash2, UserRound } from 'lucide-react';
 import { useEffect } from 'react';
-import { useForm } from 'react-hook-form';
+import { useForm, type Resolver } from 'react-hook-form';
 import { Link, useLocation } from 'wouter';
 import { profileSchema, ru, type ProfileInput } from '@rolemate/shared';
-import { api } from '../api.js';
+import { ApiError, api } from '../api.js';
 import { Button, Card, EmptyState, SectionTitle, Skeleton } from '../components/ui.js';
 import { getTelegram } from '../telegram.js';
 
 const defaults: ProfileInput = {
   displayName: '',
   ageGroup: '18_20',
+  gender: 'not_specified',
   shortHeadline: '',
   about: '',
   roleplayExperience: 'not_specified',
@@ -54,10 +55,26 @@ function commaList(value: string): string[] {
     .filter(Boolean);
 }
 
+function validationMessage(message: unknown): string {
+  if (typeof message !== 'string') return '';
+  const minimum = message.match(/(?:at least|>=)\s*(\d+)/i)?.[1];
+  if (minimum) return ru.validation.minCharacters(Number(minimum));
+  const maximum = message.match(/(?:at most|<=)\s*(\d+)/i)?.[1];
+  if (maximum) return ru.validation.maxCharacters(Number(maximum));
+  if (/invalid.*string|invalid format/i.test(message)) return ru.validation.timezone;
+  return message;
+}
+
+const timezoneOptions = Array.from({ length: 27 }, (_, index) => {
+  const offset = index - 12;
+  return offset === 0 ? 'UTC' : `UTC${offset > 0 ? '+' : ''}${offset}`;
+});
+
 function existingProfile(data: Record<string, unknown>): ProfileInput {
   return {
     displayName: stringValue(data.display_name),
     ageGroup: stringValue(data.age_group, '18_20') as ProfileInput['ageGroup'],
+    gender: stringValue(data.gender, 'not_specified') as ProfileInput['gender'],
     shortHeadline: stringValue(data.short_headline),
     about: stringValue(data.about),
     roleplayExperience: stringValue(
@@ -131,7 +148,12 @@ export function ProfilePage() {
       <Card className="overflow-hidden">
         <div className="profile-cover min-h-52" />
         <div className="p-6">
-          <span className="status-pill">{String(data.moderation_status)}</span>
+          <span className="status-pill">
+            {String(data.moderation_status) === 'approved' && !data.in_search_pool
+              ? ru.miniApp.profile.readyAfterSetup
+              : (ru.miniApp.profile.statuses[String(data.moderation_status)] ??
+                String(data.moderation_status))}
+          </span>
           <h2 className="mt-3 font-display text-3xl">{String(data.short_headline)}</h2>
           <p className="mt-4 whitespace-pre-wrap text-sm leading-relaxed text-soft">
             {String(data.about)}
@@ -186,7 +208,7 @@ export function ProfileEditorPage() {
   const [, navigate] = useLocation();
   const profile = useQuery({ queryKey: ['profile'], queryFn: api.profile, retry: false });
   const form = useForm<ProfileInput>({
-    resolver: zodResolver(profileSchema),
+    resolver: zodResolver(profileSchema) as Resolver<ProfileInput>,
     defaultValues: defaults,
   });
   const resetForm = form.reset;
@@ -224,7 +246,7 @@ export function ProfileEditorPage() {
             placeholder={ru.miniApp.profile.aliasPlaceholder}
             {...form.register('displayName')}
           />
-          <small>{form.formState.errors.displayName?.message}</small>
+          <small>{validationMessage(form.formState.errors.displayName?.message)}</small>
         </label>
         <label>
           <span>{ru.miniApp.profile.headline}</span>
@@ -233,7 +255,7 @@ export function ProfileEditorPage() {
             placeholder={ru.miniApp.profile.headlinePlaceholder}
             {...form.register('shortHeadline')}
           />
-          <small>{form.formState.errors.shortHeadline?.message}</small>
+          <small>{validationMessage(form.formState.errors.shortHeadline?.message)}</small>
         </label>
         <label>
           <span>{ru.miniApp.profile.about}</span>
@@ -242,7 +264,7 @@ export function ProfileEditorPage() {
             placeholder={ru.miniApp.profile.aboutPlaceholder}
             {...form.register('about')}
           />
-          <small>{form.formState.errors.about?.message}</small>
+          <small>{validationMessage(form.formState.errors.about?.message)}</small>
         </label>
         <label>
           <span>{ru.miniApp.profile.ageGroup}</span>
@@ -252,6 +274,15 @@ export function ProfileEditorPage() {
             <option value="18_20">{ru.miniApp.profile.ageOptions[2]}</option>
             <option value="21_25">{ru.miniApp.profile.ageOptions[3]}</option>
             <option value="26_plus">{ru.miniApp.profile.ageOptions[4]}</option>
+          </select>
+        </label>
+        <label>
+          <span>{ru.miniApp.profile.gender}</span>
+          <select className={field} {...form.register('gender')}>
+            <option value="not_specified">{ru.miniApp.profile.genderOptions[0]}</option>
+            <option value="female">{ru.miniApp.profile.genderOptions[1]}</option>
+            <option value="male">{ru.miniApp.profile.genderOptions[2]}</option>
+            <option value="nonbinary">{ru.miniApp.profile.genderOptions[3]}</option>
           </select>
         </label>
       </Card>
@@ -275,7 +306,7 @@ export function ProfileEditorPage() {
             value={form.watch('preferredRole').join(', ')}
             onChange={(event) => form.setValue('preferredRole', commaList(event.target.value))}
           />
-          <small>{form.formState.errors.preferredRole?.message}</small>
+          <small>{validationMessage(form.formState.errors.preferredRole?.message)}</small>
         </label>
         <label>
           <span>{ru.miniApp.profile.writingStyle}</span>
@@ -313,17 +344,37 @@ export function ProfileEditorPage() {
         <h2 className="font-display text-2xl">{ru.miniApp.profile.worldsAndPlots}</h2>
         <label>
           <span>{ru.miniApp.profile.languages}</span>
-          <input
+          <select
             className={field}
-            value={form.watch('languages').join(', ')}
-            onChange={(event) => form.setValue('languages', commaList(event.target.value))}
-          />
-          <small>{form.formState.errors.languages?.message}</small>
+            multiple
+            size={4}
+            value={form.watch('languages')}
+            onChange={(event) =>
+              form.setValue(
+                'languages',
+                Array.from(event.currentTarget.selectedOptions, (option) => option.value),
+                { shouldValidate: true },
+              )
+            }
+          >
+            {ru.miniApp.profile.languageOptions.map(([value, label]) => (
+              <option key={value} value={value}>
+                {label}
+              </option>
+            ))}
+          </select>
+          <small>{validationMessage(form.formState.errors.languages?.message)}</small>
         </label>
         <label>
           <span>{ru.miniApp.profile.timezone}</span>
-          <input className={field} {...form.register('timezone')} />
-          <small>{form.formState.errors.timezone?.message}</small>
+          <select className={field} {...form.register('timezone')}>
+            {timezoneOptions.map((timezone) => (
+              <option key={timezone} value={timezone}>
+                {timezone}
+              </option>
+            ))}
+          </select>
+          <small>{validationMessage(form.formState.errors.timezone?.message)}</small>
         </label>
         <label>
           <span>{ru.miniApp.profile.activeHours}</span>
@@ -337,7 +388,7 @@ export function ProfileEditorPage() {
             value={form.watch('fandoms').join(', ')}
             onChange={(event) => form.setValue('fandoms', commaList(event.target.value))}
           />
-          <small>{form.formState.errors.fandoms?.message}</small>
+          <small>{validationMessage(form.formState.errors.fandoms?.message)}</small>
         </label>
         <label>
           <span>{ru.miniApp.profile.genres}</span>
@@ -347,7 +398,7 @@ export function ProfileEditorPage() {
             value={form.watch('genres').join(', ')}
             onChange={(event) => form.setValue('genres', commaList(event.target.value))}
           />
-          <small>{form.formState.errors.genres?.message}</small>
+          <small>{validationMessage(form.formState.errors.genres?.message)}</small>
         </label>
         <label>
           <span>{ru.miniApp.profile.ideas}</span>
@@ -364,18 +415,18 @@ export function ProfileEditorPage() {
             value={form.watch('lookingFor').join(', ')}
             onChange={(event) => form.setValue('lookingFor', commaList(event.target.value))}
           />
-          <small>{form.formState.errors.lookingFor?.message}</small>
+          <small>{validationMessage(form.formState.errors.lookingFor?.message)}</small>
         </label>
         <label>
           <span>{ru.miniApp.profile.boundaries}</span>
           <textarea className={`${field} min-h-28`} {...form.register('boundaries')} />
-          <small>{form.formState.errors.boundaries?.message}</small>
+          <small>{validationMessage(form.formState.errors.boundaries?.message)}</small>
         </label>
         <label className="setting-row">
           <span>{ru.miniApp.profile.adultTopics}</span>
           <input type="checkbox" disabled={isMinor} {...form.register('adultTopicsAllowed')} />
         </label>
-        <small>{form.formState.errors.adultTopicsAllowed?.message}</small>
+        <small>{validationMessage(form.formState.errors.adultTopicsAllowed?.message)}</small>
         <label>
           <span>{ru.miniApp.profile.contactPolicy}</span>
           <select className={field} {...form.register('contactRevealPolicy')}>
@@ -405,7 +456,16 @@ export function ProfileEditorPage() {
           {ru.miniApp.profile.addInBot}
         </Button>
       </Card>
-      {save.isError ? <p className="error-box">{save.error.message}</p> : null}
+      {save.isError ? (
+        <div className="error-box">
+          <p>{save.error.message}</p>
+          {save.error instanceof ApiError && save.error.code === 'PREMIUM_REQUIRED' ? (
+            <a className="mt-2 inline-block underline" href="/premium">
+              {ru.miniApp.search.openPremium}
+            </a>
+          ) : null}
+        </div>
+      ) : null}
       <div className="sticky-submit">
         <Button type="submit" className="w-full" loading={save.isPending}>
           <Check className="h-4 w-4" /> {ru.miniApp.profile.submit}{' '}

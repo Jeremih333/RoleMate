@@ -4,12 +4,14 @@ import {
   assertPaymentTransition,
   calculateRiskScore,
   canonicalMatchPair,
+  checkContentLinkPolicy,
   containsContact,
   extendPremium,
   profileSchema,
   qualifyReferral,
   requiresCaptcha,
   scoreCandidate,
+  telegramReferences,
 } from '../src/index.js';
 
 describe('domain rules', () => {
@@ -91,7 +93,7 @@ describe('domain rules', () => {
     expect(requiresCaptcha(score, 'write')).toBe(true);
   });
 
-  it('validates profile limits and contact-free fields', () => {
+  it('validates profile structure before entitlement-aware link checks', () => {
     const result = profileSchema.safeParse({
       displayName: '@leakme',
       ageGroup: '21_25',
@@ -114,7 +116,7 @@ describe('domain rules', () => {
       adultTopicsAllowed: false,
       contactRevealPolicy: 'mutual_only',
     });
-    expect(result.success).toBe(false);
+    expect(result.success).toBe(true);
   });
 
   it('rejects adult topics for every minor age group', () => {
@@ -147,5 +149,28 @@ describe('domain rules', () => {
         expect.arrayContaining([expect.objectContaining({ path: ['adultTopicsAllowed'] })]),
       );
     }
+  });
+
+  it('allows links only for Premium and only through Telegram references', () => {
+    expect(checkContentLinkPolicy('Пиши @story_author', false)).toEqual({
+      allowed: false,
+      reason: 'premium_required',
+    });
+    expect(checkContentLinkPolicy('Канал https://t.me/story_channel', true)).toMatchObject({
+      allowed: true,
+    });
+    expect(checkContentLinkPolicy('Сайт https://example.com', true)).toEqual({
+      allowed: false,
+      reason: 'unsupported_link',
+    });
+    expect(checkContentLinkPolicy('Бот @some_helper_bot', true)).toEqual({
+      allowed: false,
+      reason: 'bot_or_chat',
+    });
+    expect(checkContentLinkPolicy('Почта author@example.com', true)).toEqual({
+      allowed: false,
+      reason: 'unsupported_link',
+    });
+    expect(telegramReferences('@story_author https://telegram.me/story_channel')).toHaveLength(2);
   });
 });

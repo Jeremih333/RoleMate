@@ -56,6 +56,7 @@ export const api = {
       telegramUserId: number;
       role: string;
       isAdmin: boolean;
+      isOwner: boolean;
       riskScore: number;
     }>('/me'),
   profile: () => request<Record<string, unknown>>('/profile'),
@@ -99,6 +100,16 @@ export const api = {
     }),
   incomingLikes: () => request<IncomingLike[]>('/swipes/incoming'),
   premiumStatus: () => request<PremiumStatus>('/premium/status'),
+  applyPromotion: (code: string) =>
+    request<{
+      type: 'discount' | 'premium_days';
+      discountStars?: number;
+      discountRubles?: number;
+      premiumDays?: number;
+    }>('/promotions/apply', {
+      method: 'POST',
+      body: JSON.stringify({ code }),
+    }),
   premiumBoost: () =>
     request<{ boosted: true }>('/premium/boost', {
       method: 'POST',
@@ -148,6 +159,11 @@ export const api = {
       method: 'POST',
       body: JSON.stringify({ action }),
     }),
+  rateConversation: (conversationId: string, value: -1 | 1) =>
+    request<{ saved: true }>(`/conversations/${conversationId}/rating`, {
+      method: 'POST',
+      body: JSON.stringify({ value }),
+    }),
   settings: () => request<UserSettings>('/settings'),
   saveSettings: (settings: SettingsInput) =>
     request<{ updated: true }>('/settings', {
@@ -169,8 +185,10 @@ export const api = {
   adminDashboard: () => request<AdminStats>('/admin/dashboard'),
   adminUsers: (query = '') =>
     request<AdminUser[]>(`/admin/users?q=${encodeURIComponent(query)}&limit=50`),
-  adminProfiles: (status = 'pending') =>
-    request<AdminProfile[]>(`/admin/profiles?status=${encodeURIComponent(status)}&limit=50`),
+  adminProfiles: (status = 'all', query = '') =>
+    request<AdminProfile[]>(
+      `/admin/profiles?status=${encodeURIComponent(status)}&q=${encodeURIComponent(query)}&limit=50`,
+    ),
   adminMedia: (status = 'pending') =>
     request<AdminMedia[]>(`/admin/media?status=${encodeURIComponent(status)}&limit=50`),
   adminModerateMedia: (mediaId: string, status: 'approved' | 'rejected', reason: string) =>
@@ -187,6 +205,28 @@ export const api = {
     request<{ updated: true }>(`/admin/products/${productId}`, {
       method: 'PUT',
       body: JSON.stringify({ starsAmount, isActive }),
+    }),
+  adminPromotions: () => request<AdminPromotion[]>('/admin/promotions'),
+  adminCreatePromotion: (input: AdminPromotionInput) =>
+    request<{ id: string }>('/admin/promotions', {
+      method: 'POST',
+      body: JSON.stringify(input),
+    }),
+  adminUpdatePromotion: (promotionId: string, isActive: boolean) =>
+    request<{ updated: true }>(`/admin/promotions/${promotionId}`, {
+      method: 'PUT',
+      body: JSON.stringify({ isActive }),
+    }),
+  adminPostingRequirements: () => request<PostingRequirement[]>('/admin/posting-requirements'),
+  adminCreatePostingRequirement: (input: PostingRequirementInput) =>
+    request<{ id: string; integrationSecret?: string; callbackUrl?: string }>(
+      '/admin/posting-requirements',
+      { method: 'POST', body: JSON.stringify(input) },
+    ),
+  adminUpdatePostingRequirement: (requirementId: string, isActive: boolean) =>
+    request<{ updated: true }>(`/admin/posting-requirements/${requirementId}`, {
+      method: 'PUT',
+      body: JSON.stringify({ isActive }),
     }),
   adminRefundPayment: (orderId: string) =>
     request<{ refunded: true }>(`/admin/payments/${orderId}/refund`, {
@@ -295,7 +335,8 @@ export interface SearchProfile {
   id: string;
   user_id: string;
   display_name: string;
-  age_group: string;
+  age_group: string | null;
+  gender: string | null;
   short_headline: string;
   about: string;
   fandoms: string;
@@ -306,6 +347,9 @@ export interface SearchProfile {
   compatibility: number;
   is_premium: number;
   media_id?: string | null;
+  rating_likes: number;
+  rating_dislikes: number;
+  rating_score: number;
 }
 
 export interface ProfileMedia {
@@ -431,6 +475,7 @@ export interface UserSettings {
   privacy_shield_enabled: number;
   show_online_status: number;
   show_premium_badge: number;
+  hide_demographics: number;
   theme: 'telegram' | 'light' | 'dark';
 }
 
@@ -443,7 +488,57 @@ export interface SettingsInput {
   privacyShieldEnabled: boolean;
   showOnlineStatus: boolean;
   showPremiumBadge: boolean;
+  hideDemographics: boolean;
   theme: 'telegram' | 'light' | 'dark';
+}
+
+export interface AdminPromotion {
+  id: string;
+  code: string;
+  type: 'discount' | 'premium_days';
+  discount_stars: number;
+  discount_rubles: number;
+  premium_days: number;
+  eligible_product_ids: string;
+  expires_at?: string;
+  max_activations?: number;
+  activation_count: number;
+  is_active: number;
+}
+
+export interface AdminPromotionInput {
+  code: string;
+  type: 'discount' | 'premium_days';
+  discountStars: number;
+  discountRubles: number;
+  premiumDays: number;
+  eligibleProductIds: string[];
+  expiresAt?: string;
+  maxActivations?: number;
+}
+
+export interface PostingRequirement {
+  id: string;
+  type: 'channel' | 'supergroup' | 'bot';
+  title: string;
+  target_chat_id?: string;
+  username?: string;
+  action_url: string;
+  expires_at?: string;
+  max_conversions?: number;
+  conversion_count: number;
+  is_active: number;
+}
+
+export interface PostingRequirementInput {
+  type: 'channel' | 'supergroup' | 'bot';
+  title: string;
+  targetChatId?: string;
+  username?: string;
+  actionUrl?: string;
+  createInvite: boolean;
+  expiresAt?: string;
+  maxConversions?: number;
 }
 
 export interface Product {

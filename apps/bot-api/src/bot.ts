@@ -4,16 +4,17 @@ import { Bot, InlineKeyboard, InputFile, Keyboard, type Context } from 'grammy';
 import type { UserFromGetMe } from 'grammy/types';
 import {
   OWNER_TELEGRAM_ID,
+  NEWS_CHANNEL_URL,
   PROMO_CHAT_URL,
   STARS_SUBSCRIPTION_PERIOD_SECONDS,
-  containsContact,
   ru,
   sha256,
 } from '@rolemate/shared';
 import { DataApiError, type DataApiClient } from './d1-client.js';
 import type { AppEnv } from './env.js';
+import { validateUserContentLinks } from './content-policy.js';
 
-function mainKeyboard(env: AppEnv, telegramUserId: number): Keyboard {
+function mainKeyboard(env: AppEnv, telegramUserId: number, role = 'user'): Keyboard {
   const keyboard = new Keyboard();
   if (env.MINI_APP_URL) {
     keyboard
@@ -28,6 +29,9 @@ function mainKeyboard(env: AppEnv, telegramUserId: number): Keyboard {
       .row()
       .webApp(ru.bot.menu.settings, `${env.MINI_APP_URL}/settings`)
       .text(ru.bot.menu.help)
+      .row()
+      .text(ru.bot.menu.posts)
+      .text(ru.bot.menu.createPost)
       .row();
   } else {
     keyboard
@@ -42,9 +46,12 @@ function mainKeyboard(env: AppEnv, telegramUserId: number): Keyboard {
       .row()
       .text(ru.bot.menu.settings)
       .text(ru.bot.menu.help)
+      .row()
+      .text(ru.bot.menu.posts)
+      .text(ru.bot.menu.createPost)
       .row();
   }
-  if (telegramUserId === OWNER_TELEGRAM_ID && env.MINI_APP_URL) {
+  if (env.MINI_APP_URL && (telegramUserId === OWNER_TELEGRAM_ID || role === 'moderator')) {
     keyboard.webApp(ru.bot.menu.admin, `${env.MINI_APP_URL}/admin`);
   }
   return keyboard.resized().persistent();
@@ -245,6 +252,101 @@ export function createBot(
     return conversation;
   }
 
+  async function premiumActive(userId: string): Promise<boolean> {
+    const status = await dataApi.execute<{ premium: boolean }>('premium.status', { userId });
+    return status.premium;
+  }
+
+  function contentPolicyMessage(reason: string): string {
+    if (reason === 'premium_required') return ru.bot.linksPremiumOnly;
+    if (reason === 'unsupported_link') return ru.bot.linkUnsupported;
+    if (reason === 'bot_or_chat') return ru.bot.linkTargetRejected;
+    return ru.bot.linkTargetUnverified;
+  }
+
+  async function linksAllowed(text: string, userId: string): Promise<string | null> {
+    const result = await validateUserContentLinks(text, {
+      premium: await premiumActive(userId),
+      dataApi,
+      getChat: async (chatId) => bot.api.getChat(chatId),
+    });
+    return result.allowed ? null : contentPolicyMessage(result.reason);
+  }
+
+  async function sendNextPost(context: Context, userId: string): Promise<void> {
+    const requirement = await dataApi.execute<{
+      id: string;
+      type: 'channel' | 'supergroup' | 'bot';
+      title: string;
+      action_url: string;
+    } | null>('posting.requirements.due', { userId });
+    if (requirement) {
+      await context.reply(ru.bot.postingRequirement(requirement.title), {
+        reply_markup: new InlineKeyboard()
+          .url(ru.bot.buttons.subscribe, requirement.action_url)
+          .row()
+          .text(ru.bot.buttons.subscriptionDone, `reqverify:${requirement.id}`)
+          .row()
+          .text(ru.bot.buttons.snoozeRequirement, `reqsnooze:${requirement.id}`)
+          .row()
+          .text(ru.bot.buttons.disableAds, 'premium:open'),
+      });
+      return;
+    }
+    const post = await dataApi.execute<{
+      id: string;
+      author_user_id: string;
+      source_chat_id: number;
+      source_message_id: number;
+      display_name: string;
+      age_group: string | null;
+      gender: string | null;
+      likes: number;
+      dislikes: number;
+    } | null>('posts.feed.next', { userId });
+    if (!post) {
+      await context.reply(ru.bot.postEmpty);
+      return;
+    }
+    await bot.api.copyMessage(context.chat!.id, post.source_chat_id, post.source_message_id, {
+      protect_content: true,
+    });
+    await context.reply(
+      ru.bot.postCard(
+        post.display_name,
+        post.age_group
+          ? [
+              ru.bot.ageGroups[post.age_group] ?? post.age_group,
+              post.gender ? (ru.bot.genders[post.gender] ?? post.gender) : '',
+            ]
+              .filter(Boolean)
+              .join(' · ')
+          : ru.bot.demographicsHidden,
+        post.likes,
+        post.dislikes,
+      ),
+      {
+        reply_markup: new InlineKeyboard()
+          .text(ru.bot.buttons.contactPostAuthor, `postlike:${post.id}`)
+          .row()
+          .text(ru.bot.buttons.morePost, `postmore:${post.id}`)
+          .text(ru.bot.buttons.nextPost, 'postnext'),
+      },
+    );
+    await dataApi.execute('posting.requirements.recordView', { userId });
+  }
+
+  async function sendPremiumOffers(context: Context): Promise<void> {
+    const products = await dataApi.execute<
+      Array<{ id: string; name: string; stars_amount: number; billing_type: string }>
+    >('products.list', { activeOnly: true });
+    const keyboard = new InlineKeyboard();
+    for (const product of products) {
+      keyboard.text(`${product.name} · ${product.stars_amount} ⭐`, `buy:${product.id}`).row();
+    }
+    await context.reply(ru.bot.premiumSelect, { reply_markup: keyboard });
+  }
+
   async function recordRelay(
     target: Awaited<ReturnType<typeof resolveRelay>>,
     sourceChatId: number,
@@ -290,7 +392,15 @@ export function createBot(
       error instanceof DataApiError
         ? (ru.bot.errors[error.code as keyof typeof ru.bot.errors] ?? ru.bot.errors.default)
         : ru.bot.errors.default;
-    await ctx.reply(message).catch(() => undefined);
+    await ctx
+      .reply(message, {
+        ...(error instanceof DataApiError && error.code === 'PREMIUM_REQUIRED'
+          ? {
+              reply_markup: new InlineKeyboard().text(ru.bot.buttons.buyPremium, 'premium:open'),
+            }
+          : {}),
+      })
+      .catch(() => undefined);
   });
 
   bot.command('start', async (context) => {
@@ -321,7 +431,8 @@ export function createBot(
       .text(ru.bot.buttons.howItWorks, 'help')
       .text(ru.bot.buttons.rules, 'rules')
       .row()
-      .url(ru.bot.buttons.support, env.SUPPORT_URL);
+      .url(ru.bot.buttons.support, env.SUPPORT_URL)
+      .url(ru.bot.buttons.news, NEWS_CHANNEL_URL);
     const welcomeImage = path.resolve(env.WELCOME_IMAGE_PATH);
     if (env.WELCOME_IMAGE_URL) {
       await context.replyWithPhoto(env.WELCOME_IMAGE_URL, {
@@ -341,9 +452,9 @@ export function createBot(
   });
 
   bot.command('menu', async (context) => {
-    await upsertUser(context, dataApi);
+    const user = await upsertUser(context, dataApi);
     await context.reply(ru.bot.mainMenu, {
-      reply_markup: mainKeyboard(env, context.from?.id ?? 0),
+      reply_markup: mainKeyboard(env, context.from?.id ?? 0, user.role),
     });
   });
   bot.command('help', (context) => context.reply(ru.help));
@@ -356,6 +467,38 @@ export function createBot(
     await context.reply(ru.bot.profileEditor, {
       ...(keyboard ? { reply_markup: keyboard } : {}),
     });
+  });
+  bot.command('post', async (context) => {
+    const user = await upsertUser(context, dataApi);
+    await dataApi.execute('posts.draft.start', { userId: user.userId });
+    await context.reply(ru.bot.postPrompt, {
+      reply_markup: {
+        force_reply: true,
+        selective: true,
+      },
+    });
+  });
+  bot.command('posts', async (context) => {
+    const user = await upsertUser(context, dataApi);
+    await sendNextPost(context, user.userId);
+  });
+  bot.command('myposts', async (context) => {
+    const user = await upsertUser(context, dataApi);
+    const posts = await dataApi.execute<
+      Array<{ id: string; source_chat_id: number; source_message_id: number }>
+    >('posts.own.list', { userId: user.userId, limit: 10 });
+    if (!posts.length) {
+      await context.reply(ru.bot.ownPostsEmpty);
+      return;
+    }
+    for (const post of posts) {
+      await bot.api.copyMessage(context.chat.id, post.source_chat_id, post.source_message_id, {
+        protect_content: true,
+      });
+      await context.reply(ru.bot.ownPostControls, {
+        reply_markup: new InlineKeyboard().text(ru.bot.buttons.deletePost, `postdelete:${post.id}`),
+      });
+    }
   });
   bot.command('search', async (context) => {
     const user = await upsertUser(context, dataApi);
@@ -417,13 +560,27 @@ export function createBot(
     });
   });
   bot.command('premium', async (context) => {
-    const products = await dataApi.execute<
-      Array<{ id: string; name: string; stars_amount: number; billing_type: string }>
-    >('products.list', { activeOnly: true });
-    const keyboard = new InlineKeyboard();
-    for (const product of products)
-      keyboard.text(`${product.name} · ${product.stars_amount} ⭐`, `buy:${product.id}`).row();
-    await context.reply(ru.bot.premiumSelect, { reply_markup: keyboard });
+    await sendPremiumOffers(context);
+  });
+  bot.command('promo', async (context) => {
+    const code = context.match?.trim();
+    if (!code) {
+      await context.reply(ru.bot.promoPrompt);
+      return;
+    }
+    const user = await upsertUser(context, dataApi);
+    const result = await dataApi.execute<{
+      type: 'discount' | 'premium_days';
+      discountStars?: number;
+      premiumDays?: number;
+    }>('promotions.apply', { userId: user.userId, code });
+    if (result.type === 'premium_days') {
+      await context.reply(ru.bot.promoPremiumApplied(result.premiumDays ?? 0));
+      return;
+    }
+    await context.reply(ru.bot.promoDiscountApplied(result.discountStars ?? 0), {
+      reply_markup: new InlineKeyboard().text(ru.bot.buttons.buyPremium, 'premium:open'),
+    });
   });
   bot.command('referral', async (context) => {
     const user = await upsertUser(context, dataApi);
@@ -447,11 +604,66 @@ export function createBot(
     }),
   );
   bot.command('admin', async (context) => {
-    if (context.from?.id !== OWNER_TELEGRAM_ID) return;
+    const user = await upsertUser(context, dataApi);
+    if (!['admin', 'moderator'].includes(user.role)) return;
     if (!env.MINI_APP_URL) return;
-    await context.reply(ru.bot.adminPanel, {
-      reply_markup: new InlineKeyboard().webApp(ru.bot.menu.admin, `${env.MINI_APP_URL}/admin`),
+    await context.reply(
+      context.from?.id === OWNER_TELEGRAM_ID
+        ? `${ru.bot.adminPanel}\n\n${ru.bot.moderatorOwnerHelp}`
+        : ru.bot.moderatorPanel,
+      {
+        reply_markup: new InlineKeyboard().webApp(ru.bot.menu.admin, `${env.MINI_APP_URL}/admin`),
+      },
+    );
+  });
+  bot.command('moderator_add', async (context) => {
+    if (context.from?.id !== OWNER_TELEGRAM_ID) return;
+    const targetTelegramUserId = Number(context.match.trim());
+    if (!Number.isSafeInteger(targetTelegramUserId) || targetTelegramUserId <= 0) {
+      await context.reply(ru.bot.moderatorIdRequired);
+      return;
+    }
+    await upsertUser(context, dataApi);
+    await dataApi.execute('moderators.assign', {
+      ownerTelegramUserId: context.from.id,
+      targetTelegramUserId,
     });
+    await context.reply(ru.bot.moderatorAssigned(targetTelegramUserId));
+  });
+  bot.command('moderator_remove', async (context) => {
+    if (context.from?.id !== OWNER_TELEGRAM_ID) return;
+    const targetTelegramUserId = Number(context.match.trim());
+    if (!Number.isSafeInteger(targetTelegramUserId) || targetTelegramUserId <= 0) {
+      await context.reply(ru.bot.moderatorIdRequired);
+      return;
+    }
+    await upsertUser(context, dataApi);
+    await dataApi.execute('moderators.remove', {
+      ownerTelegramUserId: context.from.id,
+      targetTelegramUserId,
+    });
+    await context.reply(ru.bot.moderatorRemoved(targetTelegramUserId));
+  });
+  bot.command('moderators', async (context) => {
+    if (context.from?.id !== OWNER_TELEGRAM_ID) return;
+    await upsertUser(context, dataApi);
+    const moderators = await dataApi.execute<
+      Array<{
+        telegram_user_id: number;
+        telegram_username: string | null;
+        telegram_first_name: string;
+      }>
+    >('moderators.list', { ownerTelegramUserId: context.from.id });
+    await context.reply(
+      moderators.length
+        ? `${ru.bot.moderatorListTitle}\n\n${moderators
+            .map(
+              (item) =>
+                `• ${item.telegram_user_id} ${item.telegram_username ? `@${item.telegram_username}` : item.telegram_first_name}`,
+            )
+            .join('\n')}`
+        : ru.bot.moderatorListEmpty,
+    );
   });
 
   bot.callbackQuery('help', async (context) => {
@@ -520,6 +732,59 @@ export function createBot(
       },
     );
   });
+  bot.callbackQuery('premium:open', async (context) => {
+    await context.answerCallbackQuery();
+    await sendPremiumOffers(context);
+  });
+  bot.callbackQuery(/^reqverify:([0-9a-f-]{36})$/, async (context) => {
+    const user = await upsertUser(context, dataApi);
+    const requirementId = context.match?.[1] ?? '';
+    const requirement = await dataApi.execute<{
+      id: string;
+      type: 'channel' | 'supergroup' | 'bot';
+      target_chat_id: string | null;
+    } | null>('posting.requirements.due', { userId: user.userId });
+    if (!requirement || requirement.id !== requirementId) {
+      await context.answerCallbackQuery(ru.bot.subscriptionVerified);
+      await context.editMessageReplyMarkup();
+      return;
+    }
+    if (requirement.type === 'bot') {
+      await context.answerCallbackQuery({
+        text: ru.bot.botSubscriptionPending,
+        show_alert: true,
+      });
+      return;
+    }
+    if (!requirement.target_chat_id) {
+      throw new DataApiError('TARGET_CHAT_REQUIRED', 'Target chat is missing', 409);
+    }
+    const member = await bot.api.getChatMember(requirement.target_chat_id, context.from.id);
+    if (!['member', 'administrator', 'creator'].includes(member.status)) {
+      await context.answerCallbackQuery({
+        text: ru.bot.subscriptionNotFound,
+        show_alert: true,
+      });
+      return;
+    }
+    await dataApi.execute('posting.requirements.markVerified', {
+      userId: user.userId,
+      requirementId,
+    });
+    await context.answerCallbackQuery(ru.bot.subscriptionVerified);
+    await context.editMessageReplyMarkup();
+    await sendNextPost(context, user.userId);
+  });
+  bot.callbackQuery(/^reqsnooze:([0-9a-f-]{36})$/, async (context) => {
+    const user = await upsertUser(context, dataApi);
+    await dataApi.execute('posting.requirements.snooze', {
+      userId: user.userId,
+      requirementId: context.match?.[1] ?? '',
+    });
+    await context.answerCallbackQuery(ru.bot.requirementSnoozed);
+    await context.editMessageReplyMarkup();
+    await sendNextPost(context, user.userId);
+  });
   bot.callbackQuery(/^swipe:(like|skip|super_like):([0-9a-f-]{36})$/, async (context) => {
     const user = await upsertUser(context, dataApi);
     const action = context.match?.[1] as 'like' | 'skip' | 'super_like';
@@ -534,6 +799,137 @@ export function createBot(
     await context.answerCallbackQuery(result.matched ? ru.bot.swipeMatched : ru.bot.done);
     await context.editMessageReplyMarkup();
     if (result.matched) await context.reply(ru.match);
+  });
+  bot.callbackQuery(/^postpublish:([0-9a-f-]{36})$/, async (context) => {
+    const user = await upsertUser(context, dataApi);
+    await dataApi.execute('posts.draft.publish', {
+      userId: user.userId,
+      postId: context.match?.[1] ?? '',
+    });
+    await context.answerCallbackQuery(ru.bot.postPublished);
+    await context.editMessageReplyMarkup();
+    await context.reply(ru.bot.postPublished);
+  });
+  bot.callbackQuery('postcancel', async (context) => {
+    const user = await upsertUser(context, dataApi);
+    await dataApi.execute('posts.draft.cancel', { userId: user.userId });
+    await context.answerCallbackQuery(ru.bot.postCancelled);
+    await context.editMessageReplyMarkup();
+  });
+  bot.callbackQuery('postnext', async (context) => {
+    const user = await upsertUser(context, dataApi);
+    await context.answerCallbackQuery();
+    await sendNextPost(context, user.userId);
+  });
+  bot.callbackQuery(/^postlike:([0-9a-f-]{36})$/, async (context) => {
+    const user = await upsertUser(context, dataApi);
+    const post = await dataApi.execute<{ author_user_id: string }>('posts.get', {
+      userId: user.userId,
+      postId: context.match?.[1] ?? '',
+    });
+    const result = await dataApi.execute<{ matched: boolean }>('swipes.create', {
+      userId: user.userId,
+      targetUserId: post.author_user_id,
+      action: 'like',
+      source: 'bot',
+      idempotencyKey: `post:${context.update.update_id}:${post.author_user_id}`,
+    });
+    await context.answerCallbackQuery(result.matched ? ru.bot.swipeMatched : ru.bot.postLiked);
+  });
+  bot.callbackQuery(/^postmore:([0-9a-f-]{36})$/, async (context) => {
+    const postId = context.match?.[1] ?? '';
+    await context.answerCallbackQuery();
+    await context.reply(ru.bot.postMore, {
+      reply_markup: new InlineKeyboard()
+        .text(ru.bot.buttons.reportChat, `postreport:${postId}`)
+        .text(ru.bot.buttons.blockChat, `postblock:${postId}`),
+    });
+  });
+  bot.callbackQuery(/^postdelete:([0-9a-f-]{36})$/, async (context) => {
+    const postId = context.match?.[1] ?? '';
+    await context.answerCallbackQuery();
+    await context.reply(ru.bot.postDeleteConfirm, {
+      reply_markup: new InlineKeyboard()
+        .text(ru.bot.buttons.confirmDeletePost, `postdeleteconfirm:${postId}`)
+        .text(ru.bot.buttons.cancel, 'postdeletecancel'),
+    });
+  });
+  bot.callbackQuery(/^postdeleteconfirm:([0-9a-f-]{36})$/, async (context) => {
+    const user = await upsertUser(context, dataApi);
+    await dataApi.execute('posts.delete', {
+      userId: user.userId,
+      postId: context.match?.[1] ?? '',
+    });
+    await context.answerCallbackQuery(ru.bot.postDeleted);
+    await context.editMessageText(ru.bot.postDeleted);
+  });
+  bot.callbackQuery('postdeletecancel', async (context) => {
+    await context.answerCallbackQuery(ru.bot.cancelled);
+    await context.editMessageReplyMarkup();
+  });
+  bot.callbackQuery(/^postblock:([0-9a-f-]{36})$/, async (context) => {
+    const user = await upsertUser(context, dataApi);
+    const post = await dataApi.execute<{ author_user_id: string }>('posts.get', {
+      userId: user.userId,
+      postId: context.match?.[1] ?? '',
+    });
+    await dataApi.execute('blocks.create', {
+      blockerUserId: user.userId,
+      blockedUserId: post.author_user_id,
+      reason: 'telegram_post',
+    });
+    await context.answerCallbackQuery(ru.bot.postBlocked);
+    await context.editMessageReplyMarkup();
+  });
+  bot.callbackQuery(/^postreport:([0-9a-f-]{36})$/, async (context) => {
+    const postId = context.match?.[1] ?? '';
+    const categories = [
+      ['a', 'advertising'],
+      ['s', 'spam'],
+      ['i', 'insults'],
+      ['h', 'harassment'],
+      ['f', 'fraud'],
+      ['p', 'personal_data'],
+      ['x', 'prohibited_adult_content'],
+      ['m', 'unsafe_minor'],
+      ['o', 'other'],
+    ] as const;
+    const keyboard = new InlineKeyboard();
+    for (const [code, category] of categories) {
+      keyboard.text(ru.bot.reportCategories[category]!, `pr:${code}:${postId}`).row();
+    }
+    await context.answerCallbackQuery();
+    await context.reply(ru.bot.reportReason, { reply_markup: keyboard });
+  });
+  bot.callbackQuery(/^pr:([asihfpxmo]):([0-9a-f-]{36})$/, async (context) => {
+    const categoryByCode = {
+      a: 'advertising',
+      s: 'spam',
+      i: 'insults',
+      h: 'harassment',
+      f: 'fraud',
+      p: 'personal_data',
+      x: 'prohibited_adult_content',
+      m: 'unsafe_minor',
+      o: 'other',
+    } as const;
+    const user = await upsertUser(context, dataApi);
+    const postId = context.match?.[2] ?? '';
+    const post = await dataApi.execute<{ author_user_id: string }>('posts.get', {
+      userId: user.userId,
+      postId,
+    });
+    const code = context.match?.[1] as keyof typeof categoryByCode;
+    await dataApi.execute('reports.create', {
+      reporterUserId: user.userId,
+      reportedUserId: post.author_user_id,
+      postId,
+      category: categoryByCode[code],
+      description: ru.bot.userChatActionReason,
+      evidenceSnapshot: [],
+    });
+    await context.answerCallbackQuery(ru.bot.postReported);
+    await context.editMessageReplyMarkup();
   });
   bot.callbackQuery(/^chat:([0-9a-f-]{36})$/, async (context) => {
     if (!context.from) return;
@@ -558,8 +954,20 @@ export function createBot(
         .text(ru.bot.buttons.closeChat, `chatclose:${conversationId}`)
         .row()
         .text(ru.bot.buttons.blockChat, `chatblock:${conversationId}`)
-        .text(ru.bot.buttons.reportChat, `chatreport:${conversationId}`),
+        .text(ru.bot.buttons.reportChat, `chatreport:${conversationId}`)
+        .row()
+        .text(ru.bot.buttons.ratePositive, `chatrate:1:${conversationId}`)
+        .text(ru.bot.buttons.rateNegative, `chatrate:-1:${conversationId}`),
     });
+  });
+  bot.callbackQuery(/^chatrate:(1|-1):([0-9a-f-]{36})$/, async (context) => {
+    const user = await upsertUser(context, dataApi);
+    await dataApi.execute('ratings.create', {
+      userId: user.userId,
+      conversationId: context.match?.[2] ?? '',
+      value: context.match?.[1] === '1' ? 1 : -1,
+    });
+    await context.answerCallbackQuery(ru.bot.ratingSaved);
   });
   bot.callbackQuery(/^contact:([0-9a-f-]{36})$/, async (context) => {
     const user = await upsertUser(context, dataApi);
@@ -739,6 +1147,12 @@ export function createBot(
 
   bot.on('message:text', async (context) => {
     const text = context.message.text;
+    const hiddenLinks = (context.message.entities ?? [])
+      .filter(
+        (entity): entity is typeof entity & { type: 'text_link'; url: string } =>
+          entity.type === 'text_link',
+      )
+      .map((entity) => entity.url);
     const menuMap: Record<string, string> = {
       [ru.bot.menu.search]: '/search',
       [ru.bot.menu.profile]: '/profile',
@@ -748,16 +1162,40 @@ export function createBot(
       [ru.bot.menu.referrals]: '/referral',
       [ru.bot.menu.settings]: '/settings',
       [ru.bot.menu.help]: '/help',
+      [ru.bot.menu.posts]: '/posts',
+      [ru.bot.menu.createPost]: '/post',
     };
     if (text in menuMap) {
       await context.reply(ru.bot.useCommand(menuMap[text]!));
       return;
     }
-    if (containsContact(text)) {
-      await context.reply(ru.contactBlocked);
+    if (!context.from) return;
+    const user = await upsertUser(context, dataApi);
+    const draft = await dataApi.execute<{ id: string } | null>('posts.draft.get', {
+      userId: user.userId,
+    });
+    const policyError = await linksAllowed([text, ...hiddenLinks].join('\n'), user.userId);
+    if (policyError) {
+      await context.reply(policyError, {
+        reply_markup: new InlineKeyboard().text(ru.bot.buttons.buyPremium, 'premium:open'),
+      });
       return;
     }
-    if (!context.from) return;
+    if (draft) {
+      const attached = await dataApi.execute<{ postId: string }>('posts.draft.attach', {
+        userId: user.userId,
+        sourceChatId: context.chat.id,
+        sourceMessageId: context.message.message_id,
+        contentType: 'text',
+        textPreview: text.slice(0, 500),
+      });
+      await context.reply(ru.bot.postDraftReady, {
+        reply_markup: new InlineKeyboard()
+          .text(ru.bot.buttons.publishPost, `postpublish:${attached.postId}`)
+          .text(ru.bot.buttons.cancel, 'postcancel'),
+      });
+      return;
+    }
     try {
       const target = await resolveRelay(context.from.id);
       if (!relayAllowed(context.from.id, target.relay_rate_limit)) {
@@ -805,6 +1243,7 @@ export function createBot(
       'message:animation',
       'message:sticker',
       'message:voice',
+      'message:audio',
       'message:video',
       'message:video_note',
       'message:document',
@@ -835,8 +1274,66 @@ export function createBot(
         return;
       }
       const caption = 'caption' in context.message ? context.message.caption : undefined;
-      if (caption && containsContact(caption)) {
-        await context.reply(ru.contactBlocked);
+      const captionLinks =
+        'caption_entities' in context.message
+          ? (context.message.caption_entities ?? [])
+              .filter(
+                (entity): entity is typeof entity & { type: 'text_link'; url: string } =>
+                  entity.type === 'text_link',
+              )
+              .map((entity) => entity.url)
+          : [];
+      const user = await upsertUser(context, dataApi);
+      const messageType =
+        ('photo' in context.message && 'photo') ||
+        ('animation' in context.message && 'animation') ||
+        ('sticker' in context.message && 'sticker') ||
+        ('voice' in context.message && 'voice') ||
+        ('audio' in context.message && 'audio') ||
+        ('video' in context.message && 'video') ||
+        ('video_note' in context.message && 'video_note') ||
+        'document';
+      const documentMime =
+        'document' in context.message ? (context.message.document.mime_type ?? '') : '';
+      const premiumMedia =
+        ['animation', 'voice', 'audio', 'video', 'video_note'].includes(messageType) ||
+        /^(?:audio|video)\//.test(documentMime) ||
+        documentMime === 'image/gif';
+      if (premiumMedia && !(await premiumActive(user.userId))) {
+        await context.reply(ru.bot.postPremiumMedia, {
+          reply_markup: new InlineKeyboard().text(ru.bot.buttons.buyPremium, 'premium:open'),
+        });
+        return;
+      }
+      if (caption) {
+        const policyError = await linksAllowed([caption, ...captionLinks].join('\n'), user.userId);
+        if (policyError) {
+          await context.reply(policyError, {
+            reply_markup: new InlineKeyboard().text(ru.bot.buttons.buyPremium, 'premium:open'),
+          });
+          return;
+        }
+      }
+      const draft = await dataApi.execute<{ id: string } | null>('posts.draft.get', {
+        userId: user.userId,
+      });
+      if (draft) {
+        if (messageType === 'sticker') {
+          await context.reply(ru.bot.postUnsupportedMedia);
+          return;
+        }
+        const attached = await dataApi.execute<{ postId: string }>('posts.draft.attach', {
+          userId: user.userId,
+          sourceChatId: context.chat.id,
+          sourceMessageId: context.message.message_id,
+          contentType: messageType,
+          textPreview: (caption ?? '').slice(0, 500),
+        });
+        await context.reply(ru.bot.postDraftReady, {
+          reply_markup: new InlineKeyboard()
+            .text(ru.bot.buttons.publishPost, `postpublish:${attached.postId}`)
+            .text(ru.bot.buttons.cancel, 'postcancel'),
+        });
         return;
       }
       try {
@@ -868,14 +1365,6 @@ export function createBot(
               : {}),
           },
         );
-        const messageType =
-          ('photo' in context.message && 'photo') ||
-          ('animation' in context.message && 'animation') ||
-          ('sticker' in context.message && 'sticker') ||
-          ('voice' in context.message && 'voice') ||
-          ('video' in context.message && 'video') ||
-          ('video_note' in context.message && 'video_note') ||
-          'document';
         await recordRelay(
           target,
           context.chat.id,
@@ -902,7 +1391,11 @@ export function createBot(
         { command: 'search', description: ru.bot.commands.search },
         { command: 'matches', description: ru.bot.commands.matches },
         { command: 'chats', description: ru.bot.commands.chats },
+        { command: 'posts', description: ru.bot.commands.posts },
+        { command: 'post', description: ru.bot.commands.createPost },
+        { command: 'myposts', description: ru.bot.commands.myPosts },
         { command: 'premium', description: ru.bot.commands.premium },
+        { command: 'promo', description: ru.bot.commands.promo },
         { command: 'referral', description: ru.bot.commands.referral },
         { command: 'settings', description: ru.bot.commands.settings },
         { command: 'rules', description: ru.bot.commands.rules },

@@ -17,7 +17,7 @@ import { HomePage } from './pages/home.js';
 import { ProfileEditorPage, ProfilePage } from './pages/profile.js';
 import { SearchPage } from './pages/search.js';
 import { useUserStore } from './store.js';
-import { getTelegram } from './telegram.js';
+import { waitForTelegramInitData } from './telegram.js';
 
 function AuthGate({ children }: { children: ReactNode }) {
   const setUser = useUserStore((state) => state.setUser);
@@ -25,8 +25,8 @@ function AuthGate({ children }: { children: ReactNode }) {
   const auth = useQuery({
     queryKey: ['auth'],
     queryFn: async () => {
-      const telegram = getTelegram();
-      if (!telegram?.initData) {
+      const initData = await waitForTelegramInitData();
+      if (!initData) {
         if (window.location.hostname === 'localhost') {
           const me = await api.me();
           return {
@@ -34,13 +34,14 @@ function AuthGate({ children }: { children: ReactNode }) {
             telegramUserId: me.telegramUserId,
             role: me.role,
             isAdmin: me.isAdmin,
+            isOwner: me.isOwner,
           };
         }
         throw new Error(ru.miniApp.auth.telegramOnly);
       }
-      const user = await api.authenticate(telegram.initData);
+      const user = await api.authenticate(initData);
       const me = await api.me();
-      return { ...user, isAdmin: me.isAdmin };
+      return { ...user, isAdmin: me.isAdmin, isOwner: me.isOwner };
     },
     retry: false,
   });

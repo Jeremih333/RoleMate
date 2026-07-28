@@ -22,6 +22,7 @@ import type { AppEnv } from './env.js';
 import { assertCsrf, createSession, getSession } from './session.js';
 import { TelegramStarsProvider } from './payments/telegram-stars.js';
 import { dispatchBroadcastBatch } from './broadcast.js';
+import { validateUserContentLinks } from './content-policy.js';
 
 const authBodySchema = z.object({ initData: z.string().min(1).max(8_192) });
 const swipeBodySchema = z.object({
@@ -64,6 +65,7 @@ const settingsBodySchema = z.object({
   privacyShieldEnabled: z.boolean(),
   showOnlineStatus: z.boolean(),
   showPremiumBadge: z.boolean(),
+  hideDemographics: z.boolean().default(false),
   theme: z.enum(['telegram', 'light', 'dark']),
 });
 
@@ -250,6 +252,22 @@ export async function buildServer(
     }
     return session;
   };
+  const requireModerationAccess = async (request: FastifyRequest, csrf = false) => {
+    const session = csrf ? await mutate(request) : await authenticate(request);
+    if (!['admin', 'moderator'].includes(session.role)) {
+      const ipSignalHash = await sha256(`${env.SESSION_SECRET}:${request.ip}`);
+      await dataApi
+        .execute('risk.record', {
+          userId: session.userId,
+          type: 'unauthorized_admin_access',
+          scoreDelta: 15,
+          metadata: { path: request.url, requestId: request.id, ipSignalHash },
+        })
+        .catch(() => undefined);
+      throw new DataApiError('FORBIDDEN', 'Forbidden', 403);
+    }
+    return session;
+  };
   const writeAdminAudit = async (
     request: FastifyRequest,
     adminUserId: string,
@@ -345,7 +363,8 @@ export async function buildServer(
       userId: session.userId,
       telegramUserId: session.telegramUserId,
       role: session.role,
-      isAdmin: session.telegramUserId === OWNER_TELEGRAM_ID && session.role === 'admin',
+      isAdmin: ['admin', 'moderator'].includes(session.role),
+      isOwner: session.telegramUserId === OWNER_TELEGRAM_ID && session.role === 'admin',
       riskScore: session.riskScore,
     };
   });
@@ -357,6 +376,35 @@ export async function buildServer(
   app.put('/api/profile', async (request) => {
     const session = await mutateSafe(request);
     const profile = profileSchema.parse(request.body);
+    const premium = await dataApi.execute<{ premium: boolean }>('premium.status', {
+      userId: session.userId,
+    });
+    const policy = await validateUserContentLinks(
+      [
+        profile.displayName,
+        profile.shortHeadline,
+        profile.about,
+        profile.settings,
+        profile.plots,
+        profile.boundaries,
+        ...profile.preferredRole,
+        ...profile.fandoms,
+        ...profile.genres,
+        ...profile.lookingFor,
+      ].join('\n'),
+      {
+        premium: premium.premium,
+        dataApi,
+        getChat: async (chatId) => bot.api.getChat(chatId),
+      },
+    );
+    if (!policy.allowed) {
+      throw new DataApiError(
+        policy.reason === 'premium_required' ? 'PREMIUM_REQUIRED' : 'LINK_POLICY_VIOLATION',
+        policy.reason,
+        403,
+      );
+    }
     return dataApi.execute('profiles.upsert', { userId: session.userId, profile });
   });
   app.get('/api/profile/media', async (request) => {
@@ -483,6 +531,11 @@ export async function buildServer(
     const session = await authenticate(request);
     return dataApi.execute('premium.status', { userId: session.userId });
   });
+  app.post('/api/promotions/apply', async (request) => {
+    const session = await mutateSafe(request);
+    const { code } = z.object({ code: z.string().trim().min(3).max(40) }).parse(request.body);
+    return dataApi.execute('promotions.apply', { userId: session.userId, code });
+  });
   app.post('/api/premium/boost', async (request) => {
     const session = await mutateSafe(request);
     return dataApi.execute('premium.boost', { userId: session.userId });
@@ -549,6 +602,20 @@ export async function buildServer(
       userId: session.userId,
       conversationId: params.conversationId,
       action: body.action,
+    });
+  });
+  app.post('/api/conversations/:conversationId/rating', async (request) => {
+    const session = await mutateSafe(request);
+    const { conversationId } = z
+      .object({ conversationId: z.string().uuid() })
+      .parse(request.params);
+    const { value } = z
+      .object({ value: z.union([z.literal(-1), z.literal(1)]) })
+      .parse(request.body);
+    return dataApi.execute('ratings.create', {
+      userId: session.userId,
+      conversationId,
+      value,
     });
   });
   app.get('/api/settings', async (request) => {
@@ -649,7 +716,7 @@ export async function buildServer(
     return dataApi.execute('admin.dashboard', { adminUserId: session.userId });
   });
   app.get('/api/admin/users', async (request) => {
-    const session = await requireAdmin(request);
+    const session = await requireModerationAccess(request);
     const query = z
       .object({
         q: z.string().max(128).default(''),
@@ -663,9 +730,10 @@ export async function buildServer(
     });
   });
   app.get('/api/admin/profiles', async (request) => {
-    const session = await requireAdmin(request);
+    const session = await requireModerationAccess(request);
     const query = z
       .object({
+        q: z.string().max(128).default(''),
         status: z
           .enum(['draft', 'pending', 'approved', 'rejected', 'paused', 'archived', 'all'])
           .default('pending'),
@@ -675,11 +743,28 @@ export async function buildServer(
     return dataApi.execute('admin.profiles.list', {
       adminUserId: session.userId,
       status: query.status,
+      query: query.q,
+      limit: query.limit,
+    });
+  });
+  app.get('/api/admin/posts', async (request) => {
+    const session = await requireModerationAccess(request);
+    const query = z
+      .object({
+        q: z.string().max(128).default(''),
+        status: z.enum(['active', 'deleted', 'blocked', 'all']).default('active'),
+        limit: z.coerce.number().int().min(1).max(100).default(50),
+      })
+      .parse(request.query);
+    return dataApi.execute('admin.posts.list', {
+      adminUserId: session.userId,
+      query: query.q,
+      status: query.status,
       limit: query.limit,
     });
   });
   app.get('/api/admin/media', async (request) => {
-    const session = await requireAdmin(request);
+    const session = await requireModerationAccess(request);
     const query = z
       .object({
         status: z.enum(['pending', 'approved', 'rejected', 'all']).default('pending'),
@@ -693,7 +778,7 @@ export async function buildServer(
     });
   });
   app.get('/api/admin/reports', async (request) => {
-    const session = await requireAdmin(request);
+    const session = await requireModerationAccess(request);
     const query = z
       .object({
         status: z.enum(['open', 'reviewing', 'resolved', 'dismissed', 'all']).default('open'),
@@ -724,6 +809,155 @@ export async function buildServer(
   app.get('/api/admin/products', async (request) => {
     await requireAdmin(request);
     return dataApi.execute('products.list', { activeOnly: false });
+  });
+  app.get('/api/admin/promotions', async (request) => {
+    const session = await requireAdmin(request);
+    return dataApi.execute('admin.promotions.list', {
+      adminUserId: session.userId,
+      limit: 100,
+    });
+  });
+  app.post('/api/admin/promotions', async (request) => {
+    const session = await requireAdmin(request, true);
+    const body = z
+      .object({
+        code: z.string().trim().min(3).max(40),
+        type: z.enum(['discount', 'premium_days']),
+        discountStars: z.number().int().min(0).max(10_000).default(0),
+        discountRubles: z.number().int().min(0).max(1_000_000).default(0),
+        premiumDays: z.number().int().min(0).max(3_650).default(0),
+        eligibleProductIds: z.array(z.string().uuid()).max(100).default([]),
+        expiresAt: z.string().datetime().optional(),
+        maxActivations: z.number().int().min(1).max(1_000_000).optional(),
+      })
+      .parse(request.body);
+    return dataApi.execute('admin.promotions.create', {
+      adminUserId: session.userId,
+      ...body,
+    });
+  });
+  app.put('/api/admin/promotions/:promotionId', async (request) => {
+    const session = await requireAdmin(request, true);
+    const { promotionId } = z.object({ promotionId: z.string().uuid() }).parse(request.params);
+    const { isActive } = z.object({ isActive: z.boolean() }).parse(request.body);
+    return dataApi.execute('admin.promotions.update', {
+      adminUserId: session.userId,
+      promotionId,
+      isActive,
+    });
+  });
+  app.get('/api/admin/posting-requirements', async (request) => {
+    const session = await requireAdmin(request);
+    return dataApi.execute('admin.postingRequirements.list', {
+      adminUserId: session.userId,
+      limit: 100,
+    });
+  });
+  app.post('/api/admin/posting-requirements', async (request) => {
+    const session = await requireAdmin(request, true);
+    const body = z
+      .object({
+        type: z.enum(['channel', 'supergroup', 'bot']),
+        title: z.string().trim().min(3).max(120),
+        targetChatId: z.string().max(64).optional(),
+        username: z.string().max(32).optional(),
+        actionUrl: z.union([z.string().url().max(500), z.literal('')]).optional(),
+        createInvite: z.boolean().default(false),
+        expiresAt: z.string().datetime().optional(),
+        maxConversions: z.number().int().min(1).max(1_000_000).optional(),
+      })
+      .parse(request.body);
+    let actionUrl = body.actionUrl;
+    let integrationSecret: string | undefined;
+    let botVerificationSecretHash: string | undefined;
+    if (body.type === 'bot') {
+      if (!actionUrl) {
+        if (!body.username)
+          throw new DataApiError('BOT_USERNAME_REQUIRED', 'Username required', 400);
+        actionUrl = `https://t.me/${body.username.replace(/^@/, '')}`;
+      }
+      integrationSecret = Array.from(crypto.getRandomValues(new Uint8Array(32)), (byte) =>
+        byte.toString(16).padStart(2, '0'),
+      ).join('');
+      botVerificationSecretHash = await sha256(integrationSecret);
+    } else {
+      if (!body.targetChatId) {
+        throw new DataApiError('TARGET_CHAT_REQUIRED', 'Target chat ID required', 400);
+      }
+      const target = await bot.api.getChat(body.targetChatId);
+      if (
+        (body.type === 'channel' && target.type !== 'channel') ||
+        (body.type === 'supergroup' && target.type !== 'supergroup')
+      ) {
+        throw new DataApiError('TARGET_CHAT_TYPE_MISMATCH', 'Target chat type mismatch', 400);
+      }
+      const botMember = await bot.api.getChatMember(body.targetChatId, bot.botInfo.id);
+      if (!['administrator', 'creator'].includes(botMember.status)) {
+        throw new DataApiError(
+          'BOT_ADMIN_REQUIRED',
+          'The RoleMate bot must be an administrator in the target',
+          409,
+        );
+      }
+    }
+    if (body.type !== 'bot' && body.createInvite) {
+      if (!body.targetChatId) {
+        throw new DataApiError('TARGET_CHAT_REQUIRED', 'Target chat ID required', 400);
+      }
+      const invite = await bot.api.createChatInviteLink(body.targetChatId, {
+        name: `RoleMate: ${body.title}`.slice(0, 32),
+        ...(body.expiresAt
+          ? { expire_date: Math.floor(new Date(body.expiresAt).getTime() / 1_000) }
+          : {}),
+        ...(body.maxConversions ? { member_limit: Math.min(body.maxConversions, 99_999) } : {}),
+      });
+      actionUrl = invite.invite_link;
+    }
+    if (!actionUrl) throw new DataApiError('ACTION_URL_REQUIRED', 'Action URL required', 400);
+    const result = await dataApi.execute<{ id: string }>('admin.postingRequirements.create', {
+      adminUserId: session.userId,
+      type: body.type,
+      title: body.title,
+      ...(body.targetChatId ? { targetChatId: body.targetChatId } : {}),
+      ...(body.username ? { username: body.username.replace(/^@/, '') } : {}),
+      actionUrl,
+      ...(botVerificationSecretHash ? { botVerificationSecretHash } : {}),
+      ...(body.expiresAt ? { expiresAt: body.expiresAt } : {}),
+      ...(body.maxConversions ? { maxConversions: body.maxConversions } : {}),
+    });
+    return {
+      ...result,
+      ...(integrationSecret
+        ? {
+            integrationSecret,
+            callbackUrl: `${env.PUBLIC_BASE_URL}/api/integrations/required-bots/${result.id}/verify`,
+          }
+        : {}),
+    };
+  });
+  app.put('/api/admin/posting-requirements/:requirementId', async (request) => {
+    const session = await requireAdmin(request, true);
+    const { requirementId } = z.object({ requirementId: z.string().uuid() }).parse(request.params);
+    const { isActive } = z.object({ isActive: z.boolean() }).parse(request.body);
+    return dataApi.execute('admin.postingRequirements.update', {
+      adminUserId: session.userId,
+      requirementId,
+      isActive,
+    });
+  });
+  app.post('/api/integrations/required-bots/:requirementId/verify', async (request) => {
+    const { requirementId } = z.object({ requirementId: z.string().uuid() }).parse(request.params);
+    const body = z
+      .object({
+        telegramUserId: z.number().int().positive(),
+        secret: z.string().min(32).max(256),
+      })
+      .parse(request.body);
+    return dataApi.execute('posting.requirements.botVerify', {
+      telegramUserId: body.telegramUserId,
+      requirementId,
+      secretHash: await sha256(body.secret),
+    });
   });
   app.get('/api/admin/referrals', async (request) => {
     const session = await requireAdmin(request);
@@ -820,7 +1054,7 @@ export async function buildServer(
     };
   });
   app.post('/api/admin/users/:userId/moderate', async (request) => {
-    const session = await requireAdmin(request, true);
+    const session = await requireModerationAccess(request, true);
     const params = z.object({ userId: z.string().uuid() }).parse(request.params);
     const body = z
       .object({
@@ -851,7 +1085,7 @@ export async function buildServer(
     return result;
   });
   app.post('/api/admin/profiles/:profileId/moderate', async (request) => {
-    const session = await requireAdmin(request, true);
+    const session = await requireModerationAccess(request, true);
     const params = z.object({ profileId: z.string().uuid() }).parse(request.params);
     const body = z
       .object({
@@ -867,8 +1101,23 @@ export async function buildServer(
     await writeAdminAudit(request, session.userId, `profile.${body.status}`, body.reason);
     return result;
   });
+  app.post('/api/admin/posts/:postId/moderate', async (request) => {
+    const session = await requireModerationAccess(request, true);
+    const { postId } = z.object({ postId: z.string().uuid() }).parse(request.params);
+    const body = z
+      .object({
+        status: z.enum(['active', 'blocked']),
+        reason: z.string().min(3).max(1_000),
+      })
+      .parse(request.body);
+    return dataApi.execute('admin.post.moderate', {
+      adminUserId: session.userId,
+      postId,
+      ...body,
+    });
+  });
   app.post('/api/admin/media/:mediaId/moderate', async (request) => {
-    const session = await requireAdmin(request, true);
+    const session = await requireModerationAccess(request, true);
     const { mediaId } = z.object({ mediaId: z.string().uuid() }).parse(request.params);
     const body = z
       .object({
@@ -883,7 +1132,7 @@ export async function buildServer(
     });
   });
   app.post('/api/admin/reports/:reportId/resolve', async (request) => {
-    const session = await requireAdmin(request, true);
+    const session = await requireModerationAccess(request, true);
     const params = z.object({ reportId: z.string().uuid() }).parse(request.params);
     const body = z
       .object({
@@ -1071,7 +1320,17 @@ export async function buildServer(
           ? ru.api.internalError
           : invalidTelegramInitData
             ? ru.miniApp.auth.invalidData
-            : errorMessage,
+            : code === 'PREMIUM_REQUIRED' || code === 'PREMIUM_MEDIA_REQUIRED'
+              ? ru.api.premiumRequired
+              : code === 'LINK_POLICY_VIOLATION'
+                ? ru.api.linkPolicyViolation
+                : code === 'PROMO_INVALID'
+                  ? ru.api.promoInvalid
+                  : code === 'PROMO_ALREADY_USED'
+                    ? ru.api.promoAlreadyUsed
+                    : code === 'PROMO_EXHAUSTED'
+                      ? ru.api.promoExhausted
+                      : errorMessage,
       requestId: request.id,
     });
   });

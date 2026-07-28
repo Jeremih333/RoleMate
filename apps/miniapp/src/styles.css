@@ -532,6 +532,14 @@ label > small {
 .input-field::placeholder {
   color: var(--muted);
 }
+.input-field option {
+  color: #f7f3ff;
+  background: #201d2d;
+}
+.input-field option:checked {
+  color: #ffffff;
+  background: #6f42c1;
+}
 .sticky-submit {
   position: sticky;
   bottom: calc(80px + var(--safe-bottom));

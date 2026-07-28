@@ -23,6 +23,35 @@ function list(value: string): string[] {
   }
 }
 
+const writingStyleLabels = Object.fromEntries(
+  ['literary', 'short_dynamic', 'mixed', 'coauthoring', 'game_elements', 'negotiable'].map(
+    (value, index) => [value, ru.miniApp.profile.writingStyleOptions[index]],
+  ),
+);
+const postLengthLabels = Object.fromEntries(
+  ['lines_1_3', 'paragraphs_1_2', 'paragraphs_3_5', 'long_literary', 'scene_dependent'].map(
+    (value, index) => [value, ru.miniApp.profile.postLengthOptions[index]],
+  ),
+);
+const activityLabels = Object.fromEntries(
+  ['several_hourly', 'several_daily', 'daily', 'several_weekly', 'flexible'].map((value, index) => [
+    value,
+    ru.miniApp.profile.frequencyOptions[index],
+  ]),
+);
+const ageLabels = Object.fromEntries(
+  ['under_16', '16_17', '18_20', '21_25', '26_plus'].map((value, index) => [
+    value,
+    ru.miniApp.profile.ageOptions[index],
+  ]),
+);
+const genderLabels: Record<string, string> = {
+  female: ru.miniApp.profile.genderOptions[1],
+  male: ru.miniApp.profile.genderOptions[2],
+  nonbinary: ru.miniApp.profile.genderOptions[3],
+  not_specified: ru.miniApp.profile.genderOptions[0],
+};
+
 function ProfileCard({ profile }: { profile: SearchProfile }) {
   const fandoms = list(profile.fandoms);
   const genres = list(profile.genres);
@@ -62,18 +91,39 @@ function ProfileCard({ profile }: { profile: SearchProfile }) {
           ))}
         </div>
         <p className="mt-4 line-clamp-4 text-sm leading-relaxed text-soft">{profile.about}</p>
+        <div className="mt-4 flex items-center gap-3 text-xs text-muted">
+          <strong className="text-soft">{ru.miniApp.search.rating}:</strong>
+          <span>
+            👍 {profile.rating_likes ?? 0} {ru.miniApp.search.likes}
+          </span>
+          <span>
+            👎 {profile.rating_dislikes ?? 0} {ru.miniApp.search.dislikes}
+          </span>
+        </div>
         <div className="mt-5 grid grid-cols-2 gap-2 text-xs text-muted">
           <span>
-            {ru.miniApp.search.style}: {profile.writing_style}
+            {ru.miniApp.search.style}:{' '}
+            {writingStyleLabels[profile.writing_style] ?? profile.writing_style}
           </span>
           <span>
-            {ru.miniApp.search.posts}: {profile.average_post_length}
+            {ru.miniApp.search.posts}:{' '}
+            {postLengthLabels[profile.average_post_length] ?? profile.average_post_length}
           </span>
           <span>
-            {ru.miniApp.search.activity}: {profile.activity_frequency}
+            {ru.miniApp.search.activity}:{' '}
+            {activityLabels[profile.activity_frequency] ?? profile.activity_frequency}
           </span>
           <span>
-            {ru.miniApp.search.age}: {profile.age_group}
+            {ru.miniApp.search.age}:{' '}
+            {profile.age_group
+              ? (ageLabels[profile.age_group] ?? profile.age_group)
+              : ru.miniApp.search.demographicsHidden}
+          </span>
+          <span>
+            {ru.miniApp.profile.gender}:{' '}
+            {profile.gender
+              ? (genderLabels[profile.gender] ?? profile.gender)
+              : ru.miniApp.search.demographicsHidden}
           </span>
         </div>
       </div>
@@ -175,7 +225,12 @@ export function SearchPage() {
             }}
           />
         ) : (
-          <Card className="mb-4 p-4 text-sm text-soft">{ru.miniApp.search.premiumFiltersOnly}</Card>
+          <Card className="mb-4 p-4 text-sm text-soft">
+            {ru.miniApp.search.premiumFiltersOnly}{' '}
+            <a className="text-lilac underline" href="/premium">
+              {ru.miniApp.search.openPremium}
+            </a>
+          </Card>
         )
       ) : null}
       <AnimatePresence mode="wait">
@@ -192,8 +247,14 @@ export function SearchPage() {
         <Button
           variant="ghost"
           aria-label={ru.miniApp.search.rewind}
-          onClick={() => rewind.mutate()}
-          disabled={!premium.data?.premium || rewind.isPending}
+          onClick={() => {
+            if (!premium.data?.premium) {
+              window.location.href = '/premium';
+              return;
+            }
+            rewind.mutate();
+          }}
+          disabled={rewind.isPending}
         >
           <RotateCcw />
         </Button>

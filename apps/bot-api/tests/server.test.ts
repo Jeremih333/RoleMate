@@ -210,7 +210,7 @@ describe('Telegram webhook integration', () => {
       inline_keyboard: [
         [{ callback_data: 'onboarding:start' }],
         [{ callback_data: 'help' }, { callback_data: 'rules' }],
-        [{ url: 'https://t.me/odinnadsat' }],
+        [{ url: 'https://t.me/odinnadsat' }, { url: 'https://t.me/rolemate' }],
       ],
     });
     await app.close();

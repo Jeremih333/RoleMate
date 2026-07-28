@@ -60,6 +60,7 @@ export const workerOperations = {
     referralCode: z.string().optional(),
   }),
   'users.get': z.object({ telegramUserId: z.number().int().positive() }),
+  'users.resolveUsername': z.object({ username: z.string().min(5).max(32) }),
   'users.acceptRules': z.object({
     userId: z.string().uuid(),
     ageGroup: ageGroupSchema,
@@ -79,6 +80,7 @@ export const workerOperations = {
     privacyShieldEnabled: z.boolean(),
     showOnlineStatus: z.boolean(),
     showPremiumBadge: z.boolean(),
+    hideDemographics: z.boolean().default(false),
     theme: z.enum(['telegram', 'light', 'dark']),
   }),
   'users.delete': z.object({ userId: z.string().uuid() }),
@@ -145,6 +147,10 @@ export const workerOperations = {
   'swipes.rewind': z.object({ userId: z.string().uuid() }),
   'swipes.incoming': z.object({ userId: z.string().uuid() }).merge(paginationSchema),
   'premium.status': z.object({ userId: z.string().uuid() }),
+  'promotions.apply': z.object({
+    userId: z.string().uuid(),
+    code: z.string().trim().min(3).max(40),
+  }),
   'premium.boost': z.object({ userId: z.string().uuid() }),
   'premium.stats': z.object({ userId: z.string().uuid() }),
   'premium.profileVariants.list': z.object({ userId: z.string().uuid() }),
@@ -193,6 +199,50 @@ export const workerOperations = {
     conversationId: z.string().uuid(),
     action: z.enum(['mute', 'unmute', 'pause', 'resume', 'close']),
   }),
+  'ratings.create': z.object({
+    userId: z.string().uuid(),
+    conversationId: z.string().uuid(),
+    value: z.union([z.literal(-1), z.literal(1)]),
+  }),
+  'posts.draft.start': z.object({ userId: z.string().uuid() }),
+  'posts.draft.get': z.object({ userId: z.string().uuid() }),
+  'posts.draft.attach': z.object({
+    userId: z.string().uuid(),
+    sourceChatId: z.number().int(),
+    sourceMessageId: z.number().int().positive(),
+    contentType: z.enum([
+      'text',
+      'photo',
+      'document',
+      'animation',
+      'video',
+      'video_note',
+      'voice',
+      'audio',
+    ]),
+    textPreview: z.string().max(500),
+  }),
+  'posts.draft.publish': z.object({ userId: z.string().uuid(), postId: z.string().uuid() }),
+  'posts.draft.cancel': z.object({ userId: z.string().uuid() }),
+  'posts.feed.next': z.object({ userId: z.string().uuid() }),
+  'posts.get': z.object({ userId: z.string().uuid(), postId: z.string().uuid() }),
+  'posts.own.list': z.object({ userId: z.string().uuid() }).merge(paginationSchema),
+  'posts.delete': z.object({ userId: z.string().uuid(), postId: z.string().uuid() }),
+  'posting.requirements.due': z.object({ userId: z.string().uuid() }),
+  'posting.requirements.recordView': z.object({ userId: z.string().uuid() }),
+  'posting.requirements.markVerified': z.object({
+    userId: z.string().uuid(),
+    requirementId: z.string().uuid(),
+  }),
+  'posting.requirements.snooze': z.object({
+    userId: z.string().uuid(),
+    requirementId: z.string().uuid(),
+  }),
+  'posting.requirements.botVerify': z.object({
+    telegramUserId: z.number().int().positive(),
+    requirementId: z.string().uuid(),
+    secretHash: z.string().length(64),
+  }),
   'blocks.create': z.object({
     blockerUserId: z.string().uuid(),
     blockedUserId: z.string().uuid(),
@@ -202,6 +252,7 @@ export const workerOperations = {
     reporterUserId: z.string().uuid(),
     reportedUserId: z.string().uuid(),
     conversationId: z.string().uuid().optional(),
+    postId: z.string().uuid().optional(),
     category: reportCategorySchema,
     description: z.string().max(1_500),
     evidenceSnapshot: z.array(z.record(z.unknown())).max(20),
@@ -259,6 +310,17 @@ export const workerOperations = {
   'sessions.get': z.object({ sessionHash: z.string().length(64) }),
   'sessions.revoke': z.object({ sessionHash: z.string().length(64) }),
   'system.runtime': z.object({}),
+  'moderators.assign': z.object({
+    ownerTelegramUserId: z.number().int().positive(),
+    targetTelegramUserId: z.number().int().positive(),
+  }),
+  'moderators.remove': z.object({
+    ownerTelegramUserId: z.number().int().positive(),
+    targetTelegramUserId: z.number().int().positive(),
+  }),
+  'moderators.list': z.object({
+    ownerTelegramUserId: z.number().int().positive(),
+  }),
   'admin.dashboard': z.object({ adminUserId: z.string().uuid() }),
   'admin.users.list': z
     .object({
@@ -269,11 +331,25 @@ export const workerOperations = {
   'admin.profiles.list': z
     .object({
       adminUserId: z.string().uuid(),
+      query: z.string().max(128).default(''),
       status: z
         .enum(['draft', 'pending', 'approved', 'rejected', 'paused', 'archived', 'all'])
         .default('pending'),
     })
     .merge(paginationSchema),
+  'admin.posts.list': z
+    .object({
+      adminUserId: z.string().uuid(),
+      status: z.enum(['active', 'deleted', 'blocked', 'all']).default('active'),
+      query: z.string().max(128).default(''),
+    })
+    .merge(paginationSchema),
+  'admin.post.moderate': z.object({
+    adminUserId: z.string().uuid(),
+    postId: z.string().uuid(),
+    status: z.enum(['active', 'blocked']),
+    reason: z.string().min(3).max(1_000),
+  }),
   'admin.media.list': z
     .object({
       adminUserId: z.string().uuid(),
@@ -391,6 +467,42 @@ export const workerOperations = {
     adminUserId: z.string().uuid(),
     productId: z.string().uuid(),
     starsAmount: z.number().int().min(1).max(10_000),
+    isActive: z.boolean(),
+  }),
+  'admin.promotions.list': z.object({ adminUserId: z.string().uuid() }).merge(paginationSchema),
+  'admin.promotions.create': z.object({
+    adminUserId: z.string().uuid(),
+    code: z.string().trim().min(3).max(40),
+    type: z.enum(['discount', 'premium_days']),
+    discountStars: z.number().int().min(0).max(10_000),
+    discountRubles: z.number().int().min(0).max(1_000_000),
+    premiumDays: z.number().int().min(0).max(3_650),
+    eligibleProductIds: z.array(z.string().uuid()).max(100),
+    expiresAt: z.string().datetime().optional(),
+    maxActivations: z.number().int().min(1).max(1_000_000).optional(),
+  }),
+  'admin.promotions.update': z.object({
+    adminUserId: z.string().uuid(),
+    promotionId: z.string().uuid(),
+    isActive: z.boolean(),
+  }),
+  'admin.postingRequirements.list': z
+    .object({ adminUserId: z.string().uuid() })
+    .merge(paginationSchema),
+  'admin.postingRequirements.create': z.object({
+    adminUserId: z.string().uuid(),
+    type: z.enum(['channel', 'supergroup', 'bot']),
+    title: z.string().trim().min(3).max(120),
+    targetChatId: z.string().max(64).optional(),
+    username: z.string().max(32).optional(),
+    actionUrl: z.string().url().max(500),
+    botVerificationSecretHash: z.string().length(64).optional(),
+    expiresAt: z.string().datetime().optional(),
+    maxConversions: z.number().int().min(1).max(1_000_000).optional(),
+  }),
+  'admin.postingRequirements.update': z.object({
+    adminUserId: z.string().uuid(),
+    requirementId: z.string().uuid(),
     isActive: z.boolean(),
   }),
   'admin.flags.list': z.object({ adminUserId: z.string().uuid() }),

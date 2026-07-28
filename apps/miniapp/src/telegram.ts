@@ -31,6 +31,29 @@ export function getTelegram(): TelegramWebApp | undefined {
   return window.Telegram?.WebApp;
 }
 
+export function telegramInitDataFromUrl(url: string): string {
+  const parsed = new URL(url);
+  const hash = new URLSearchParams(parsed.hash.replace(/^#/, ''));
+  return hash.get('tgWebAppData') ?? parsed.searchParams.get('tgWebAppData') ?? '';
+}
+
+export function getTelegramInitData(): string {
+  return getTelegram()?.initData || telegramInitDataFromUrl(window.location.href);
+}
+
+export async function waitForTelegramInitData(timeoutMs = 2_000): Promise<string> {
+  const startedAt = Date.now();
+  do {
+    const initData = getTelegramInitData();
+    if (initData) {
+      initializeTelegram();
+      return initData;
+    }
+    await new Promise<void>((resolve) => window.setTimeout(resolve, 50));
+  } while (Date.now() - startedAt < timeoutMs);
+  return '';
+}
+
 export function initializeTelegram(): void {
   const telegram = getTelegram();
   telegram?.ready();

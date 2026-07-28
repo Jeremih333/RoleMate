@@ -1,7 +1,7 @@
 import { useQuery } from '@tanstack/react-query';
 import { ArrowRight, BookOpen, Crown, Heart, MessageCircle, Sparkles, Users } from 'lucide-react';
 import { Link } from 'wouter';
-import { PROMO_CHAT_URL, ru } from '@rolemate/shared';
+import { NEWS_CHANNEL_URL, PROMO_CHAT_URL, ru } from '@rolemate/shared';
 import { api } from '../api.js';
 import { Card, SectionTitle, Skeleton } from '../components/ui.js';
 
@@ -124,6 +124,14 @@ export function HomePage() {
         <span>
           <strong>{ru.miniApp.home.promoTitle}</strong>
           <small>{ru.miniApp.home.promoDescription}</small>
+        </span>
+        <ArrowRight className="ml-auto h-4 w-4" />
+      </a>
+      <a href={NEWS_CHANNEL_URL} className="promo-strip">
+        <span className="brand-mark small">R</span>
+        <span>
+          <strong>{ru.miniApp.home.newsTitle}</strong>
+          <small>{ru.miniApp.home.newsDescription}</small>
         </span>
         <ArrowRight className="ml-auto h-4 w-4" />
       </a>

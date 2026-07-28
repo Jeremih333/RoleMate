@@ -66,7 +66,12 @@ export function MatchesPage() {
       </div>
       <SectionTitle eyebrow="Premium">{ru.miniApp.community.incomingLikesTitle}</SectionTitle>
       {!premium.data?.premium ? (
-        <Card className="p-4 text-sm text-soft">{ru.miniApp.community.incomingLikesPremium}</Card>
+        <Card className="p-4 text-sm text-soft">
+          {ru.miniApp.community.incomingLikesPremium}{' '}
+          <a className="text-lilac underline" href="/premium">
+            {ru.miniApp.search.openPremium}
+          </a>
+        </Card>
       ) : (
         <div className="space-y-3">
           {incoming.data?.map((like) => (
@@ -108,6 +113,9 @@ export function ChatsPage() {
       action: 'mute' | 'unmute' | 'pause' | 'resume' | 'close';
     }) => api.controlConversation(input.conversationId, input.action),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ['conversations'] }),
+  });
+  const rate = useMutation({
+    mutationFn: ({ id, value }: { id: string; value: -1 | 1 }) => api.rateConversation(id, value),
   });
   if (chats.isLoading) return <Skeleton className="h-80" />;
   if (!chats.data?.length)
@@ -210,7 +218,24 @@ export function ChatsPage() {
               >
                 <Ban className="h-4 w-4" /> {ru.miniApp.community.block}
               </Button>
+              <Button
+                variant="secondary"
+                onClick={() => rate.mutate({ id: chat.id, value: 1 })}
+                loading={rate.isPending}
+              >
+                {ru.miniApp.community.ratePositive}
+              </Button>
+              <Button
+                variant="secondary"
+                onClick={() => rate.mutate({ id: chat.id, value: -1 })}
+                loading={rate.isPending}
+              >
+                {ru.miniApp.community.rateNegative}
+              </Button>
             </div>
+            {rate.isSuccess ? (
+              <p className="mt-3 text-sm text-soft">{ru.miniApp.community.ratingSaved}</p>
+            ) : null}
             {reveal.data?.revealed ? (
               <p className="mt-3 text-sm text-soft">
                 {ru.miniApp.community.mutualContact}{' '}
@@ -235,6 +260,8 @@ export function ChatsPage() {
 }
 
 export function PremiumPage() {
+  const queryClient = useQueryClient();
+  const [promoCode, setPromoCode] = useState('');
   const products = useQuery({ queryKey: ['products'], queryFn: api.products });
   const status = useQuery({ queryKey: ['premium-status'], queryFn: api.premiumStatus });
   const stats = useQuery({
@@ -243,6 +270,12 @@ export function PremiumPage() {
     enabled: status.data?.premium === true,
   });
   const boost = useMutation({ mutationFn: api.premiumBoost });
+  const promotion = useMutation({
+    mutationFn: api.applyPromotion,
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ['premium-status'] });
+    },
+  });
   const invoice = useMutation({
     mutationFn: api.invoice,
     onSuccess: (result) => {
@@ -296,6 +329,38 @@ export function PremiumPage() {
       <SectionTitle eyebrow={ru.miniApp.community.paymentEyebrow}>
         {ru.miniApp.community.choosePlan}
       </SectionTitle>
+      <Card className="mb-4 p-4">
+        <strong>{ru.miniApp.community.promoTitle}</strong>
+        <div className="mt-3 flex gap-2">
+          <input
+            className="input-field"
+            value={promoCode}
+            maxLength={40}
+            onChange={(event) => setPromoCode(event.target.value.toUpperCase())}
+            placeholder={ru.miniApp.community.promoPlaceholder}
+          />
+          <Button
+            onClick={() => promotion.mutate(promoCode)}
+            disabled={promoCode.trim().length < 3}
+            loading={promotion.isPending}
+          >
+            {ru.miniApp.community.applyPromo}
+          </Button>
+        </div>
+        {promotion.data ? (
+          <p className="mt-2 text-sm text-lilac">
+            {promotion.data.type === 'premium_days'
+              ? ru.miniApp.community.promoPremiumApplied(promotion.data.premiumDays ?? 0)
+              : ru.miniApp.community.promoDiscountApplied(
+                  promotion.data.discountStars ?? 0,
+                  promotion.data.discountRubles ?? 0,
+                )}
+          </p>
+        ) : null}
+        {promotion.isError ? (
+          <p className="mt-2 text-sm text-red-300">{promotion.error.message}</p>
+        ) : null}
+      </Card>
       <div className="grid gap-3">
         {products.data?.map((product) => (
           <Card key={product.id} className="product-card">
@@ -460,6 +525,7 @@ export function SettingsPage() {
       privacyShieldEnabled: Boolean(settings.data.privacy_shield_enabled),
       showOnlineStatus: Boolean(settings.data.show_online_status),
       showPremiumBadge: Boolean(settings.data.show_premium_badge),
+      hideDemographics: Boolean(settings.data.hide_demographics),
       theme: settings.data.theme,
     });
   }, [settings.data]);
@@ -473,6 +539,7 @@ export function SettingsPage() {
     ['privacyShieldEnabled', ru.miniApp.community.settingLabels[5]],
     ['showOnlineStatus', ru.miniApp.community.settingLabels[6]],
     ['showPremiumBadge', ru.miniApp.community.settingLabels[7]],
+    ['hideDemographics', ru.miniApp.community.settingLabels[8]],
   ];
   return (
     <div>
@@ -487,14 +554,22 @@ export function SettingsPage() {
               type="checkbox"
               checked={Boolean(form[key])}
               disabled={
-                !premium.data?.premium && (key === 'showOnlineStatus' || key === 'showPremiumBadge')
+                !premium.data?.premium &&
+                (key === 'showOnlineStatus' ||
+                  key === 'showPremiumBadge' ||
+                  key === 'hideDemographics')
               }
               onChange={(event) => setForm({ ...form, [key]: event.target.checked })}
             />
           </Card>
         ))}
         {!premium.data?.premium ? (
-          <p className="text-sm text-muted">{ru.miniApp.community.premiumPrivacyOnly}</p>
+          <p className="text-sm text-muted">
+            {ru.miniApp.community.premiumPrivacyOnly}{' '}
+            <a className="text-lilac underline" href="/premium">
+              {ru.miniApp.search.openPremium}
+            </a>
+          </p>
         ) : null}
         <Card className="setting-row">
           <span>{ru.miniApp.community.theme}</span>

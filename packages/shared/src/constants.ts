@@ -1,6 +1,7 @@
 export const OWNER_TELEGRAM_ID = 1_040_929_628;
 export const SUPPORT_URL = 'https://t.me/odinnadsat';
 export const PROMO_CHAT_URL = 'https://t.me/piarchaticksss';
+export const NEWS_CHANNEL_URL = 'https://t.me/rolemate';
 export const PROMO_HANDLE = '@piarchaticksss';
 export const SUPPORT_HANDLE = '@odinnadsat';
 export const FULL_FOOTER = 'Создано при поддержке пиар-чата @piarchaticksss';

@@ -21,7 +21,13 @@ import {
   Users,
 } from 'lucide-react';
 import { Redirect } from 'wouter';
-import { api, type AdminConfig, type Product } from '../api.js';
+import {
+  api,
+  type AdminConfig,
+  type AdminPromotionInput,
+  type PostingRequirementInput,
+  type Product,
+} from '../api.js';
 import { Button, Card, SectionTitle, Skeleton } from '../components/ui.js';
 import { useUserStore } from '../store.js';
 
@@ -35,12 +41,31 @@ type AdminSection =
   | 'broadcasts'
   | 'flags'
   | 'system'
-  | 'audit';
+  | 'audit'
+  | 'promotions'
+  | 'postingRequirements';
 
 export function AdminPage() {
   const isAdmin = useUserStore((state) => state.user?.isAdmin);
-  const [section, setSection] = useState<AdminSection>('dashboard');
+  const isOwner = useUserStore((state) => state.user?.isOwner);
+  const [section, setSection] = useState<AdminSection>(isOwner ? 'dashboard' : 'users');
   if (!isAdmin) return <Redirect to="/" replace />;
+  const ownerSections = [
+    ['dashboard', ru.miniApp.admin.sections[0]],
+    ['payments', ru.miniApp.admin.sections[4]],
+    ['referrals', ru.miniApp.admin.sections[5]],
+    ['broadcasts', ru.miniApp.admin.sections[6]],
+    ['flags', ru.miniApp.admin.sections[7]],
+    ['system', ru.miniApp.admin.sections[8]],
+    ['audit', ru.miniApp.admin.sections[9]],
+    ['promotions', ru.miniApp.admin.sections[10]],
+    ['postingRequirements', ru.miniApp.admin.sections[11]],
+  ] as const;
+  const moderationSections = [
+    ['users', ru.miniApp.admin.sections[1]],
+    ['profiles', ru.miniApp.admin.sections[2]],
+    ['reports', ru.miniApp.admin.sections[3]],
+  ] as const;
   return (
     <div>
       <SectionTitle eyebrow={ru.miniApp.admin.eyebrow}>{ru.miniApp.admin.title}</SectionTitle>
@@ -52,20 +77,11 @@ export function AdminPage() {
         </div>
       </div>
       <div className="mt-4 flex flex-wrap gap-2">
-        {(
-          [
-            ['dashboard', ru.miniApp.admin.sections[0]],
-            ['users', ru.miniApp.admin.sections[1]],
-            ['profiles', ru.miniApp.admin.sections[2]],
-            ['reports', ru.miniApp.admin.sections[3]],
-            ['payments', ru.miniApp.admin.sections[4]],
-            ['referrals', ru.miniApp.admin.sections[5]],
-            ['broadcasts', ru.miniApp.admin.sections[6]],
-            ['flags', ru.miniApp.admin.sections[7]],
-            ['system', ru.miniApp.admin.sections[8]],
-            ['audit', ru.miniApp.admin.sections[9]],
-          ] as const
-        ).map(([key, label]) => (
+        {[
+          ...(isOwner ? ownerSections.slice(0, 1) : []),
+          ...moderationSections,
+          ...(isOwner ? ownerSections.slice(1) : []),
+        ].map(([key, label]) => (
           <Button
             key={key}
             variant={section === key ? 'primary' : 'secondary'}
@@ -78,7 +94,7 @@ export function AdminPage() {
       <div className="mt-6">
         <AdminSectionBoundary key={section}>
           {section === 'dashboard' ? <Dashboard /> : null}
-          {section === 'users' ? <UsersQueue /> : null}
+          {section === 'users' ? <UsersQueue isOwner={Boolean(isOwner)} /> : null}
           {section === 'profiles' ? <ProfilesQueue /> : null}
           {section === 'reports' ? <ReportsQueue /> : null}
           {section === 'payments' ? <Payments /> : null}
@@ -87,6 +103,8 @@ export function AdminPage() {
           {section === 'flags' ? <Flags /> : null}
           {section === 'system' ? <SystemStatus /> : null}
           {section === 'audit' ? <AuditLog /> : null}
+          {section === 'promotions' ? <Promotions /> : null}
+          {section === 'postingRequirements' ? <PostingRequirements /> : null}
         </AdminSectionBoundary>
       </div>
     </div>
@@ -161,7 +179,7 @@ function Dashboard() {
   );
 }
 
-function UsersQueue() {
+function UsersQueue({ isOwner }: { isOwner: boolean }) {
   const queryClient = useQueryClient();
   const [search, setSearch] = useState('');
   const users = useQuery({
@@ -209,11 +227,14 @@ function UsersQueue() {
                 <strong>{user.display_name ?? user.telegram_first_name}</strong>
                 <p className="text-sm text-muted">
                   {user.telegram_user_id}{' '}
-                  {user.telegram_username ? `@${user.telegram_username}` : ''} · risk{' '}
-                  {user.risk_score}
+                  {user.telegram_username ? `@${user.telegram_username}` : ''} ·{' '}
+                  {ru.miniApp.admin.riskLabel} {user.risk_score}
                 </p>
               </div>
-              <span className="status-pill">{user.is_banned ? 'banned' : user.status}</span>
+              <span className="status-pill">
+                {ru.miniApp.admin.userStatuses[user.is_banned ? 'banned' : user.status] ??
+                  user.status}
+              </span>
             </div>
             <div className="mt-3 flex flex-wrap gap-2">
               {user.is_banned ? (
@@ -241,24 +262,28 @@ function UsersQueue() {
                   {ru.miniApp.admin.ban}
                 </Button>
               )}
-              <Button
-                variant="secondary"
-                onClick={() => {
-                  const value = window.prompt(ru.miniApp.admin.premiumDaysPrompt, '7');
-                  const days = Number(value);
-                  if (Number.isInteger(days) && days > 0)
-                    premium.mutate({
-                      userId: user.id,
-                      durationDays: days,
-                      reason: ru.miniApp.admin.ownerGrantReason,
-                    });
-                }}
-              >
-                {ru.miniApp.admin.grantPremium}
-              </Button>
-              <Button variant="secondary" onClick={() => revokePremium.mutate(user.id)}>
-                {ru.miniApp.admin.revokePremium}
-              </Button>
+              {isOwner ? (
+                <>
+                  <Button
+                    variant="secondary"
+                    onClick={() => {
+                      const value = window.prompt(ru.miniApp.admin.premiumDaysPrompt, '7');
+                      const days = Number(value);
+                      if (Number.isInteger(days) && days > 0)
+                        premium.mutate({
+                          userId: user.id,
+                          durationDays: days,
+                          reason: ru.miniApp.admin.ownerGrantReason,
+                        });
+                    }}
+                  >
+                    {ru.miniApp.admin.grantPremium}
+                  </Button>
+                  <Button variant="secondary" onClick={() => revokePremium.mutate(user.id)}>
+                    {ru.miniApp.admin.revokePremium}
+                  </Button>
+                </>
+              ) : null}
               <Button
                 variant="secondary"
                 onClick={() =>
@@ -324,9 +349,10 @@ function UsersQueue() {
 
 function ProfilesQueue() {
   const queryClient = useQueryClient();
+  const [search, setSearch] = useState('');
   const profiles = useQuery({
-    queryKey: ['admin-profiles'],
-    queryFn: () => api.adminProfiles('all'),
+    queryKey: ['admin-profiles', search],
+    queryFn: () => api.adminProfiles('all', search),
   });
   const moderate = useMutation({
     mutationFn: (input: {
@@ -341,17 +367,29 @@ function ProfilesQueue() {
     return <AdminRequestError error={profiles.error} retry={() => profiles.refetch()} />;
   return (
     <div className="space-y-3">
+      <label className="flex items-center gap-2">
+        <Search className="h-4 w-4" />
+        <input
+          className="input-field"
+          value={search}
+          onChange={(event) => setSearch(event.target.value)}
+          placeholder={ru.miniApp.admin.searchPlaceholder}
+        />
+      </label>
       {profiles.data?.map((profile) => (
         <Card key={profile.id} className="p-4">
           <div className="flex justify-between gap-3">
             <div>
               <strong>{profile.display_name}</strong>
               <p className="text-sm text-muted">
-                {ru.miniApp.admin.telegramUser(profile.telegram_user_id)} · risk{' '}
-                {profile.risk_score}
+                {ru.miniApp.admin.telegramUser(profile.telegram_user_id)} ·{' '}
+                {ru.miniApp.admin.riskLabel} {profile.risk_score}
               </p>
             </div>
-            <span className="status-pill">{profile.moderation_status}</span>
+            <span className="status-pill">
+              {ru.miniApp.admin.profileStatuses[profile.moderation_status] ??
+                profile.moderation_status}
+            </span>
           </div>
           <h3 className="mt-3 font-semibold">{profile.short_headline}</h3>
           <p className="mt-2 line-clamp-4 text-sm text-soft">{profile.about}</p>
@@ -484,6 +522,17 @@ function ReportsQueue() {
     }) => api.adminResolveReport(input.reportId, input.status, input.resolution),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ['admin-reports'] }),
   });
+  const disableProfile = useMutation({
+    mutationFn: (userId: string) =>
+      api.adminModerateUser(userId, {
+        action: 'disable_profile',
+        reason: ru.miniApp.admin.reportProfileDisabledReason,
+      }),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ['admin-reports'] });
+      void queryClient.invalidateQueries({ queryKey: ['admin-profiles'] });
+    },
+  });
   if (reports.isLoading) return <Skeleton className="h-72" />;
   if (reports.isError)
     return <AdminRequestError error={reports.error} retry={() => reports.refetch()} />;
@@ -492,8 +541,10 @@ function ReportsQueue() {
       {reports.data?.map((report) => (
         <Card key={report.id} className="p-4">
           <div className="flex justify-between gap-3">
-            <strong>{report.category}</strong>
-            <span className="status-pill">{report.status}</span>
+            <strong>{ru.bot.reportCategories[report.category] ?? report.category}</strong>
+            <span className="status-pill">
+              {ru.miniApp.admin.reportStatuses[report.status] ?? report.status}
+            </span>
           </div>
           <p className="mt-2 text-sm text-soft">
             {report.description || ru.miniApp.admin.noComment}
@@ -544,10 +595,20 @@ function ReportsQueue() {
             >
               {ru.miniApp.admin.dismiss}
             </Button>
+            <Button
+              variant="secondary"
+              onClick={() => disableProfile.mutate(report.reported_user_id)}
+              loading={disableProfile.isPending}
+            >
+              {ru.miniApp.admin.blockFromReport}
+            </Button>
           </div>
         </Card>
       ))}
-      <MutationFeedback states={[resolve]} success={ru.miniApp.admin.actionCompleted} />
+      <MutationFeedback
+        states={[resolve, disableProfile]}
+        success={ru.miniApp.admin.actionCompleted}
+      />
     </div>
   );
 }
@@ -1118,6 +1179,311 @@ function ConfigEditor({ item }: { item: AdminConfig }) {
       </Button>
       <MutationFeedback states={[update]} success={ru.miniApp.admin.configSaved} />
     </Card>
+  );
+}
+
+function Promotions() {
+  const queryClient = useQueryClient();
+  const promotions = useQuery({ queryKey: ['admin-promotions'], queryFn: api.adminPromotions });
+  const products = useQuery({ queryKey: ['admin-products'], queryFn: api.adminProducts });
+  const [form, setForm] = useState<AdminPromotionInput>({
+    code: '',
+    type: 'discount',
+    discountStars: 0,
+    discountRubles: 0,
+    premiumDays: 0,
+    eligibleProductIds: [],
+  });
+  const create = useMutation({
+    mutationFn: api.adminCreatePromotion,
+    onSuccess: () => {
+      setForm({
+        code: '',
+        type: 'discount',
+        discountStars: 0,
+        discountRubles: 0,
+        premiumDays: 0,
+        eligibleProductIds: [],
+      });
+      void queryClient.invalidateQueries({ queryKey: ['admin-promotions'] });
+    },
+  });
+  const update = useMutation({
+    mutationFn: ({ id, active }: { id: string; active: boolean }) =>
+      api.adminUpdatePromotion(id, active),
+    onSuccess: () => void queryClient.invalidateQueries({ queryKey: ['admin-promotions'] }),
+  });
+  if (promotions.isLoading || products.isLoading) return <Skeleton className="h-72" />;
+  return (
+    <div className="space-y-4">
+      <Card className="space-y-3 p-4">
+        <h2 className="font-display text-2xl">{ru.miniApp.admin.promoCreate}</h2>
+        <input
+          className="input-field"
+          value={form.code}
+          onChange={(event) => setForm({ ...form, code: event.target.value.toUpperCase() })}
+          placeholder={ru.miniApp.admin.promoCode}
+        />
+        <select
+          className="input-field"
+          value={form.type}
+          onChange={(event) =>
+            setForm({ ...form, type: event.target.value as AdminPromotionInput['type'] })
+          }
+        >
+          <option value="discount">{ru.miniApp.admin.promoDiscount}</option>
+          <option value="premium_days">{ru.miniApp.admin.promoPremiumDays}</option>
+        </select>
+        {form.type === 'discount' ? (
+          <div className="grid gap-3 sm:grid-cols-2">
+            <input
+              className="input-field"
+              type="number"
+              min={0}
+              value={form.discountStars}
+              onChange={(event) => setForm({ ...form, discountStars: Number(event.target.value) })}
+              placeholder={ru.miniApp.admin.discountStars}
+            />
+            <input
+              className="input-field"
+              type="number"
+              min={0}
+              value={form.discountRubles}
+              onChange={(event) => setForm({ ...form, discountRubles: Number(event.target.value) })}
+              placeholder={ru.miniApp.admin.discountRubles}
+            />
+          </div>
+        ) : (
+          <input
+            className="input-field"
+            type="number"
+            min={1}
+            value={form.premiumDays}
+            onChange={(event) => setForm({ ...form, premiumDays: Number(event.target.value) })}
+            placeholder={ru.miniApp.admin.premiumDays}
+          />
+        )}
+        {form.type === 'discount' ? (
+          <div>
+            <strong className="text-sm">{ru.miniApp.admin.eligiblePlans}</strong>
+            <div className="mt-2 flex flex-wrap gap-2">
+              {products.data?.map((product) => (
+                <label className="tag" key={product.id}>
+                  <input
+                    type="checkbox"
+                    checked={form.eligibleProductIds.includes(product.id)}
+                    onChange={(event) =>
+                      setForm({
+                        ...form,
+                        eligibleProductIds: event.target.checked
+                          ? [...form.eligibleProductIds, product.id]
+                          : form.eligibleProductIds.filter((id) => id !== product.id),
+                      })
+                    }
+                  />{' '}
+                  {product.name}
+                </label>
+              ))}
+            </div>
+          </div>
+        ) : null}
+        <input
+          className="input-field"
+          type="datetime-local"
+          onChange={(event) => {
+            const next = { ...form };
+            if (event.target.value) next.expiresAt = new Date(event.target.value).toISOString();
+            else delete next.expiresAt;
+            setForm(next);
+          }}
+        />
+        <input
+          className="input-field"
+          type="number"
+          min={1}
+          onChange={(event) => {
+            const next = { ...form };
+            if (event.target.value) next.maxActivations = Number(event.target.value);
+            else delete next.maxActivations;
+            setForm(next);
+          }}
+          placeholder={ru.miniApp.admin.maxActivations}
+        />
+        <Button onClick={() => create.mutate(form)} loading={create.isPending}>
+          {ru.miniApp.admin.create}
+        </Button>
+        <MutationFeedback states={[create]} success={ru.miniApp.admin.actionCompleted} />
+      </Card>
+      {promotions.data?.map((promotion) => (
+        <Card className="p-4" key={promotion.id}>
+          <div className="flex items-center justify-between gap-3">
+            <div>
+              <strong>{promotion.code}</strong>
+              <p className="text-sm text-muted">
+                {promotion.type === 'discount'
+                  ? `${promotion.discount_stars} Stars · ${promotion.discount_rubles} ₽`
+                  : `${promotion.premium_days} ${ru.miniApp.admin.daysShort} Premium`}
+                {' · '}
+                {promotion.activation_count}/{promotion.max_activations ?? '∞'}
+              </p>
+            </div>
+            <Button
+              variant="secondary"
+              onClick={() => update.mutate({ id: promotion.id, active: !promotion.is_active })}
+            >
+              {promotion.is_active ? ru.miniApp.admin.deactivate : ru.miniApp.admin.activate}
+            </Button>
+          </div>
+        </Card>
+      ))}
+    </div>
+  );
+}
+
+function PostingRequirements() {
+  const queryClient = useQueryClient();
+  const requirements = useQuery({
+    queryKey: ['admin-posting-requirements'],
+    queryFn: api.adminPostingRequirements,
+  });
+  const [form, setForm] = useState<PostingRequirementInput>({
+    type: 'channel',
+    title: '',
+    targetChatId: '',
+    username: '',
+    actionUrl: '',
+    createInvite: false,
+  });
+  const [integration, setIntegration] = useState<{
+    secret?: string;
+    callback?: string;
+  } | null>(null);
+  const create = useMutation({
+    mutationFn: api.adminCreatePostingRequirement,
+    onSuccess: (result) => {
+      setIntegration({
+        ...(result.integrationSecret ? { secret: result.integrationSecret } : {}),
+        ...(result.callbackUrl ? { callback: result.callbackUrl } : {}),
+      });
+      void queryClient.invalidateQueries({ queryKey: ['admin-posting-requirements'] });
+    },
+  });
+  const update = useMutation({
+    mutationFn: ({ id, active }: { id: string; active: boolean }) =>
+      api.adminUpdatePostingRequirement(id, active),
+    onSuccess: () =>
+      void queryClient.invalidateQueries({ queryKey: ['admin-posting-requirements'] }),
+  });
+  if (requirements.isLoading) return <Skeleton className="h-72" />;
+  return (
+    <div className="space-y-4">
+      <Card className="space-y-3 p-4">
+        <h2 className="font-display text-2xl">{ru.miniApp.admin.requirementCreate}</h2>
+        <select
+          className="input-field"
+          value={form.type}
+          onChange={(event) =>
+            setForm({ ...form, type: event.target.value as PostingRequirementInput['type'] })
+          }
+        >
+          <option value="channel">{ru.miniApp.admin.requirementChannel}</option>
+          <option value="supergroup">{ru.miniApp.admin.requirementChat}</option>
+          <option value="bot">{ru.miniApp.admin.requirementBot}</option>
+        </select>
+        <input
+          className="input-field"
+          value={form.title}
+          onChange={(event) => setForm({ ...form, title: event.target.value })}
+          placeholder={ru.miniApp.admin.requirementTitle}
+        />
+        {form.type !== 'bot' ? (
+          <input
+            className="input-field"
+            value={form.targetChatId}
+            onChange={(event) => setForm({ ...form, targetChatId: event.target.value })}
+            placeholder={ru.miniApp.admin.targetChatId}
+          />
+        ) : (
+          <input
+            className="input-field"
+            value={form.username}
+            onChange={(event) => setForm({ ...form, username: event.target.value })}
+            placeholder={ru.miniApp.admin.botUsername}
+          />
+        )}
+        <input
+          className="input-field"
+          value={form.actionUrl}
+          onChange={(event) => setForm({ ...form, actionUrl: event.target.value })}
+          placeholder={ru.miniApp.admin.subscriptionUrl}
+        />
+        {form.type !== 'bot' ? (
+          <label className="setting-row">
+            <span>{ru.miniApp.admin.generateInvite}</span>
+            <input
+              type="checkbox"
+              checked={form.createInvite}
+              onChange={(event) => setForm({ ...form, createInvite: event.target.checked })}
+            />
+          </label>
+        ) : null}
+        <input
+          className="input-field"
+          type="datetime-local"
+          onChange={(event) => {
+            const next = { ...form };
+            if (event.target.value) next.expiresAt = new Date(event.target.value).toISOString();
+            else delete next.expiresAt;
+            setForm(next);
+          }}
+        />
+        <input
+          className="input-field"
+          type="number"
+          min={1}
+          onChange={(event) => {
+            const next = { ...form };
+            if (event.target.value) next.maxConversions = Number(event.target.value);
+            else delete next.maxConversions;
+            setForm(next);
+          }}
+          placeholder={ru.miniApp.admin.maxConversions}
+        />
+        <Button onClick={() => create.mutate(form)} loading={create.isPending}>
+          {ru.miniApp.admin.create}
+        </Button>
+        {integration?.secret ? (
+          <div className="error-box">
+            <strong>{ru.miniApp.admin.integrationSecretOnce}</strong>
+            <code className="mt-2 block break-all">{integration.secret}</code>
+            <code className="mt-2 block break-all">{integration.callback}</code>
+          </div>
+        ) : null}
+        <MutationFeedback states={[create]} success={ru.miniApp.admin.actionCompleted} />
+      </Card>
+      {requirements.data?.map((requirement) => (
+        <Card className="p-4" key={requirement.id}>
+          <div className="flex items-center justify-between gap-3">
+            <div>
+              <strong>{requirement.title}</strong>
+              <p className="text-sm text-muted">
+                {requirement.type} · {requirement.conversion_count}/
+                {requirement.max_conversions ?? '∞'}
+              </p>
+              <a className="text-xs text-lilac" href={requirement.action_url}>
+                {requirement.action_url}
+              </a>
+            </div>
+            <Button
+              variant="secondary"
+              onClick={() => update.mutate({ id: requirement.id, active: !requirement.is_active })}
+            >
+              {requirement.is_active ? ru.miniApp.admin.deactivate : ru.miniApp.admin.activate}
+            </Button>
+          </div>
+        </Card>
+      ))}
+    </div>
   );
 }
 

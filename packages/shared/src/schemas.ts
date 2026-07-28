@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { ru } from './locales/ru.js';
 
 export const ageGroupSchema = z.enum(['under_16', '16_17', '18_20', '21_25', '26_plus']);
 export type AgeGroup = z.infer<typeof ageGroupSchema>;
@@ -32,14 +33,14 @@ const contactFreeText = (minimum: number, maximum: number) =>
   z
     .string()
     .trim()
-    .min(minimum)
-    .max(maximum)
-    .refine((value) => !containsContact(value), 'Контактные данные запрещены');
+    .min(minimum, ru.validation.minCharacters(minimum))
+    .max(maximum, ru.validation.maxCharacters(maximum));
 
 export const profileSchema = z
   .object({
     displayName: contactFreeText(2, 32),
     ageGroup: ageGroupSchema,
+    gender: z.enum(['female', 'male', 'nonbinary', 'not_specified']).default('not_specified'),
     shortHeadline: contactFreeText(10, 120),
     about: contactFreeText(40, 2_000),
     roleplayExperience: z.enum([
@@ -54,15 +55,22 @@ export const profileSchema = z
     writingStyle: writingStyleSchema,
     averagePostLength: postLengthSchema,
     activityFrequency: activityFrequencySchema,
-    timezone: z.string().regex(/^UTC(?:[+-](?:0?\d|1[0-4])(?::[03]0)?)?$/),
+    timezone: z.string().regex(/^UTC(?:[+-](?:0?\d|1[0-4])(?::[03]0)?)?$/, ru.validation.timezone),
     activeHours: z.string().max(64),
-    languages: z.array(z.string().trim().min(2).max(24)).min(1).max(8),
+    languages: z
+      .array(z.string().trim().min(2).max(24))
+      .min(1, ru.validation.chooseLanguage)
+      .max(8),
     fandoms: z.array(z.string().trim().min(2).max(64)).min(1).max(20),
     genres: z.array(z.string().trim().min(2).max(48)).min(1).max(16),
     settings: z.string().trim().max(1_000),
     plots: z.string().trim().max(2_000),
     lookingFor: z.array(z.string().trim().min(2).max(64)).min(1).max(8),
-    boundaries: z.string().trim().min(10).max(1_500),
+    boundaries: z
+      .string()
+      .trim()
+      .min(10, ru.validation.minCharacters(10))
+      .max(1_500, ru.validation.maxCharacters(1_500)),
     adultTopicsAllowed: z.boolean(),
     contactRevealPolicy: z.enum(['mutual_only', 'disabled']),
   })
@@ -76,15 +84,6 @@ export const profileSchema = z
         path: ['adultTopicsAllowed'],
         message: 'Взрослые темы недоступны несовершеннолетним',
       });
-    }
-    for (const key of ['settings', 'plots', 'boundaries'] as const) {
-      if (containsContact(profile[key])) {
-        context.addIssue({
-          code: 'custom',
-          path: [key],
-          message: 'Контактные данные запрещены',
-        });
-      }
     }
   });
 export type ProfileInput = z.infer<typeof profileSchema>;
@@ -133,4 +132,59 @@ const contactPatterns = [
 
 export function containsContact(value: string): boolean {
   return contactPatterns.some((pattern) => pattern.test(value));
+}
+
+const telegramReferencePattern =
+  /(?:^|[\s([{"'])@([a-z\d_]{5,32})\b|https:\/\/(?:t\.me|telegram\.me)\/([a-z\d_]{5,32})(?:[/?#][^\s]*)?/gi;
+const webLinkPattern = /(?:https?:\/\/|www\.)[^\s<]+/gi;
+const looseMentionPattern = /(?:^|[\s([{"'])@[a-z\d_]{5,32}\b/gi;
+const allowedTelegramUrlPattern =
+  /^https:\/\/(?:t\.me|telegram\.me)\/[a-z\d_]{5,32}(?:[/?#][^\s]*)?$/i;
+const prohibitedContactPatterns = [
+  /(?:\+?\d[\s().-]*){10,}/,
+  /\b[\w.+-]+@[\w-]+(?:\.[\w-]+)+\b/i,
+  /\b(?:discord(?:\.gg|app\.com\/users)|vk\.com|wa\.me|instagram\.com)\//i,
+];
+
+export interface TelegramReference {
+  username: string;
+  raw: string;
+}
+
+export type ContentPolicyFailure =
+  'premium_required' | 'unsupported_link' | 'bot_or_chat' | 'unverified_target';
+
+export function telegramReferences(value: string): TelegramReference[] {
+  const references: TelegramReference[] = [];
+  for (const match of value.matchAll(telegramReferencePattern)) {
+    const username = (match[1] ?? match[2])?.toLowerCase();
+    if (username) references.push({ username, raw: match[0].trim() });
+  }
+  return references;
+}
+
+export function checkContentLinkPolicy(
+  value: string,
+  premium: boolean,
+):
+  | { allowed: true; references: TelegramReference[] }
+  | { allowed: false; reason: ContentPolicyFailure } {
+  const references = telegramReferences(value);
+  const webLinks = value.match(webLinkPattern) ?? [];
+  const mentions = value.match(looseMentionPattern) ?? [];
+  if (prohibitedContactPatterns.some((pattern) => pattern.test(value))) {
+    return { allowed: false, reason: 'unsupported_link' };
+  }
+  if (!webLinks.length && !mentions.length) return { allowed: true, references: [] };
+  if (!premium) return { allowed: false, reason: 'premium_required' };
+
+  if (
+    webLinks.some((link) => !allowedTelegramUrlPattern.test(link.replace(/[.,!?;:)\]}"'»]+$/, '')))
+  ) {
+    return { allowed: false, reason: 'unsupported_link' };
+  }
+  if (references.some(({ username }) => username.endsWith('bot'))) {
+    return { allowed: false, reason: 'bot_or_chat' };
+  }
+  return { allowed: true, references };
 }

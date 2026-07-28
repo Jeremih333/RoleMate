@@ -26,23 +26,26 @@ async function mockTelegram(page: Page): Promise<void> {
   });
 }
 
-async function mockApi(page: Page, admin = false): Promise<void> {
+async function mockApi(page: Page, admin: boolean | 'moderator' = false): Promise<void> {
+  const owner = admin === true;
+  const staff = owner || admin === 'moderator';
   await page.route('**/api/**', async (route) => {
     const path = new URL(route.request().url()).pathname;
     const payloads: Record<string, unknown> = {
       '/api/auth/telegram': {
         user: {
           id: '00000000-0000-4000-8000-000000000001',
-          telegramUserId: admin ? 1_040_929_628 : 42,
-          role: admin ? 'admin' : 'user',
+          telegramUserId: owner ? 1_040_929_628 : 42,
+          role: owner ? 'admin' : staff ? 'moderator' : 'user',
         },
         csrfToken: 'csrf-token',
       },
       '/api/me': {
         userId: '00000000-0000-4000-8000-000000000001',
-        telegramUserId: admin ? 1_040_929_628 : 42,
-        role: admin ? 'admin' : 'user',
-        isAdmin: admin,
+        telegramUserId: owner ? 1_040_929_628 : 42,
+        role: owner ? 'admin' : staff ? 'moderator' : 'user',
+        isAdmin: staff,
+        isOwner: owner,
         riskScore: 0,
       },
       '/api/conversations': [],
@@ -190,6 +193,8 @@ async function mockApi(page: Page, admin = false): Promise<void> {
         },
       ],
       '/api/admin/media': [],
+      '/api/admin/promotions': [],
+      '/api/admin/posting-requirements': [],
     };
     await route.fulfill({
       status: 200,
@@ -212,6 +217,18 @@ test('home and search remain usable on Telegram-sized screens', async ({ page })
   await expect(page.getByRole('heading', { name: 'Лис' })).toBeVisible();
   await expect(page.getByText('91%')).toBeVisible();
   await expect(page.locator('body')).not.toHaveCSS('overflow-x', 'scroll');
+});
+
+test('menu launch recovers initData from the Telegram URL when the SDK is late', async ({
+  page,
+}) => {
+  await page.addInitScript(() => {
+    Object.defineProperty(window, 'Telegram', { value: undefined, configurable: true });
+  });
+  await mockApi(page);
+  const initData = 'user=%7B%22id%22%3A42%7D&auth_date=1785270000&hash=signed';
+  await page.goto(`/search#tgWebAppData=${encodeURIComponent(initData)}&tgWebAppVersion=9.1`);
+  await expect(page.locator('main h2').first()).toBeVisible();
 });
 
 test('admin route is absent for a regular user', async ({ page }) => {
@@ -248,6 +265,13 @@ test('owner sees the protected dashboard', async ({ page }) => {
   await expect(page.getByText('120')).toBeVisible();
 });
 
+test('moderator sees only moderation sections', async ({ page }) => {
+  await mockApi(page, 'moderator');
+  await page.goto('/admin');
+  const sectionButtons = page.locator('.mt-4.flex.flex-wrap.gap-2 > button');
+  await expect(sectionButtons).toHaveCount(3);
+});
+
 test('owner can open system status without breaking the mobile admin layout', async ({ page }) => {
   await mockApi(page, true);
   await page.goto('/admin');
@@ -277,7 +301,7 @@ test('every admin section remains renderable and isolated on mobile', async ({ p
   await mockApi(page, true);
   await page.goto('/admin');
   for (const section of [
-    'Dashboard',
+    'Обзор',
     'Пользователи',
     'Анкеты',
     'Жалобы',
@@ -286,7 +310,9 @@ test('every admin section remains renderable and isolated on mobile', async ({ p
     'Рассылки',
     'Настройки',
     'Система',
-    'Audit log',
+    'Журнал действий',
+    'Промокоды',
+    'Подписки для постинга',
   ]) {
     await page.getByRole('button', { name: section, exact: true }).click();
     await expect(page.getByText('Раздел временно недоступен')).toHaveCount(0);

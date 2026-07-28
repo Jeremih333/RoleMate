@@ -108,6 +108,7 @@ afterEach(() => sqlite.close());
 const profile = {
   displayName: 'Литератор',
   ageGroup: '21_25',
+  gender: 'not_specified',
   shortHeadline: 'Ищу соавтора для долгой сюжетной игры',
   about: 'Люблю детальные миры, развитие персонажей и спокойное обсуждение сюжета.',
   roleplayExperience: '3_5_years',
@@ -181,6 +182,34 @@ describe('D1 domain operations', () => {
       .get(userId) as { moderation_status: string; is_active: number };
     expect(user).toEqual({ is_onboarding_completed: 1, is_search_enabled: 1 });
     expect(savedProfile).toEqual({ moderation_status: 'approved', is_active: 1 });
+  });
+
+  it('does not let profile editing bypass a moderator pause', async () => {
+    const adminId = await upsert(1_040_929_628);
+    const userId = await onboard(2009);
+    const saved = sqlite.prepare('SELECT id FROM profiles WHERE user_id = ?').get(userId) as {
+      id: string;
+    };
+    await executeOperation(
+      env,
+      'admin.profile.moderate',
+      {
+        adminUserId: adminId,
+        profileId: saved.id,
+        status: 'paused',
+        reason: 'Жалоба подтверждена',
+      },
+      crypto.randomUUID(),
+    );
+    await executeOperation(env, 'profiles.upsert', { userId, profile }, crypto.randomUUID());
+    expect(
+      sqlite
+        .prepare(
+          `SELECT p.moderation_status, p.is_active, u.is_search_enabled
+           FROM profiles p JOIN users u ON u.id = p.user_id WHERE p.user_id = ?`,
+        )
+        .get(userId),
+    ).toEqual({ moderation_status: 'paused', is_active: 0, is_search_enabled: 0 });
   });
 
   it('persists settings and rejects duplicate Telegram updates', async () => {
@@ -1223,5 +1252,274 @@ describe('D1 domain operations', () => {
     expect(referral.reward_grant_id).toBeTruthy();
     expect(grants.count).toBe(1);
     expect(grants.hours).toBe(24);
+  });
+
+  it('publishes bot posts and applies conversation ratings to their authors', async () => {
+    const authorId = await onboard(6101);
+    const viewerId = await onboard(6102);
+    const [userA, userB] = [authorId, viewerId].sort();
+    const matchId = crypto.randomUUID();
+    const conversationId = crypto.randomUUID();
+    sqlite
+      .prepare('INSERT INTO matches (id, user_a_id, user_b_id) VALUES (?, ?, ?)')
+      .run(matchId, userA, userB);
+    sqlite
+      .prepare('INSERT INTO conversations (id, match_id) VALUES (?, ?)')
+      .run(conversationId, matchId);
+    const insertParticipant = sqlite.prepare(
+      `INSERT INTO conversation_participants (conversation_id, user_id, anonymous_alias)
+       VALUES (?, ?, ?)`,
+    );
+    insertParticipant.run(conversationId, authorId, 'Автор');
+    insertParticipant.run(conversationId, viewerId, 'Читатель');
+
+    await executeOperation(
+      env,
+      'ratings.create',
+      { userId: viewerId, conversationId, value: 1 },
+      crypto.randomUUID(),
+    );
+    const draft = (await executeOperation(
+      env,
+      'posts.draft.start',
+      { userId: authorId },
+      crypto.randomUUID(),
+    )) as { postId: string };
+    await executeOperation(
+      env,
+      'posts.draft.attach',
+      {
+        userId: authorId,
+        sourceChatId: 6101,
+        sourceMessageId: 77,
+        contentType: 'text',
+        textPreview: 'Ищу соавтора для новой истории',
+      },
+      crypto.randomUUID(),
+    );
+    await executeOperation(
+      env,
+      'posts.draft.publish',
+      { userId: authorId, postId: draft.postId },
+      crypto.randomUUID(),
+    );
+    const feed = (await executeOperation(
+      env,
+      'posts.feed.next',
+      { userId: viewerId },
+      crypto.randomUUID(),
+    )) as { id: string; likes: number; dislikes: number };
+    expect(feed).toMatchObject({ id: draft.postId, likes: 1, dislikes: 0 });
+    await expect(
+      executeOperation(env, 'posts.feed.next', { userId: viewerId }, crypto.randomUUID()),
+    ).resolves.toBeNull();
+  });
+
+  it('applies Premium and Stars promo codes with activation limits', async () => {
+    const ownerId = await upsert(1_040_929_628);
+    const firstUserId = await upsert(7_100);
+    const secondUserId = await upsert(7_101);
+    await executeOperation(
+      env,
+      'admin.promotions.create',
+      {
+        adminUserId: ownerId,
+        code: 'FIVE-DAYS',
+        type: 'premium_days',
+        discountStars: 0,
+        discountRubles: 0,
+        premiumDays: 5,
+        eligibleProductIds: [],
+        maxActivations: 1,
+      },
+      crypto.randomUUID(),
+    );
+    await expect(
+      executeOperation(
+        env,
+        'promotions.apply',
+        { userId: firstUserId, code: 'five-days' },
+        crypto.randomUUID(),
+      ),
+    ).resolves.toMatchObject({ type: 'premium_days', premiumDays: 5 });
+    await expect(
+      executeOperation(
+        env,
+        'promotions.apply',
+        { userId: secondUserId, code: 'FIVE-DAYS' },
+        crypto.randomUUID(),
+      ),
+    ).rejects.toMatchObject({ code: 'PROMO_INVALID' });
+
+    const product = sqlite
+      .prepare(
+        'SELECT id, stars_amount FROM products WHERE is_active = 1 ORDER BY sort_order LIMIT 1',
+      )
+      .get() as { id: string; stars_amount: number };
+    await executeOperation(
+      env,
+      'admin.promotions.create',
+      {
+        adminUserId: ownerId,
+        code: 'STARS-10',
+        type: 'discount',
+        discountStars: 10,
+        discountRubles: 50,
+        premiumDays: 0,
+        eligibleProductIds: [product.id],
+      },
+      crypto.randomUUID(),
+    );
+    await executeOperation(
+      env,
+      'promotions.apply',
+      { userId: secondUserId, code: 'stars-10' },
+      crypto.randomUUID(),
+    );
+    const order = (await executeOperation(
+      env,
+      'payments.create',
+      {
+        userId: secondUserId,
+        productId: product.id,
+        idempotencyKey: 'promo-payment-order-0001',
+      },
+      crypto.randomUUID(),
+    )) as { amount: number; discountStars: number };
+    expect(order).toMatchObject({
+      amount: Math.max(1, product.stars_amount - 10),
+      discountStars: Math.min(product.stars_amount - 1, 10),
+    });
+    expect(
+      sqlite
+        .prepare('SELECT discount_rubles FROM payment_orders WHERE idempotency_key = ?')
+        .get('promo-payment-order-0001'),
+    ).toEqual({ discount_rubles: 50 });
+  });
+
+  it('shows a mandatory posting subscription after three posts and supports snooze/verify', async () => {
+    const ownerId = await upsert(1_040_929_628);
+    const viewerId = await upsert(7_200);
+    const requirement = (await executeOperation(
+      env,
+      'admin.postingRequirements.create',
+      {
+        adminUserId: ownerId,
+        type: 'channel',
+        title: 'RoleMate News',
+        targetChatId: '@rolemate',
+        actionUrl: 'https://t.me/rolemate',
+      },
+      crypto.randomUUID(),
+    )) as { id: string };
+    for (let index = 0; index < 3; index += 1) {
+      await executeOperation(
+        env,
+        'posting.requirements.recordView',
+        { userId: viewerId },
+        crypto.randomUUID(),
+      );
+    }
+    await expect(
+      executeOperation(env, 'posting.requirements.due', { userId: viewerId }, crypto.randomUUID()),
+    ).resolves.toMatchObject({ id: requirement.id, type: 'channel' });
+
+    await executeOperation(
+      env,
+      'posting.requirements.snooze',
+      { userId: viewerId, requirementId: requirement.id },
+      crypto.randomUUID(),
+    );
+    await expect(
+      executeOperation(env, 'posting.requirements.due', { userId: viewerId }, crypto.randomUUID()),
+    ).resolves.toBeNull();
+
+    sqlite
+      .prepare(
+        `UPDATE posting_requirement_checks
+         SET snoozed_until = datetime('now', '-1 hour')
+         WHERE requirement_id = ? AND user_id = ?`,
+      )
+      .run(requirement.id, viewerId);
+    sqlite
+      .prepare('UPDATE posting_gate_counters SET posts_viewed = 3 WHERE user_id = ?')
+      .run(viewerId);
+    await executeOperation(
+      env,
+      'posting.requirements.markVerified',
+      { userId: viewerId, requirementId: requirement.id },
+      crypto.randomUUID(),
+    );
+    await expect(
+      executeOperation(env, 'posting.requirements.due', { userId: viewerId }, crypto.randomUUID()),
+    ).resolves.toBeNull();
+  });
+
+  it('lets the owner appoint a moderator while keeping owner-only operations closed', async () => {
+    await upsert(1_040_929_628);
+    const moderatorTelegramId = 7_001;
+    await executeOperation(
+      env,
+      'moderators.assign',
+      {
+        ownerTelegramUserId: 1_040_929_628,
+        targetTelegramUserId: moderatorTelegramId,
+      },
+      crypto.randomUUID(),
+    );
+    const moderator = sqlite
+      .prepare('SELECT id FROM users WHERE telegram_user_id = ?')
+      .get(moderatorTelegramId) as { id: string };
+
+    await expect(
+      executeOperation(
+        env,
+        'admin.profiles.list',
+        { adminUserId: moderator.id, status: 'all', query: '', limit: 20 },
+        crypto.randomUUID(),
+      ),
+    ).resolves.toEqual([]);
+    await expect(
+      executeOperation(
+        env,
+        'admin.promotions.list',
+        { adminUserId: moderator.id, limit: 20 },
+        crypto.randomUUID(),
+      ),
+    ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+
+    const sessionHash = 'a'.repeat(64);
+    await executeOperation(
+      env,
+      'sessions.create',
+      {
+        userId: moderator.id,
+        sessionHash,
+        csrfHash: 'b'.repeat(64),
+        expiresAt: new Date(Date.now() + 60_000).toISOString(),
+      },
+      crypto.randomUUID(),
+    );
+    await expect(
+      executeOperation(env, 'sessions.get', { sessionHash }, crypto.randomUUID()),
+    ).resolves.toMatchObject({ role: 'moderator' });
+
+    await executeOperation(
+      env,
+      'moderators.remove',
+      {
+        ownerTelegramUserId: 1_040_929_628,
+        targetTelegramUserId: moderatorTelegramId,
+      },
+      crypto.randomUUID(),
+    );
+    await expect(
+      executeOperation(
+        env,
+        'admin.profiles.list',
+        { adminUserId: moderator.id, status: 'all', query: '', limit: 20 },
+        crypto.randomUUID(),
+      ),
+    ).rejects.toMatchObject({ code: 'FORBIDDEN' });
   });
 });

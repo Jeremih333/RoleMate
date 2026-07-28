@@ -7,6 +7,7 @@ interface UserState {
         telegramUserId: number;
         role: string;
         isAdmin?: boolean;
+        isOwner?: boolean;
       }
     | undefined;
   setUser: (user: NonNullable<UserState['user']>) => void;

@@ -35,6 +35,9 @@ describe('D1 migrations', () => {
       '0005_referrals.sql',
       '0006_admin_operations.sql',
       '0007_premium_features.sql',
+      '0008_posts_ratings.sql',
+      '0009_promotions_posting_requirements.sql',
+      '0010_moderator_assignments.sql',
     ]);
     expect(() => applyMigrations()).not.toThrow();
     const tables = database
@@ -56,6 +59,14 @@ describe('D1 migrations', () => {
         'saved_filter_sets',
         'profile_variants',
         'api_nonces',
+        'conversation_ratings',
+        'telegram_posts',
+        'telegram_post_views',
+        'promotions',
+        'promo_redemptions',
+        'posting_requirements',
+        'posting_requirement_checks',
+        'moderator_assignments',
       ]),
     );
     expect(tables.length).toBeGreaterThanOrEqual(35);

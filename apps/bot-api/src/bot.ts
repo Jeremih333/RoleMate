@@ -1,6 +1,7 @@
 import { existsSync } from 'node:fs';
 import path from 'node:path';
 import { Bot, InlineKeyboard, InputFile, Keyboard, type Context } from 'grammy';
+import type { UserFromGetMe } from 'grammy/types';
 import {
   OWNER_TELEGRAM_ID,
   PROMO_CHAT_URL,
@@ -63,13 +64,40 @@ async function upsertUser(context: Context, dataApi: DataApiClient, referralCode
   });
 }
 
+function parseBotInfo(value: string): UserFromGetMe | undefined {
+  if (!value) return undefined;
+  try {
+    const parsed: unknown = JSON.parse(value);
+    if (
+      !parsed ||
+      typeof parsed !== 'object' ||
+      !('id' in parsed) ||
+      typeof parsed.id !== 'number' ||
+      !('is_bot' in parsed) ||
+      parsed.is_bot !== true ||
+      !('first_name' in parsed) ||
+      typeof parsed.first_name !== 'string' ||
+      !('username' in parsed) ||
+      typeof parsed.username !== 'string'
+    ) {
+      return undefined;
+    }
+    return parsed as UserFromGetMe;
+  } catch {
+    return undefined;
+  }
+}
+
 export function createBot(
   env: AppEnv,
   dataApi: DataApiClient,
   telegramFetch: typeof fetch = fetch,
+  syncCommands = true,
 ): Bot {
+  const botInfo = parseBotInfo(env.TELEGRAM_BOT_INFO);
   const bot = new Bot(env.TELEGRAM_BOT_TOKEN || '0:development', {
     client: { fetch: telegramFetch },
+    ...(botInfo ? { botInfo } : {}),
   });
   const relayWindows = new Map<number, { startedAt: number; count: number }>();
   const selectedChats = new Map<number, string>();
@@ -295,7 +323,13 @@ export function createBot(
       .row()
       .url(ru.bot.buttons.support, env.SUPPORT_URL);
     const welcomeImage = path.resolve(env.WELCOME_IMAGE_PATH);
-    if (existsSync(welcomeImage)) {
+    if (env.WELCOME_IMAGE_URL) {
+      await context.replyWithPhoto(env.WELCOME_IMAGE_URL, {
+        caption: ru.welcome,
+        show_caption_above_media: true,
+        reply_markup: buttons,
+      });
+    } else if (existsSync(welcomeImage)) {
       await context.replyWithPhoto(new InputFile(welcomeImage), {
         caption: ru.welcome,
         show_caption_above_media: true,
@@ -859,24 +893,26 @@ export function createBot(
     },
   );
 
-  bot.api
-    .setMyCommands([
-      { command: 'start', description: ru.bot.commands.start },
-      { command: 'menu', description: ru.bot.commands.menu },
-      { command: 'profile', description: ru.bot.commands.profile },
-      { command: 'search', description: ru.bot.commands.search },
-      { command: 'matches', description: ru.bot.commands.matches },
-      { command: 'chats', description: ru.bot.commands.chats },
-      { command: 'premium', description: ru.bot.commands.premium },
-      { command: 'referral', description: ru.bot.commands.referral },
-      { command: 'settings', description: ru.bot.commands.settings },
-      { command: 'rules', description: ru.bot.commands.rules },
-      { command: 'help', description: ru.bot.commands.help },
-      { command: 'support', description: ru.bot.commands.support },
-      { command: 'paysupport', description: ru.bot.commands.paymentSupport },
-      { command: 'delete_me', description: ru.bot.commands.deleteAccount },
-    ])
-    .catch(() => undefined);
+  if (syncCommands) {
+    bot.api
+      .setMyCommands([
+        { command: 'start', description: ru.bot.commands.start },
+        { command: 'menu', description: ru.bot.commands.menu },
+        { command: 'profile', description: ru.bot.commands.profile },
+        { command: 'search', description: ru.bot.commands.search },
+        { command: 'matches', description: ru.bot.commands.matches },
+        { command: 'chats', description: ru.bot.commands.chats },
+        { command: 'premium', description: ru.bot.commands.premium },
+        { command: 'referral', description: ru.bot.commands.referral },
+        { command: 'settings', description: ru.bot.commands.settings },
+        { command: 'rules', description: ru.bot.commands.rules },
+        { command: 'help', description: ru.bot.commands.help },
+        { command: 'support', description: ru.bot.commands.support },
+        { command: 'paysupport', description: ru.bot.commands.paymentSupport },
+        { command: 'delete_me', description: ru.bot.commands.deleteAccount },
+      ])
+      .catch(() => undefined);
+  }
 
   void PROMO_CHAT_URL;
   return bot;

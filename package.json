@@ -14,6 +14,7 @@
   },
   "scripts": {
     "build": "corepack pnpm -r --if-present run build",
+    "build:cloudflare": "corepack pnpm --filter @rolemate/shared build && corepack pnpm --filter @rolemate/database-contracts build && corepack pnpm --filter @rolemate/miniapp build && corepack pnpm --filter @rolemate/bot-api build:cloudflare",
     "dev": "corepack pnpm -r --parallel --if-present run dev",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
@@ -26,15 +27,15 @@
     "verify": "powershell -ExecutionPolicy Bypass -File toolkit/verify.ps1"
   },
   "devDependencies": {
-    "@eslint/js": "^9.31.0",
     "@cloudflare/workers-types": "^5.20260722.1",
+    "@eslint/js": "^10.0.1",
     "@playwright/test": "^1.54.1",
     "@types/node": "^22.16.5",
-    "eslint": "^9.31.0",
-    "eslint-plugin-react-hooks": "^5.2.0",
+    "eslint": "^10.8.0",
+    "eslint-plugin-react-hooks": "^7.1.1",
     "globals": "^16.3.0",
     "prettier": "^3.6.2",
-    "sharp": "^0.34.3",
+    "sharp": "^0.35.3",
     "tsx": "^4.20.3",
     "turbo": "^2.5.5",
     "typescript": "^5.8.3",

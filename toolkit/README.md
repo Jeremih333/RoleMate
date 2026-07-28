@@ -14,6 +14,10 @@
   без `-Write` работает как безопасный отчёт.
 - `signed-worker-smoke.ps1` — выполняет HMAC-подписанный production smoke Data API,
   не раскрывая локальный секрет.
+- `test-cloudflare-runtime.ps1` — запускает full-stack Worker локально, проверяет
+  health, SPA, Telegram-аватар и security gates, затем завершает созданные процессы.
+- `configure-cloudflare-app.ps1` — в видимом защищённом prompt принимает bot token
+  и задаёт четыре production secret через Wrangler, не записывая значения.
 
 Все скрипты завершаются ненулевым кодом при обнаружении ошибки и подходят для
 локального запуска и CI.

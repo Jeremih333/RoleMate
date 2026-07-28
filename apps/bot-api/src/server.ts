@@ -21,6 +21,7 @@ import { DataApiError, DataApiClient } from './d1-client.js';
 import type { AppEnv } from './env.js';
 import { assertCsrf, createSession, getSession } from './session.js';
 import { TelegramStarsProvider } from './payments/telegram-stars.js';
+import { dispatchBroadcastBatch } from './broadcast.js';
 
 const authBodySchema = z.object({ initData: z.string().min(1).max(8_192) });
 const swipeBodySchema = z.object({
@@ -81,21 +82,39 @@ async function verifyTurnstile(secret: string, token: string, remoteIp?: string)
   return result.success === true;
 }
 
-export async function buildServer(env: AppEnv): Promise<FastifyInstance> {
+export interface ServerOptions {
+  serveMiniApp?: boolean;
+  startBroadcastDispatcher?: boolean;
+  dataApiFetch?: typeof fetch;
+  telegramFetch?: typeof fetch;
+  logger?: boolean;
+  apiDocs?: boolean;
+  syncBotCommands?: boolean;
+}
+
+export async function buildServer(
+  env: AppEnv,
+  options: ServerOptions = {},
+): Promise<FastifyInstance> {
+  const serveMiniApp = options.serveMiniApp ?? true;
+  const startBroadcastDispatcher = options.startBroadcastDispatcher ?? true;
   const app = Fastify({
-    logger: {
-      level: env.LOG_LEVEL,
-      redact: {
-        paths: [
-          'req.headers.authorization',
-          'req.headers.cookie',
-          'req.body.initData',
-          'req.body.token',
-          'res.headers["set-cookie"]',
-        ],
-        censor: '[REDACTED]',
-      },
-    },
+    logger:
+      options.logger === false
+        ? false
+        : {
+            level: env.LOG_LEVEL,
+            redact: {
+              paths: [
+                'req.headers.authorization',
+                'req.headers.cookie',
+                'req.body.initData',
+                'req.body.token',
+                'res.headers["set-cookie"]',
+              ],
+              censor: '[REDACTED]',
+            },
+          },
     bodyLimit: 256 * 1024,
     requestIdHeader: 'x-request-id',
     genReqId: () => crypto.randomUUID(),
@@ -105,8 +124,9 @@ export async function buildServer(env: AppEnv): Promise<FastifyInstance> {
     baseUrl: env.D1_WORKER_URL,
     serviceId: env.INTERNAL_SERVICE_ID,
     secret: env.INTERNAL_API_SECRET,
+    ...(options.dataApiFetch ? { fetchImpl: options.dataApiFetch } : {}),
   });
-  const bot = createBot(env, dataApi);
+  const bot = createBot(env, dataApi, options.telegramFetch, options.syncBotCommands);
   if (env.TELEGRAM_BOT_TOKEN) await bot.init();
   const stars = new TelegramStarsProvider(bot);
   let broadcastTimer: NodeJS.Timeout | undefined;
@@ -123,50 +143,18 @@ export async function buildServer(env: AppEnv): Promise<FastifyInstance> {
   });
 
   app.addHook('onReady', () => {
-    if (!env.TELEGRAM_BOT_TOKEN || !env.D1_WORKER_URL) return;
+    if (!startBroadcastDispatcher || !env.TELEGRAM_BOT_TOKEN || !env.D1_WORKER_URL) return;
     broadcastTimer = setInterval(() => {
       if (broadcastDispatching) return;
       broadcastDispatching = true;
-      void (async () => {
-        try {
-          const batch = await dataApi.execute<{
-            broadcastId: string;
-            jobId: string;
-            message: string;
-            deliveries: Array<{ deliveryId: string; telegramUserId: number }>;
-          } | null>('broadcasts.claimBatch', { limit: 30 });
-          if (!batch) return;
-          const results = [];
-          for (const delivery of batch.deliveries) {
-            try {
-              await bot.api.sendMessage(delivery.telegramUserId, batch.message, {
-                protect_content: true,
-              });
-              results.push({ deliveryId: delivery.deliveryId, status: 'sent' as const });
-            } catch (error) {
-              const message = error instanceof Error ? error.message : 'Telegram delivery failed';
-              results.push({
-                deliveryId: delivery.deliveryId,
-                status: 'failed' as const,
-                errorCode: error instanceof Error ? error.name.slice(0, 64) : 'DELIVERY_FAILED',
-                safeMessage: message.slice(0, 500),
-              });
-            }
-          }
-          await dataApi.execute('broadcasts.recordBatch', {
-            broadcastId: batch.broadcastId,
-            jobId: batch.jobId,
-            results,
-          });
-        } catch (error) {
-          app.log.error(
-            { error: error instanceof Error ? error.message : 'unknown' },
-            'broadcast dispatcher failed',
-          );
-        } finally {
-          broadcastDispatching = false;
-        }
-      })();
+      void dispatchBroadcastBatch(bot, dataApi, (error) => {
+        app.log.error(
+          { error: error instanceof Error ? error.message : 'unknown' },
+          'broadcast dispatcher failed',
+        );
+      }).finally(() => {
+        broadcastDispatching = false;
+      });
     }, 1_000);
     broadcastTimer.unref();
   });
@@ -223,13 +211,15 @@ export async function buildServer(env: AppEnv): Promise<FastifyInstance> {
       message: ru.api.rateLimit,
     }),
   });
-  await app.register(swagger, {
-    openapi: {
-      info: { title: `${env.BOT_NAME} API`, version: '0.1.0' },
-      servers: env.PUBLIC_BASE_URL ? [{ url: env.PUBLIC_BASE_URL }] : [],
-    },
-  });
-  await app.register(swaggerUi, { routePrefix: '/internal/docs' });
+  if (options.apiDocs !== false) {
+    await app.register(swagger, {
+      openapi: {
+        info: { title: `${env.BOT_NAME} API`, version: '0.1.0' },
+        servers: env.PUBLIC_BASE_URL ? [{ url: env.PUBLIC_BASE_URL }] : [],
+      },
+    });
+    await app.register(swaggerUi, { routePrefix: '/internal/docs' });
+  }
 
   const authenticate = async (request: FastifyRequest) => getSession(request, dataApi);
   const mutate = async (request: FastifyRequest) => {
@@ -819,9 +809,9 @@ export async function buildServer(env: AppEnv): Promise<FastifyInstance> {
       commitSha: env.COMMIT_SHA,
       environment: env.DEPLOYMENT_ENV,
       uptimeSeconds: Math.floor(process.uptime()),
-      northflank: {
-        service: process.env.NORTHFLANK_SERVICE_NAME ?? null,
-        project: process.env.NORTHFLANK_PROJECT_NAME ?? null,
+      runtime: {
+        provider: env.DEPLOYMENT_ENV === 'production' ? 'cloudflare-workers' : 'node',
+        service: process.env.CLOUDFLARE_WORKER_NAME ?? null,
       },
     };
   });
@@ -1033,19 +1023,25 @@ export async function buildServer(env: AppEnv): Promise<FastifyInstance> {
         ? error.status
         : error instanceof z.ZodError
           ? 400
-          : errorMessage === 'UNAUTHENTICATED'
-            ? 401
-            : errorMessage === 'INVALID_CSRF'
-              ? 403
-              : 500;
+          : errorMessage === 'INVALID_JSON'
+            ? 400
+            : errorMessage === 'BODY_TOO_LARGE'
+              ? 413
+              : errorMessage === 'UNAUTHENTICATED'
+                ? 401
+                : errorMessage === 'INVALID_CSRF'
+                  ? 403
+                  : 500;
     const code =
       error instanceof DataApiError
         ? error.code
         : error instanceof z.ZodError
           ? 'VALIDATION_ERROR'
-          : errorMessage === 'UNAUTHENTICATED' || errorMessage === 'INVALID_CSRF'
+          : errorMessage === 'INVALID_JSON' || errorMessage === 'BODY_TOO_LARGE'
             ? errorMessage
-            : 'INTERNAL_ERROR';
+            : errorMessage === 'UNAUTHENTICATED' || errorMessage === 'INVALID_CSRF'
+              ? errorMessage
+              : 'INTERNAL_ERROR';
     if (status >= 500) request.log.error({ err: error, requestId: request.id }, 'request failed');
     return reply.code(status).send({
       error: code,
@@ -1054,14 +1050,16 @@ export async function buildServer(env: AppEnv): Promise<FastifyInstance> {
     });
   });
 
-  const currentDir = path.dirname(fileURLToPath(import.meta.url));
-  const miniappRoot = path.resolve(currentDir, '../../miniapp/dist');
-  await app.register(staticFiles, {
-    root: miniappRoot,
-    wildcard: false,
-    decorateReply: false,
-  });
-  app.get('/*', async (_request, reply) => reply.sendFile('index.html', miniappRoot));
+  if (serveMiniApp) {
+    const currentDir = path.dirname(fileURLToPath(import.meta.url));
+    const miniappRoot = path.resolve(currentDir, '../../miniapp/dist');
+    await app.register(staticFiles, {
+      root: miniappRoot,
+      wildcard: false,
+      decorateReply: false,
+    });
+    app.get('/*', async (_request, reply) => reply.sendFile('index.html', miniappRoot));
+  }
 
   app.addHook('onClose', async () => {
     await bot.stop();

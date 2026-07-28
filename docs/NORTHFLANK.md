@@ -1,4 +1,8 @@
-# Northflank
+# Northflank (устаревший необязательный fallback)
+
+Production RoleMate перенесён на Cloudflare Workers, поэтому Northflank, карта и
+постоянный контейнер больше не требуются. Инструкция ниже сохранена только как
+исторический Docker fallback и не является частью актуального deploy.
 
 Создайте Combined Service из Git-репозитория и выберите корневой `Dockerfile`.
 

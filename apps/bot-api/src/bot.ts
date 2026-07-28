@@ -146,6 +146,7 @@ export function createBot(env: AppEnv, dataApi: DataApiClient): Bot {
       conversation_id: string;
       sender_user_id: string;
       destination_chat_id: number;
+      recipient_muted: number;
     }>('conversations.resolveRelay', {
       telegramUserId,
       ...(conversationId ? { conversationId } : {}),
@@ -164,6 +165,21 @@ export function createBot(env: AppEnv, dataApi: DataApiClient): Bot {
       { conversationId, replyChatId, replyMessageId, destinationChatId },
     );
     return mapping?.destination_message_id;
+  }
+
+  async function findConversation(userId: string, conversationId: string) {
+    const conversations = await dataApi.execute<
+      Array<{
+        id: string;
+        status: string;
+        is_muted: number;
+        other_user_id: string;
+      }>
+    >('conversations.list', { userId, limit: 100 });
+    const conversation = conversations.find((item) => item.id === conversationId);
+    if (!conversation)
+      throw new DataApiError('CONVERSATION_NOT_FOUND', 'Conversation not found', 404);
+    return conversation;
   }
 
   async function recordRelay(
@@ -437,12 +453,28 @@ export function createBot(env: AppEnv, dataApi: DataApiClient): Bot {
   });
   bot.callbackQuery(/^chat:([0-9a-f-]{36})$/, async (context) => {
     if (!context.from) return;
-    selectedChats.set(context.from.id, context.match?.[1] ?? '');
+    const conversationId = context.match?.[1] ?? '';
+    const user = await upsertUser(context, dataApi);
+    const conversation = await findConversation(user.userId, conversationId);
+    selectedChats.set(context.from.id, conversationId);
     await context.answerCallbackQuery(ru.bot.chatSelected);
     await context.reply(ru.bot.chatInstructions, {
       reply_markup: new InlineKeyboard()
-        .text(ru.bot.buttons.contactExchange, `contact:${context.match?.[1] ?? ''}`)
-        .row(),
+        .text(ru.bot.buttons.contactExchange, `contact:${conversationId}`)
+        .row()
+        .text(
+          conversation.is_muted ? ru.bot.buttons.unmuteChat : ru.bot.buttons.muteChat,
+          `chatctl:${conversation.is_muted ? 'unmute' : 'mute'}:${conversationId}`,
+        )
+        .text(
+          conversation.status === 'paused' ? ru.bot.buttons.resumeChat : ru.bot.buttons.pauseChat,
+          `chatctl:${conversation.status === 'paused' ? 'resume' : 'pause'}:${conversationId}`,
+        )
+        .row()
+        .text(ru.bot.buttons.closeChat, `chatclose:${conversationId}`)
+        .row()
+        .text(ru.bot.buttons.blockChat, `chatblock:${conversationId}`)
+        .text(ru.bot.buttons.reportChat, `chatreport:${conversationId}`),
     });
   });
   bot.callbackQuery(/^contact:([0-9a-f-]{36})$/, async (context) => {
@@ -465,6 +497,80 @@ export function createBot(env: AppEnv, dataApi: DataApiClient): Bot {
     } else {
       await context.reply(ru.bot.contactPending);
     }
+  });
+  bot.callbackQuery(/^chatctl:(mute|unmute|pause|resume):([0-9a-f-]{36})$/, async (context) => {
+    const user = await upsertUser(context, dataApi);
+    const action = context.match?.[1] as 'mute' | 'unmute' | 'pause' | 'resume';
+    await dataApi.execute('conversations.control', {
+      userId: user.userId,
+      conversationId: context.match?.[2] ?? '',
+      action,
+    });
+    const answer =
+      action === 'mute'
+        ? ru.bot.chatMuted
+        : action === 'unmute'
+          ? ru.bot.chatUnmuted
+          : action === 'pause'
+            ? ru.bot.chatPaused
+            : ru.bot.chatResumed;
+    await context.answerCallbackQuery(answer);
+    await context.editMessageReplyMarkup();
+    await context.reply(answer);
+  });
+  bot.callbackQuery(/^chatclose:([0-9a-f-]{36})$/, async (context) => {
+    const conversationId = context.match?.[1] ?? '';
+    await context.answerCallbackQuery();
+    await context.reply(ru.bot.chatCloseConfirm, {
+      reply_markup: new InlineKeyboard()
+        .text(ru.bot.buttons.confirmCloseChat, `chatcloseconfirm:${conversationId}`)
+        .row()
+        .text(ru.bot.buttons.continueChat, 'chatclosecancel'),
+    });
+  });
+  bot.callbackQuery(/^chatcloseconfirm:([0-9a-f-]{36})$/, async (context) => {
+    const user = await upsertUser(context, dataApi);
+    await dataApi.execute('conversations.control', {
+      userId: user.userId,
+      conversationId: context.match?.[1] ?? '',
+      action: 'close',
+    });
+    selectedChats.delete(context.from.id);
+    await context.answerCallbackQuery(ru.bot.chatClosed);
+    await context.editMessageText(ru.bot.chatClosed);
+  });
+  bot.callbackQuery('chatclosecancel', async (context) => {
+    await context.answerCallbackQuery(ru.bot.cancelled);
+    await context.editMessageReplyMarkup();
+  });
+  bot.callbackQuery(/^chatblock:([0-9a-f-]{36})$/, async (context) => {
+    const user = await upsertUser(context, dataApi);
+    const conversationId = context.match?.[1] ?? '';
+    const conversation = await findConversation(user.userId, conversationId);
+    await dataApi.execute('blocks.create', {
+      blockerUserId: user.userId,
+      blockedUserId: conversation.other_user_id,
+      reason: ru.bot.userChatActionReason,
+    });
+    selectedChats.delete(context.from.id);
+    await context.answerCallbackQuery(ru.bot.chatBlocked);
+    await context.editMessageReplyMarkup();
+    await context.reply(ru.bot.chatBlocked);
+  });
+  bot.callbackQuery(/^chatreport:([0-9a-f-]{36})$/, async (context) => {
+    const user = await upsertUser(context, dataApi);
+    const conversationId = context.match?.[1] ?? '';
+    const conversation = await findConversation(user.userId, conversationId);
+    await dataApi.execute('reports.create', {
+      reporterUserId: user.userId,
+      reportedUserId: conversation.other_user_id,
+      conversationId,
+      category: 'other',
+      description: ru.bot.userChatActionReason,
+      evidenceSnapshot: [],
+    });
+    await context.answerCallbackQuery(ru.bot.chatReported);
+    await context.reply(ru.bot.chatReported);
   });
   bot.callbackQuery('account:cancel', async (context) => {
     await context.answerCallbackQuery(ru.bot.cancelled);
@@ -581,6 +687,7 @@ export function createBot(env: AppEnv, dataApi: DataApiClient): Bot {
       );
       const delivered = await bot.api.sendMessage(target.destination_chat_id, text, {
         protect_content: true,
+        disable_notification: Boolean(target.recipient_muted),
         entities: [],
         ...(replyMessageId
           ? {
@@ -641,6 +748,7 @@ export function createBot(env: AppEnv, dataApi: DataApiClient): Bot {
           context.message.message_id,
           {
             protect_content: true,
+            disable_notification: Boolean(target.recipient_muted),
             ...(replyMessageId
               ? {
                   reply_parameters: {

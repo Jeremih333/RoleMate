@@ -4,6 +4,7 @@ import { ru } from '@rolemate/shared';
 import {
   AlertTriangle,
   Ban,
+  BellOff,
   Check,
   Copy,
   Crown,
@@ -11,8 +12,10 @@ import {
   Gift,
   Heart,
   MessageCircle,
+  PauseCircle,
   Save,
   ShieldCheck,
+  LogOut,
 } from 'lucide-react';
 import { api, type SettingsInput } from '../api.js';
 import { Button, Card, EmptyState, SectionTitle, Skeleton } from '../components/ui.js';
@@ -61,6 +64,13 @@ export function ChatsPage() {
   });
   const report = useMutation({ mutationFn: api.report });
   const reveal = useMutation({ mutationFn: api.requestContactReveal });
+  const control = useMutation({
+    mutationFn: (input: {
+      conversationId: string;
+      action: 'mute' | 'unmute' | 'pause' | 'resume' | 'close';
+    }) => api.controlConversation(input.conversationId, input.action),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['conversations'] }),
+  });
   if (chats.isLoading) return <Skeleton className="h-80" />;
   if (!chats.data?.length)
     return (
@@ -96,6 +106,46 @@ export function ChatsPage() {
               >
                 <ExternalLink className="h-4 w-4" /> {ru.miniApp.community.contactExchange}
               </Button>
+              <Button
+                variant="secondary"
+                onClick={() =>
+                  control.mutate({
+                    conversationId: chat.id,
+                    action: chat.is_muted ? 'unmute' : 'mute',
+                  })
+                }
+              >
+                <BellOff className="h-4 w-4" />{' '}
+                {chat.is_muted ? ru.miniApp.community.unmute : ru.miniApp.community.mute}
+              </Button>
+              {chat.status !== 'closed' ? (
+                <Button
+                  variant="secondary"
+                  onClick={() =>
+                    control.mutate({
+                      conversationId: chat.id,
+                      action: chat.status === 'paused' ? 'resume' : 'pause',
+                    })
+                  }
+                >
+                  <PauseCircle className="h-4 w-4" />{' '}
+                  {chat.status === 'paused'
+                    ? ru.miniApp.community.resumeChat
+                    : ru.miniApp.community.pauseChat}
+                </Button>
+              ) : null}
+              {chat.status !== 'closed' ? (
+                <Button
+                  variant="secondary"
+                  onClick={() => {
+                    if (window.confirm(ru.miniApp.community.closeChatConfirm)) {
+                      control.mutate({ conversationId: chat.id, action: 'close' });
+                    }
+                  }}
+                >
+                  <LogOut className="h-4 w-4" /> {ru.miniApp.community.closeChat}
+                </Button>
+              ) : null}
               <Button
                 variant="secondary"
                 onClick={() => {

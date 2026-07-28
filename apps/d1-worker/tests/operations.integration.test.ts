@@ -378,6 +378,43 @@ describe('D1 domain operations', () => {
       ),
     ).resolves.toMatchObject({ revealed: true });
 
+    await expect(
+      executeOperation(
+        env,
+        'conversations.control',
+        { userId: first, conversationId: conversation.id, action: 'mute' },
+        crypto.randomUUID(),
+      ),
+    ).resolves.toMatchObject({ muted: true });
+    await expect(
+      executeOperation(
+        env,
+        'conversations.resolveRelay',
+        { telegramUserId: 3002, conversationId: conversation.id },
+        crypto.randomUUID(),
+      ),
+    ).resolves.toMatchObject({ recipient_muted: 1 });
+    await executeOperation(
+      env,
+      'conversations.control',
+      { userId: first, conversationId: conversation.id, action: 'pause' },
+      crypto.randomUUID(),
+    );
+    await expect(
+      executeOperation(
+        env,
+        'conversations.resolveRelay',
+        { telegramUserId: 3001, conversationId: conversation.id },
+        crypto.randomUUID(),
+      ),
+    ).rejects.toMatchObject<ApiError>({ code: 'ACTIVE_CHAT_NOT_FOUND' });
+    await executeOperation(
+      env,
+      'conversations.control',
+      { userId: second, conversationId: conversation.id, action: 'resume' },
+      crypto.randomUUID(),
+    );
+
     const report = (await executeOperation(
       env,
       'reports.create',

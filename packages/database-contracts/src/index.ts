@@ -117,6 +117,11 @@ export const workerOperations = {
     userId: z.string().uuid(),
     conversationId: z.string().uuid(),
   }),
+  'conversations.control': z.object({
+    userId: z.string().uuid(),
+    conversationId: z.string().uuid(),
+    action: z.enum(['mute', 'unmute', 'pause', 'resume', 'close']),
+  }),
   'blocks.create': z.object({
     blockerUserId: z.string().uuid(),
     blockedUserId: z.string().uuid(),

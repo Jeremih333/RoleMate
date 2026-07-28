@@ -383,6 +383,18 @@ export async function buildServer(env: AppEnv): Promise<FastifyInstance> {
       conversationId: params.conversationId,
     });
   });
+  app.post('/api/conversations/:conversationId/control', async (request) => {
+    const session = await mutate(request);
+    const params = z.object({ conversationId: z.string().uuid() }).parse(request.params);
+    const body = z
+      .object({ action: z.enum(['mute', 'unmute', 'pause', 'resume', 'close']) })
+      .parse(request.body);
+    return dataApi.execute('conversations.control', {
+      userId: session.userId,
+      conversationId: params.conversationId,
+      action: body.action,
+    });
+  });
   app.get('/api/settings', async (request) => {
     const session = await authenticate(request);
     return dataApi.execute('settings.get', { userId: session.userId });

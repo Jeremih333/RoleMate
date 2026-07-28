@@ -447,6 +447,7 @@ const handlers: { [K in WorkerOperation]: Handler<K> } = {
   'conversations.list': async (env, input) => {
     const rows = await env.DB.prepare(
       `SELECT c.id, c.status, c.contact_reveal_status, c.last_message_at,
+              own_cp.is_muted,
               other_cp.anonymous_alias, other.id AS other_user_id,
               p.display_name, p.short_headline
        FROM conversations c
@@ -467,7 +468,8 @@ const handlers: { [K in WorkerOperation]: Handler<K> } = {
   'conversations.resolveRelay': async (env, input) => {
     const relay = await env.DB.prepare(
       `SELECT c.id AS conversation_id, sender.id AS sender_user_id,
-              recipient.telegram_user_id AS destination_chat_id
+              recipient.telegram_user_id AS destination_chat_id,
+              other_cp.is_muted AS recipient_muted
        FROM users sender
        JOIN conversation_participants own_cp ON own_cp.user_id = sender.id
        JOIN conversations c ON c.id = own_cp.conversation_id
@@ -489,6 +491,7 @@ const handlers: { [K in WorkerOperation]: Handler<K> } = {
         conversation_id: string;
         sender_user_id: string;
         destination_chat_id: number;
+        recipient_muted: number;
       }>();
     if (!relay) throw new ApiError(404, 'ACTIVE_CHAT_NOT_FOUND', 'Active chat not found');
     return relay;
@@ -586,6 +589,55 @@ const handlers: { [K in WorkerOperation]: Handler<K> } = {
         username: row.telegram_username ? `@${String(row.telegram_username)}` : null,
       })),
     };
+  },
+  'conversations.control': async (env, input) => {
+    const participant = await env.DB.prepare(
+      `SELECT c.status, cp.is_muted FROM conversations c
+       JOIN conversation_participants cp ON cp.conversation_id = c.id
+       WHERE c.id = ?1 AND cp.user_id = ?2 AND cp.left_at IS NULL`,
+    )
+      .bind(input.conversationId, input.userId)
+      .first<{ status: string; is_muted: number }>();
+    if (!participant) throw new ApiError(404, 'CONVERSATION_NOT_FOUND', 'Conversation not found');
+
+    if (input.action === 'mute' || input.action === 'unmute') {
+      await env.DB.prepare(
+        `UPDATE conversation_participants SET is_muted = ?3
+         WHERE conversation_id = ?1 AND user_id = ?2`,
+      )
+        .bind(input.conversationId, input.userId, input.action === 'mute' ? 1 : 0)
+        .run();
+      return { status: participant.status, muted: input.action === 'mute' };
+    }
+    if (input.action === 'resume' && participant.status === 'closed') {
+      throw new ApiError(
+        409,
+        'CONVERSATION_CLOSED',
+        'Closed conversation cannot be restored automatically',
+      );
+    }
+    const nextStatus =
+      input.action === 'pause' ? 'paused' : input.action === 'resume' ? 'active' : 'closed';
+    await env.DB.batch([
+      env.DB.prepare(
+        `UPDATE conversations SET status = ?3,
+           closed_at = CASE WHEN ?3 = 'closed' THEN CURRENT_TIMESTAMP ELSE closed_at END
+         WHERE id = ?1 AND EXISTS (
+           SELECT 1 FROM conversation_participants
+           WHERE conversation_id = ?1 AND user_id = ?2 AND left_at IS NULL
+         )`,
+      ).bind(input.conversationId, input.userId, nextStatus),
+      ...(input.action === 'close'
+        ? [
+            env.DB.prepare(
+              `UPDATE matches SET status = 'closed', closed_at = CURRENT_TIMESTAMP,
+                 closed_by_user_id = ?2, close_reason = 'user_request'
+               WHERE id = (SELECT match_id FROM conversations WHERE id = ?1)`,
+            ).bind(input.conversationId, input.userId),
+          ]
+        : []),
+    ]);
+    return { status: nextStatus, muted: Boolean(participant.is_muted) };
   },
   'blocks.create': async (env, input) => {
     await env.DB.batch([

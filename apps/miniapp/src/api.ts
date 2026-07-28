@@ -92,6 +92,14 @@ export const api = {
       `/conversations/${conversationId}/contact-reveal`,
       { method: 'POST', body: '{}' },
     ),
+  controlConversation: (
+    conversationId: string,
+    action: 'mute' | 'unmute' | 'pause' | 'resume' | 'close',
+  ) =>
+    request<{ status: string; muted: boolean }>(`/conversations/${conversationId}/control`, {
+      method: 'POST',
+      body: JSON.stringify({ action }),
+    }),
   settings: () => request<UserSettings>('/settings'),
   saveSettings: (settings: SettingsInput) =>
     request<{ updated: true }>('/settings', {
@@ -239,6 +247,7 @@ export interface Conversation {
   display_name?: string;
   short_headline?: string;
   contact_reveal_status: string;
+  is_muted: number;
   last_message_at?: string;
 }
 

@@ -36,4 +36,16 @@ describe('security architecture', () => {
     const adapter = readFileSync(path.join(root, 'apps/bot-api/src/payments/yookassa.ts'), 'utf8');
     expect(adapter).toContain('Telegram digital Premium cannot be sold through YooKassa');
   });
+
+  it('keeps Russian user-facing copy centralized', () => {
+    const directories = [path.join(root, 'apps/bot-api/src'), path.join(root, 'apps/miniapp/src')];
+    const violations = directories.flatMap((directory) =>
+      sourceFiles(directory)
+        .filter((file) => /[А-Яа-яЁё]/.test(readFileSync(file, 'utf8')))
+        .map((file) => path.relative(root, file)),
+    );
+    expect(violations).toEqual([]);
+    const locale = readFileSync(path.join(root, 'packages/shared/src/locales/ru.ts'), 'utf8');
+    expect(locale).toContain('export const ru');
+  });
 });

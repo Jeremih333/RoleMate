@@ -2,14 +2,15 @@ import type { ReactNode } from 'react';
 import { Heart, Home, MessageCircle, Search, Shield, UserRound } from 'lucide-react';
 import { Link, useLocation } from 'wouter';
 import { motion } from 'framer-motion';
+import { ru } from '@rolemate/shared';
 import { useUserStore } from '../store.js';
 
 const navigation = [
-  { to: '/', label: 'Главная', icon: Home },
-  { to: '/search', label: 'Поиск', icon: Search },
-  { to: '/matches', label: 'Симпатии', icon: Heart },
-  { to: '/chats', label: 'Чаты', icon: MessageCircle },
-  { to: '/profile', label: 'Профиль', icon: UserRound },
+  { to: '/', label: ru.miniApp.navigation.home, icon: Home },
+  { to: '/search', label: ru.miniApp.navigation.search, icon: Search },
+  { to: '/matches', label: ru.miniApp.navigation.matches, icon: Heart },
+  { to: '/chats', label: ru.miniApp.navigation.chats, icon: MessageCircle },
+  { to: '/profile', label: ru.miniApp.navigation.profile, icon: UserRound },
 ];
 
 export function Layout({ children }: { children: ReactNode }) {
@@ -22,13 +23,13 @@ export function Layout({ children }: { children: ReactNode }) {
           <span className="brand-mark">R</span>
           <span>
             <strong>RoleMate</strong>
-            <small>твоя следующая история</small>
+            <small>{ru.miniApp.navigation.tagline}</small>
           </span>
         </Link>
         {isAdmin ? (
           <Link href="/admin" className="admin-chip">
             <Shield className="h-4 w-4" />
-            Управление
+            {ru.miniApp.navigation.admin}
           </Link>
         ) : null}
       </header>
@@ -40,7 +41,7 @@ export function Layout({ children }: { children: ReactNode }) {
       >
         {children}
       </motion.main>
-      <nav className="bottom-nav" aria-label="Основная навигация">
+      <nav className="bottom-nav" aria-label={ru.miniApp.navigation.aria}>
         {navigation.map(({ to, label, icon: Icon }) => (
           <Link key={to} href={to}>
             <span

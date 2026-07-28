@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { ru } from '@rolemate/shared';
 
 const booleanString = z
   .enum(['true', 'false'])
@@ -12,7 +13,7 @@ export const envSchema = z
     PORT: z.coerce.number().int().positive().default(3000),
     LOG_LEVEL: z.string().default('info'),
     BOT_NAME: z.string().default('RoleMate'),
-    BOT_SHORT_DESCRIPTION: z.string().default('Анонимный поиск со-ролевиков'),
+    BOT_SHORT_DESCRIPTION: z.string().default(ru.api.shortDescription),
     BOT_USERNAME: z.string().default(''),
     MINI_APP_URL: z.string().url().or(z.literal('')).default(''),
     PUBLIC_BASE_URL: z.string().url().or(z.literal('')).default(''),

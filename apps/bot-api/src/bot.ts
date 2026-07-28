@@ -1,6 +1,5 @@
 import { Bot, InlineKeyboard, Keyboard, type Context } from 'grammy';
 import {
-  FULL_FOOTER,
   OWNER_TELEGRAM_ID,
   PROMO_CHAT_URL,
   STARS_SUBSCRIPTION_PERIOD_SECONDS,
@@ -15,35 +14,35 @@ function mainKeyboard(env: AppEnv, telegramUserId: number): Keyboard {
   const keyboard = new Keyboard();
   if (env.MINI_APP_URL) {
     keyboard
-      .webApp('🔎 Найти со-ролевика', `${env.MINI_APP_URL}/search`)
-      .webApp('👤 Моя анкета', `${env.MINI_APP_URL}/profile`)
+      .webApp(ru.bot.menu.search, `${env.MINI_APP_URL}/search`)
+      .webApp(ru.bot.menu.profile, `${env.MINI_APP_URL}/profile`)
       .row()
-      .webApp('💌 Симпатии', `${env.MINI_APP_URL}/matches`)
-      .webApp('💬 Анонимные чаты', `${env.MINI_APP_URL}/chats`)
+      .webApp(ru.bot.menu.matches, `${env.MINI_APP_URL}/matches`)
+      .webApp(ru.bot.menu.chats, `${env.MINI_APP_URL}/chats`)
       .row()
-      .webApp('⭐ Premium', `${env.MINI_APP_URL}/premium`)
-      .webApp('🎁 Пригласить друзей', `${env.MINI_APP_URL}/referrals`)
+      .webApp(ru.bot.menu.premium, `${env.MINI_APP_URL}/premium`)
+      .webApp(ru.bot.menu.referrals, `${env.MINI_APP_URL}/referrals`)
       .row()
-      .webApp('⚙️ Настройки', `${env.MINI_APP_URL}/settings`)
-      .text('ℹ️ Помощь')
+      .webApp(ru.bot.menu.settings, `${env.MINI_APP_URL}/settings`)
+      .text(ru.bot.menu.help)
       .row();
   } else {
     keyboard
-      .text('🔎 Найти со-ролевика')
-      .text('👤 Моя анкета')
+      .text(ru.bot.menu.search)
+      .text(ru.bot.menu.profile)
       .row()
-      .text('💌 Симпатии')
-      .text('💬 Анонимные чаты')
+      .text(ru.bot.menu.matches)
+      .text(ru.bot.menu.chats)
       .row()
-      .text('⭐ Premium')
-      .text('🎁 Пригласить друзей')
+      .text(ru.bot.menu.premium)
+      .text(ru.bot.menu.referrals)
       .row()
-      .text('⚙️ Настройки')
-      .text('ℹ️ Помощь')
+      .text(ru.bot.menu.settings)
+      .text(ru.bot.menu.help)
       .row();
   }
   if (telegramUserId === OWNER_TELEGRAM_ID && env.MINI_APP_URL) {
-    keyboard.webApp('🛡 Управление', `${env.MINI_APP_URL}/admin`);
+    keyboard.webApp(ru.bot.menu.admin, `${env.MINI_APP_URL}/admin`);
   }
   return keyboard.resized().persistent();
 }
@@ -137,10 +136,7 @@ export function createBot(env: AppEnv, dataApi: DataApiClient): Bot {
     for (const choice of choices) {
       keyboard.text(String(choice), `captcha:${challenge.challengeId}:${choice}`);
     }
-    await context.reply(
-      `Пройди короткую проверку, чтобы продолжить пользоваться ботом. Это помогает защищать участников от спама и накрутки.\n\nСколько будет ${left} + ${right}?`,
-      { reply_markup: keyboard },
-    );
+    await context.reply(ru.bot.captchaQuestion(left, right), { reply_markup: keyboard });
   }
 
   bot.catch(({ error, ctx }) => {
@@ -166,18 +162,18 @@ export function createBot(env: AppEnv, dataApi: DataApiClient): Bot {
       return;
     }
     const buttons = new InlineKeyboard()
-      .text('🚀 Начать', 'onboarding:start')
+      .text(ru.bot.buttons.start, 'onboarding:start')
       .row()
-      .text('📖 Как это работает', 'help')
-      .text('📜 Правила', 'rules')
+      .text(ru.bot.buttons.howItWorks, 'help')
+      .text(ru.bot.buttons.rules, 'rules')
       .row()
-      .url('🆘 Поддержка', env.SUPPORT_URL);
+      .url(ru.bot.buttons.support, env.SUPPORT_URL);
     await context.reply(ru.welcome, { reply_markup: buttons });
   });
 
   bot.command('menu', async (context) => {
     await upsertUser(context, dataApi);
-    await context.reply('Главное меню RoleMate', {
+    await context.reply(ru.bot.mainMenu, {
       reply_markup: mainKeyboard(env, context.from?.id ?? 0),
     });
   });
@@ -186,9 +182,9 @@ export function createBot(env: AppEnv, dataApi: DataApiClient): Bot {
   bot.command(['support', 'paysupport'], (context) => context.reply(ru.support));
   bot.command('profile', async (context) => {
     const keyboard = env.MINI_APP_URL
-      ? new InlineKeyboard().webApp('👤 Открыть анкету', `${env.MINI_APP_URL}/profile`)
+      ? new InlineKeyboard().webApp(ru.bot.buttons.openProfile, `${env.MINI_APP_URL}/profile`)
       : undefined;
-    await context.reply(`Создай или измени подробную анкету в мастере.\n\n${FULL_FOOTER}`, {
+    await context.reply(ru.bot.profileEditor, {
       ...(keyboard ? { reply_markup: keyboard } : {}),
     });
   });
@@ -208,11 +204,11 @@ export function createBot(env: AppEnv, dataApi: DataApiClient): Bot {
       return;
     }
     await context.reply(
-      `✨ ${profile.display_name}\n${profile.short_headline}\n\nСовместимость: ${profile.compatibility}%`,
+      ru.bot.searchCard(profile.display_name, profile.short_headline, profile.compatibility),
       {
         reply_markup: new InlineKeyboard()
-          .text('❌ Пропустить', `swipe:skip:${profile.user_id}`)
-          .text('❤️ Нравится', `swipe:like:${profile.user_id}`),
+          .text(ru.bot.buttons.skip, `swipe:skip:${profile.user_id}`)
+          .text(ru.bot.buttons.like, `swipe:like:${profile.user_id}`),
       },
     );
   });
@@ -222,16 +218,16 @@ export function createBot(env: AppEnv, dataApi: DataApiClient): Bot {
       Array<{ display_name?: string; short_headline?: string; conversation_id: string }>
     >('matches.list', { userId: user.userId, limit: 20 });
     if (!matches.length) {
-      await context.reply('Взаимных симпатий пока нет. Продолжай поиск через /search.');
+      await context.reply(ru.bot.noMatches);
       return;
     }
     const keyboard = new InlineKeyboard();
     for (const match of matches) {
       keyboard
-        .text(`💌 ${match.display_name ?? 'Со-ролевик'}`, `chat:${match.conversation_id}`)
+        .text(`💌 ${match.display_name ?? ru.bot.roleplayer}`, `chat:${match.conversation_id}`)
         .row();
     }
-    await context.reply('Твои взаимные симпатии:', { reply_markup: keyboard });
+    await context.reply(ru.bot.matchesTitle, { reply_markup: keyboard });
   });
   bot.command('chats', async (context) => {
     const user = await upsertUser(context, dataApi);
@@ -240,14 +236,14 @@ export function createBot(env: AppEnv, dataApi: DataApiClient): Bot {
       { userId: user.userId, limit: 20 },
     );
     if (!chats.length) {
-      await context.reply('Активных анонимных чатов пока нет.');
+      await context.reply(ru.bot.noChats);
       return;
     }
     const keyboard = new InlineKeyboard();
     for (const chat of chats) {
       keyboard.text(`💬 ${chat.anonymous_alias}`, `chat:${chat.id}`).row();
     }
-    await context.reply('Выбери чат. Следующие сообщения будут отправлены в него анонимно:', {
+    await context.reply(ru.bot.selectChat, {
       reply_markup: keyboard,
     });
   });
@@ -258,7 +254,7 @@ export function createBot(env: AppEnv, dataApi: DataApiClient): Bot {
     const keyboard = new InlineKeyboard();
     for (const product of products)
       keyboard.text(`${product.name} · ${product.stars_amount} ⭐`, `buy:${product.id}`).row();
-    await context.reply(`Выбери тариф Premium.\n\n${FULL_FOOTER}`, { reply_markup: keyboard });
+    await context.reply(ru.bot.premiumSelect, { reply_markup: keyboard });
   });
   bot.command('referral', async (context) => {
     const user = await upsertUser(context, dataApi);
@@ -269,26 +265,23 @@ export function createBot(env: AppEnv, dataApi: DataApiClient): Bot {
         botUsername: env.BOT_USERNAME,
       },
     );
-    await context.reply(
-      `Приглашай новых участников и получай Premium.\n\nЗа каждого нового пользователя, который завершит регистрацию и создаст анкету, ты получишь 1 день Premium.\n\nТвоя ссылка:\n${summary.link}\n\nНачислено дней: ${summary.rewardDays}\n\nПри поддержке: @piarchaticksss`,
-      { reply_markup: new InlineKeyboard().switchInline('Поделиться', summary.link) },
-    );
+    await context.reply(ru.bot.referral(summary.link, summary.rewardDays), {
+      reply_markup: new InlineKeyboard().switchInline(ru.bot.buttons.share, summary.link),
+    });
   });
-  bot.command('settings', (context) =>
-    context.reply(`Настройки безопасности и уведомлений доступны в Mini App.\n\n${FULL_FOOTER}`),
-  );
+  bot.command('settings', (context) => context.reply(ru.bot.settings));
   bot.command('delete_me', (context) =>
-    context.reply('Удалить аккаунт и пользовательский контент?', {
+    context.reply(ru.bot.deleteConfirm, {
       reply_markup: new InlineKeyboard()
-        .text('Удалить безвозвратно', 'account:delete')
-        .text('Отмена', 'account:cancel'),
+        .text(ru.bot.buttons.deleteForever, 'account:delete')
+        .text(ru.bot.buttons.cancel, 'account:cancel'),
     }),
   );
   bot.command('admin', async (context) => {
     if (context.from?.id !== OWNER_TELEGRAM_ID) return;
     if (!env.MINI_APP_URL) return;
-    await context.reply('Панель управления', {
-      reply_markup: new InlineKeyboard().webApp('🛡 Управление', `${env.MINI_APP_URL}/admin`),
+    await context.reply(ru.bot.adminPanel, {
+      reply_markup: new InlineKeyboard().webApp(ru.bot.menu.admin, `${env.MINI_APP_URL}/admin`),
     });
   });
 
@@ -302,33 +295,33 @@ export function createBot(env: AppEnv, dataApi: DataApiClient): Bot {
   });
   bot.callbackQuery('onboarding:start', async (context) => {
     await context.answerCallbackQuery();
-    await context.reply('Выбери возрастную категорию:', {
+    await context.reply(ru.bot.age.prompt, {
       reply_markup: new InlineKeyboard()
-        .text('До 16 лет', 'age:under_16')
+        .text(ru.bot.age.under16, 'age:under_16')
         .row()
-        .text('16–17 лет', 'age:16_17')
+        .text(ru.bot.age.from16to17, 'age:16_17')
         .row()
-        .text('18–20 лет', 'age:18_20')
+        .text(ru.bot.age.from18to20, 'age:18_20')
         .row()
-        .text('21–25 лет', 'age:21_25')
+        .text(ru.bot.age.from21to25, 'age:21_25')
         .row()
-        .text('26 лет и старше', 'age:26_plus'),
+        .text(ru.bot.age.over26, 'age:26_plus'),
     });
   });
   bot.callbackQuery(/^age:(.+)$/, async (context) => {
     const user = await upsertUser(context, dataApi);
     const ageGroup = context.match?.[1] as 'under_16' | '16_17' | '18_20' | '21_25' | '26_plus';
     await dataApi.execute('users.acceptRules', { userId: user.userId, ageGroup });
-    await context.answerCallbackQuery('Возрастная категория сохранена');
+    await context.answerCallbackQuery(ru.bot.age.saved);
     const keyboard = env.MINI_APP_URL
-      ? new InlineKeyboard().webApp('Создать анкету', `${env.MINI_APP_URL}/profile/edit`)
+      ? new InlineKeyboard().webApp(
+          ru.bot.buttons.createProfile,
+          `${env.MINI_APP_URL}/profile/edit`,
+        )
       : undefined;
-    await context.reply(
-      `${ru.rules}\n\nПродолжая, ты принимаешь правила и политику конфиденциальности.`,
-      {
-        ...(keyboard ? { reply_markup: keyboard } : {}),
-      },
-    );
+    await context.reply(`${ru.rules}\n\n${ru.bot.rulesAcceptance}`, {
+      ...(keyboard ? { reply_markup: keyboard } : {}),
+    });
   });
   bot.callbackQuery(/^buy:(.+)$/, async (context) => {
     const productId = context.match?.[1] ?? '';
@@ -369,24 +362,19 @@ export function createBot(env: AppEnv, dataApi: DataApiClient): Bot {
       source: 'bot',
       idempotencyKey: `bot:${context.update.update_id}:${targetUserId}`,
     });
-    await context.answerCallbackQuery(
-      result.matched ? 'Это взаимно! Открыт анонимный чат.' : 'Готово',
-    );
+    await context.answerCallbackQuery(result.matched ? ru.bot.swipeMatched : ru.bot.done);
     await context.editMessageReplyMarkup();
     if (result.matched) await context.reply(ru.match);
   });
   bot.callbackQuery(/^chat:([0-9a-f-]{36})$/, async (context) => {
     if (!context.from) return;
     selectedChats.set(context.from.id, context.match?.[1] ?? '');
-    await context.answerCallbackQuery('Чат выбран');
-    await context.reply(
-      'Чат выбран. Отправляй текст, фото, GIF, стикеры, voice, video или документы — бот доставит их без ссылки на твой профиль.',
-      {
-        reply_markup: new InlineKeyboard()
-          .text('🤝 Предложить обмен контактами', `contact:${context.match?.[1] ?? ''}`)
-          .row(),
-      },
-    );
+    await context.answerCallbackQuery(ru.bot.chatSelected);
+    await context.reply(ru.bot.chatInstructions, {
+      reply_markup: new InlineKeyboard()
+        .text(ru.bot.buttons.contactExchange, `contact:${context.match?.[1] ?? ''}`)
+        .row(),
+    });
   });
   bot.callbackQuery(/^contact:([0-9a-f-]{36})$/, async (context) => {
     const user = await upsertUser(context, dataApi);
@@ -397,28 +385,28 @@ export function createBot(env: AppEnv, dataApi: DataApiClient): Bot {
       userId: user.userId,
       conversationId: context.match?.[1] ?? '',
     });
-    await context.answerCallbackQuery(result.revealed ? 'Контакты открыты' : 'Запрос отправлен');
+    await context.answerCallbackQuery(
+      result.revealed ? ru.bot.contactsOpened : ru.bot.contactRequestSent,
+    );
     if (result.revealed) {
       const other = result.contacts?.find((contact) => contact.userId !== user.userId);
       await context.reply(
-        other?.username
-          ? `Оба участника согласились. Контакт собеседника: ${other.username}`
-          : 'Оба участника согласились, но у собеседника не указан username.',
+        other?.username ? ru.bot.contactRevealed(other.username) : ru.bot.contactMissingUsername,
       );
     } else {
-      await context.reply('Запрос отправлен. Контакт откроется только после взаимного согласия.');
+      await context.reply(ru.bot.contactPending);
     }
   });
   bot.callbackQuery('account:cancel', async (context) => {
-    await context.answerCallbackQuery('Отменено');
+    await context.answerCallbackQuery(ru.bot.cancelled);
     await context.editMessageReplyMarkup();
   });
   bot.callbackQuery('account:delete', async (context) => {
     const user = await upsertUser(context, dataApi);
     await dataApi.execute('users.delete', { userId: user.userId });
     selectedChats.delete(context.from.id);
-    await context.answerCallbackQuery('Аккаунт удалён');
-    await context.editMessageText('Аккаунт и пользовательский контент удалены.');
+    await context.answerCallbackQuery(ru.bot.accountDeleted);
+    await context.editMessageText(ru.bot.accountDeletedFull);
   });
   bot.callbackQuery(/^captcha:([0-9a-f-]{36}):(\d+)$/, async (context) => {
     const user = await upsertUser(context, dataApi);
@@ -439,12 +427,12 @@ export function createBot(env: AppEnv, dataApi: DataApiClient): Bot {
         scoreDelta: -50,
         metadata: { challengeId },
       });
-      await context.answerCallbackQuery('Проверка пройдена');
-      await context.editMessageText('Проверка пройдена. Открой /menu, чтобы продолжить.');
+      await context.answerCallbackQuery(ru.bot.captchaPassed);
+      await context.editMessageText(ru.bot.captchaContinue);
       return;
     }
     await context.answerCallbackQuery({
-      text: `Неверно. Осталось попыток: ${result.attemptsRemaining}`,
+      text: ru.bot.captchaWrong(result.attemptsRemaining),
       show_alert: true,
     });
   });
@@ -493,17 +481,17 @@ export function createBot(env: AppEnv, dataApi: DataApiClient): Bot {
   bot.on('message:text', async (context) => {
     const text = context.message.text;
     const menuMap: Record<string, string> = {
-      '🔎 Найти со-ролевика': '/search',
-      '👤 Моя анкета': '/profile',
-      '💌 Симпатии': '/matches',
-      '💬 Анонимные чаты': '/chats',
-      '⭐ Premium': '/premium',
-      '🎁 Пригласить друзей': '/referral',
-      '⚙️ Настройки': '/settings',
-      'ℹ️ Помощь': '/help',
+      [ru.bot.menu.search]: '/search',
+      [ru.bot.menu.profile]: '/profile',
+      [ru.bot.menu.matches]: '/matches',
+      [ru.bot.menu.chats]: '/chats',
+      [ru.bot.menu.premium]: '/premium',
+      [ru.bot.menu.referrals]: '/referral',
+      [ru.bot.menu.settings]: '/settings',
+      [ru.bot.menu.help]: '/help',
     };
     if (text in menuMap) {
-      await context.reply(`Используй команду ${menuMap[text]}`);
+      await context.reply(ru.bot.useCommand(menuMap[text]!));
       return;
     }
     if (containsContact(text)) {
@@ -511,7 +499,7 @@ export function createBot(env: AppEnv, dataApi: DataApiClient): Bot {
       return;
     }
     if (!context.from || !relayAllowed(context.from.id)) {
-      await context.reply('Слишком много сообщений. Подожди минуту и попробуй снова.');
+      await context.reply(ru.bot.relayRateLimit);
       return;
     }
     try {
@@ -542,7 +530,7 @@ export function createBot(env: AppEnv, dataApi: DataApiClient): Bot {
       );
     } catch (error) {
       if (error instanceof DataApiError && error.code === 'ACTIVE_CHAT_NOT_FOUND') {
-        await context.reply('Сначала выбери активный анонимный чат через /chats.');
+        await context.reply(ru.bot.chooseChatFirst);
         return;
       }
       throw error;
@@ -561,7 +549,7 @@ export function createBot(env: AppEnv, dataApi: DataApiClient): Bot {
     ],
     async (context) => {
       if (!context.from || !relayAllowed(context.from.id)) {
-        await context.reply('Слишком много сообщений. Подожди минуту и попробуй снова.');
+        await context.reply(ru.bot.relayRateLimit);
         return;
       }
       const caption = 'caption' in context.message ? context.message.caption : undefined;
@@ -610,7 +598,7 @@ export function createBot(env: AppEnv, dataApi: DataApiClient): Bot {
         );
       } catch (error) {
         if (error instanceof DataApiError && error.code === 'ACTIVE_CHAT_NOT_FOUND') {
-          await context.reply('Сначала выбери активный анонимный чат через /chats.');
+          await context.reply(ru.bot.chooseChatFirst);
           return;
         }
         throw error;
@@ -620,20 +608,20 @@ export function createBot(env: AppEnv, dataApi: DataApiClient): Bot {
 
   bot.api
     .setMyCommands([
-      { command: 'start', description: 'Запустить бота' },
-      { command: 'menu', description: 'Главное меню' },
-      { command: 'profile', description: 'Моя анкета' },
-      { command: 'search', description: 'Найти со-ролевика' },
-      { command: 'matches', description: 'Взаимные симпатии' },
-      { command: 'chats', description: 'Анонимные чаты' },
-      { command: 'premium', description: 'Premium' },
-      { command: 'referral', description: 'Пригласить друзей' },
-      { command: 'settings', description: 'Настройки' },
-      { command: 'rules', description: 'Правила' },
-      { command: 'help', description: 'Помощь' },
-      { command: 'support', description: 'Поддержка' },
-      { command: 'paysupport', description: 'Поддержка по оплате' },
-      { command: 'delete_me', description: 'Удалить аккаунт' },
+      { command: 'start', description: ru.bot.commands.start },
+      { command: 'menu', description: ru.bot.commands.menu },
+      { command: 'profile', description: ru.bot.commands.profile },
+      { command: 'search', description: ru.bot.commands.search },
+      { command: 'matches', description: ru.bot.commands.matches },
+      { command: 'chats', description: ru.bot.commands.chats },
+      { command: 'premium', description: ru.bot.commands.premium },
+      { command: 'referral', description: ru.bot.commands.referral },
+      { command: 'settings', description: ru.bot.commands.settings },
+      { command: 'rules', description: ru.bot.commands.rules },
+      { command: 'help', description: ru.bot.commands.help },
+      { command: 'support', description: ru.bot.commands.support },
+      { command: 'paysupport', description: ru.bot.commands.paymentSupport },
+      { command: 'delete_me', description: ru.bot.commands.deleteAccount },
     ])
     .catch(() => undefined);
 

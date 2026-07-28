@@ -138,6 +138,24 @@ async function upsert(id: number): Promise<string> {
   return result.userId;
 }
 
+async function onboard(id: number): Promise<string> {
+  const userId = await upsert(id);
+  await executeOperation(
+    env,
+    'users.acceptRules',
+    { userId, ageGroup: '21_25' },
+    crypto.randomUUID(),
+  );
+  await executeOperation(env, 'profiles.upsert', { userId, profile }, crypto.randomUUID());
+  await executeOperation(
+    env,
+    'users.setSearchEnabled',
+    { userId, enabled: true },
+    crypto.randomUUID(),
+  );
+  return userId;
+}
+
 describe('D1 domain operations', () => {
   it('completes onboarding and keeps search/profile state consistent', async () => {
     const userId = await upsert(2001);
@@ -214,5 +232,217 @@ describe('D1 domain operations', () => {
     await expect(
       executeOperation(env, 'admin.dashboard', { adminUserId: adminId }, crypto.randomUUID()),
     ).resolves.toMatchObject({ users: 2 });
+  });
+
+  it('creates a match, mutual contact reveal, report queue, and closes chat on block', async () => {
+    const first = await onboard(3001);
+    const second = await onboard(3002);
+    await executeOperation(
+      env,
+      'swipes.create',
+      {
+        userId: first,
+        targetUserId: second,
+        action: 'like',
+        source: 'miniapp',
+        idempotencyKey: 'swipe-first-00000001',
+      },
+      crypto.randomUUID(),
+    );
+    const match = (await executeOperation(
+      env,
+      'swipes.create',
+      {
+        userId: second,
+        targetUserId: first,
+        action: 'like',
+        source: 'bot',
+        idempotencyKey: 'swipe-second-000001',
+      },
+      crypto.randomUUID(),
+    )) as { matched: boolean };
+    expect(match.matched).toBe(true);
+
+    const conversation = sqlite.prepare('SELECT id, status FROM conversations').get() as {
+      id: string;
+      status: string;
+    };
+    await expect(
+      executeOperation(
+        env,
+        'conversations.requestContact',
+        { userId: first, conversationId: conversation.id },
+        crypto.randomUUID(),
+      ),
+    ).resolves.toEqual({ revealed: false });
+    await expect(
+      executeOperation(
+        env,
+        'conversations.requestContact',
+        { userId: second, conversationId: conversation.id },
+        crypto.randomUUID(),
+      ),
+    ).resolves.toMatchObject({ revealed: true });
+
+    const report = (await executeOperation(
+      env,
+      'reports.create',
+      {
+        reporterUserId: first,
+        reportedUserId: second,
+        conversationId: conversation.id,
+        category: 'spam',
+        description: 'Повторяющиеся нежелательные сообщения',
+        evidenceSnapshot: [{ message: 'snapshot' }],
+      },
+      crypto.randomUUID(),
+    )) as { reportId: string };
+    const adminId = await upsert(1_040_929_628);
+    const reports = (await executeOperation(
+      env,
+      'admin.reports.list',
+      { adminUserId: adminId, status: 'open', limit: 20 },
+      crypto.randomUUID(),
+    )) as Array<{ id: string }>;
+    expect(reports).toContainEqual(expect.objectContaining({ id: report.reportId }));
+
+    await executeOperation(
+      env,
+      'blocks.create',
+      { blockerUserId: first, blockedUserId: second, reason: 'Не хочу общаться' },
+      crypto.randomUUID(),
+    );
+    expect(
+      (
+        sqlite.prepare('SELECT status FROM conversations WHERE id = ?').get(conversation.id) as {
+          status: string;
+        }
+      ).status,
+    ).toBe('closed');
+  });
+
+  it('processes a Stars order idempotently and revokes entitlement on refund', async () => {
+    const userId = await upsert(4001);
+    const product = sqlite
+      .prepare("SELECT id, stars_amount FROM products WHERE code = 'premium_30d'")
+      .get() as { id: string; stars_amount: number };
+    const order = (await executeOperation(
+      env,
+      'payments.create',
+      {
+        userId,
+        productId: product.id,
+        idempotencyKey: 'payment-order-0000001',
+      },
+      crypto.randomUUID(),
+    )) as { orderId: string; amount: number };
+    const duplicateOrder = (await executeOperation(
+      env,
+      'payments.create',
+      {
+        userId,
+        productId: product.id,
+        idempotencyKey: 'payment-order-0000001',
+      },
+      crypto.randomUUID(),
+    )) as { id: string };
+    expect(duplicateOrder.id).toBe(order.orderId);
+
+    await executeOperation(
+      env,
+      'payments.markPrecheckout',
+      {
+        orderId: order.orderId,
+        telegramUserId: 4001,
+        currency: 'XTR',
+        totalAmount: product.stars_amount,
+      },
+      crypto.randomUUID(),
+    );
+    const completion = {
+      orderId: order.orderId,
+      telegramPaymentChargeId: 'telegram-charge-1',
+      providerPaymentChargeId: '',
+      totalAmount: product.stars_amount,
+      isRecurring: false,
+      isFirstRecurring: false,
+      telegramUpdateId: 5001,
+    };
+    await expect(
+      executeOperation(env, 'payments.completeStars', completion, crypto.randomUUID()),
+    ).resolves.toEqual({ duplicate: false, orderId: order.orderId });
+    await expect(
+      executeOperation(env, 'payments.completeStars', completion, crypto.randomUUID()),
+    ).resolves.toEqual({ duplicate: true, orderId: order.orderId });
+    expect(
+      (
+        sqlite
+          .prepare("SELECT COUNT(*) AS count FROM premium_entitlements WHERE status = 'active'")
+          .get() as { count: number }
+      ).count,
+    ).toBe(1);
+
+    await executeOperation(
+      env,
+      'payments.markRefunded',
+      { orderId: order.orderId, providerEventId: 'refund-event-1' },
+      crypto.randomUUID(),
+    );
+    expect(
+      sqlite
+        .prepare('SELECT status FROM premium_entitlements WHERE payment_order_id = ?')
+        .get(order.orderId),
+    ).toEqual({ status: 'revoked' });
+  });
+
+  it('qualifies a referral once and grants exactly one day of Premium', async () => {
+    const referrer = await upsert(5001);
+    const summary = (await executeOperation(
+      env,
+      'referrals.summary',
+      { userId: referrer, botUsername: 'r0lemate_bot' },
+      crypto.randomUUID(),
+    )) as { link: string };
+    const referralCode = summary.link.split('ref_')[1];
+    const referredResult = (await executeOperation(
+      env,
+      'users.upsert',
+      {
+        telegramUser: { id: 5002, first_name: 'Referred' },
+        referralCode,
+      },
+      crypto.randomUUID(),
+    )) as { userId: string };
+    await executeOperation(
+      env,
+      'users.acceptRules',
+      { userId: referredResult.userId, ageGroup: '21_25' },
+      crypto.randomUUID(),
+    );
+    await executeOperation(
+      env,
+      'profiles.upsert',
+      { userId: referredResult.userId, profile },
+      crypto.randomUUID(),
+    );
+    await executeOperation(
+      env,
+      'profiles.upsert',
+      { userId: referredResult.userId, profile },
+      crypto.randomUUID(),
+    );
+
+    const referral = sqlite
+      .prepare('SELECT status, reward_grant_id FROM referrals WHERE referred_user_id = ?')
+      .get(referredResult.userId) as { status: string; reward_grant_id: string };
+    const grants = sqlite
+      .prepare(
+        "SELECT COUNT(*) AS count, ROUND((unixepoch(MAX(ends_at)) - unixepoch(MIN(starts_at))) / 3600.0) AS hours FROM premium_entitlements WHERE user_id = ? AND source = 'referral'",
+      )
+      .get(referrer) as { count: number; hours: number };
+    expect(referral.status).toBe('qualified');
+    expect(referral.reward_grant_id).toBeTruthy();
+    expect(grants.count).toBe(1);
+    expect(grants.hours).toBe(24);
   });
 });

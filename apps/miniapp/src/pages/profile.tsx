@@ -3,7 +3,7 @@ import { useMutation, useQuery } from '@tanstack/react-query';
 import { ArrowRight, Check, Edit3, ImagePlus, UserRound } from 'lucide-react';
 import { useForm } from 'react-hook-form';
 import { Link, useLocation } from 'wouter';
-import { profileSchema, type ProfileInput } from '@rolemate/shared';
+import { profileSchema, ru, type ProfileInput } from '@rolemate/shared';
 import { api } from '../api.js';
 import { Button, Card, EmptyState, SectionTitle, Skeleton } from '../components/ui.js';
 
@@ -13,18 +13,18 @@ const defaults: ProfileInput = {
   shortHeadline: '',
   about: '',
   roleplayExperience: 'not_specified',
-  preferredRole: ['без предпочтений'],
+  preferredRole: [ru.miniApp.profile.defaults.preferredRole],
   writingStyle: 'literary',
   averagePostLength: 'paragraphs_3_5',
   activityFrequency: 'daily',
   timezone: 'UTC+3',
-  activeHours: 'вечером',
+  activeHours: ru.miniApp.profile.defaults.activeHours,
   languages: ['ru'],
   fandoms: [],
   genres: [],
   settings: '',
   plots: '',
-  lookingFor: ['долгосрочного партнёра'],
+  lookingFor: [ru.miniApp.profile.defaults.lookingFor],
   boundaries: '',
   adultTopicsAllowed: false,
   contactRevealPolicy: 'mutual_only',
@@ -48,11 +48,11 @@ export function ProfilePage() {
     return (
       <EmptyState
         icon={<UserRound className="h-7 w-7" />}
-        title="Твоя история начинается здесь"
-        description="Создай подробную анкету — так мы сможем подобрать людей с похожим стилем и интересами."
+        title={ru.miniApp.profile.emptyTitle}
+        description={ru.miniApp.profile.emptyDescription}
         action={
           <Link className="button button-primary" href="/profile/edit">
-            Создать анкету
+            {ru.miniApp.profile.create}
           </Link>
         }
       />
@@ -63,10 +63,10 @@ export function ProfilePage() {
   return (
     <div>
       <SectionTitle
-        eyebrow="моя анкета"
+        eyebrow={ru.miniApp.profile.eyebrow}
         action={
           <Link href="/profile/edit" className="button button-secondary">
-            <Edit3 className="h-4 w-4" /> Изменить
+            <Edit3 className="h-4 w-4" /> {ru.miniApp.profile.edit}
           </Link>
         }
       >
@@ -89,9 +89,7 @@ export function ProfilePage() {
           </div>
         </div>
       </Card>
-      <p className="mt-5 text-center text-xs text-muted">
-        Создано при поддержке пиар-чата @piarchaticksss
-      </p>
+      <p className="mt-5 text-center text-xs text-muted">{ru.miniApp.attribution}</p>
     </div>
   );
 }
@@ -116,89 +114,87 @@ export function ProfileEditorPage() {
       }}
     >
       <div>
-        <p className="eyebrow">шаг 1 из 4</p>
-        <h1 className="font-display text-4xl font-semibold">Расскажи о себе</h1>
-        <p className="mt-2 text-sm text-muted">
-          Не указывай username, телефон или другие личные контакты.
-        </p>
+        <p className="eyebrow">{ru.miniApp.profile.editorStep}</p>
+        <h1 className="font-display text-4xl font-semibold">{ru.miniApp.profile.editorTitle}</h1>
+        <p className="mt-2 text-sm text-muted">{ru.miniApp.profile.privacyNotice}</p>
       </div>
       <Card className="space-y-5 p-5">
         <label>
-          <span>Псевдоним</span>
+          <span>{ru.miniApp.profile.alias}</span>
           <input
             className={field}
-            placeholder="Как тебя называть?"
+            placeholder={ru.miniApp.profile.aliasPlaceholder}
             {...form.register('displayName')}
           />
           <small>{form.formState.errors.displayName?.message}</small>
         </label>
         <label>
-          <span>Заголовок анкеты</span>
+          <span>{ru.miniApp.profile.headline}</span>
           <input
             className={field}
-            placeholder="Ищу партнёра для долгосрочной истории…"
+            placeholder={ru.miniApp.profile.headlinePlaceholder}
             {...form.register('shortHeadline')}
           />
           <small>{form.formState.errors.shortHeadline?.message}</small>
         </label>
         <label>
-          <span>О себе</span>
+          <span>{ru.miniApp.profile.about}</span>
           <textarea
             className={`${field} min-h-36`}
-            placeholder="Стиль, опыт, комфортное общение…"
+            placeholder={ru.miniApp.profile.aboutPlaceholder}
             {...form.register('about')}
           />
           <small>{form.formState.errors.about?.message}</small>
         </label>
         <label>
-          <span>Возрастная категория</span>
+          <span>{ru.miniApp.profile.ageGroup}</span>
           <select className={field} {...form.register('ageGroup')}>
-            <option value="under_16">До 16 лет</option>
-            <option value="16_17">16–17 лет</option>
-            <option value="18_20">18–20 лет</option>
-            <option value="21_25">21–25 лет</option>
-            <option value="26_plus">26 лет и старше</option>
+            <option value="under_16">{ru.miniApp.profile.ageOptions[0]}</option>
+            <option value="16_17">{ru.miniApp.profile.ageOptions[1]}</option>
+            <option value="18_20">{ru.miniApp.profile.ageOptions[2]}</option>
+            <option value="21_25">{ru.miniApp.profile.ageOptions[3]}</option>
+            <option value="26_plus">{ru.miniApp.profile.ageOptions[4]}</option>
           </select>
         </label>
       </Card>
       <Card className="space-y-5 p-5">
-        <h2 className="font-display text-2xl">Твой творческий ритм</h2>
+        <h2 className="font-display text-2xl">{ru.miniApp.profile.creativeRhythm}</h2>
         <label>
-          <span>Стиль письма</span>
+          <span>{ru.miniApp.profile.writingStyle}</span>
           <select className={field} {...form.register('writingStyle')}>
-            <option value="literary">Литературная ролевая</option>
-            <option value="short_dynamic">Динамичные короткие посты</option>
-            <option value="mixed">Смешанный формат</option>
-            <option value="coauthoring">Сюжетное соавторство</option>
-            <option value="game_elements">С элементами игры</option>
-            <option value="negotiable">Обсуждается</option>
+            <option value="literary">{ru.miniApp.profile.writingStyleOptions[0]}</option>
+            <option value="short_dynamic">{ru.miniApp.profile.writingStyleOptions[1]}</option>
+            <option value="mixed">{ru.miniApp.profile.writingStyleOptions[2]}</option>
+            <option value="coauthoring">{ru.miniApp.profile.writingStyleOptions[3]}</option>
+            <option value="game_elements">{ru.miniApp.profile.writingStyleOptions[4]}</option>
+            <option value="negotiable">{ru.miniApp.profile.writingStyleOptions[5]}</option>
           </select>
         </label>
         <label>
-          <span>Средний объём поста</span>
+          <span>{ru.miniApp.profile.postLength}</span>
           <select className={field} {...form.register('averagePostLength')}>
-            <option value="lines_1_3">1–3 строки</option>
-            <option value="paragraphs_1_2">1–2 абзаца</option>
-            <option value="paragraphs_3_5">3–5 абзацев</option>
-            <option value="long_literary">Большие литературные посты</option>
-            <option value="scene_dependent">Зависит от сцены</option>
+            <option value="lines_1_3">{ru.miniApp.profile.postLengthOptions[0]}</option>
+            <option value="paragraphs_1_2">{ru.miniApp.profile.postLengthOptions[1]}</option>
+            <option value="paragraphs_3_5">{ru.miniApp.profile.postLengthOptions[2]}</option>
+            <option value="long_literary">{ru.miniApp.profile.postLengthOptions[3]}</option>
+            <option value="scene_dependent">{ru.miniApp.profile.postLengthOptions[4]}</option>
           </select>
         </label>
         <label>
-          <span>Частота ответов</span>
+          <span>{ru.miniApp.profile.responseFrequency}</span>
           <select className={field} {...form.register('activityFrequency')}>
-            <option value="several_hourly">Несколько раз в час</option>
-            <option value="several_daily">Несколько раз в день</option>
-            <option value="daily">Один ответ в день</option>
-            <option value="several_weekly">Несколько раз в неделю</option>
-            <option value="flexible">Свободный график</option>
+            <option value="several_hourly">{ru.miniApp.profile.frequencyOptions[0]}</option>
+            <option value="several_daily">{ru.miniApp.profile.frequencyOptions[1]}</option>
+            <option value="daily">{ru.miniApp.profile.frequencyOptions[2]}</option>
+            <option value="several_weekly">{ru.miniApp.profile.frequencyOptions[3]}</option>
+            <option value="flexible">{ru.miniApp.profile.frequencyOptions[4]}</option>
           </select>
         </label>
       </Card>
       <Card className="space-y-5 p-5">
-        <h2 className="font-display text-2xl">Миры и сюжеты</h2>
+        <h2 className="font-display text-2xl">{ru.miniApp.profile.worldsAndPlots}</h2>
         <label>
-          <span>Фандомы</span>
+          <span>{ru.miniApp.profile.fandoms}</span>
           <input
             className={field}
             placeholder="Arcane, Cyberpunk 2077"
@@ -214,10 +210,10 @@ export function ProfileEditorPage() {
           />
         </label>
         <label>
-          <span>Жанры</span>
+          <span>{ru.miniApp.profile.genres}</span>
           <input
             className={field}
-            placeholder="драма, киберпанк, приключения"
+            placeholder={ru.miniApp.profile.genresPlaceholder}
             onChange={(event) =>
               form.setValue(
                 'genres',
@@ -230,11 +226,11 @@ export function ProfileEditorPage() {
           />
         </label>
         <label>
-          <span>Идеи и сеттинги</span>
+          <span>{ru.miniApp.profile.ideas}</span>
           <textarea className={`${field} min-h-28`} {...form.register('plots')} />
         </label>
         <label>
-          <span>Границы и нежелательные темы</span>
+          <span>{ru.miniApp.profile.boundaries}</span>
           <textarea className={`${field} min-h-28`} {...form.register('boundaries')} />
           <small>{form.formState.errors.boundaries?.message}</small>
         </label>
@@ -244,17 +240,18 @@ export function ProfileEditorPage() {
           <ImagePlus />
         </div>
         <div className="flex-1">
-          <strong>Изображения анкеты</strong>
-          <p className="text-sm text-muted">До 4 изображений, без контактов и QR-кодов</p>
+          <strong>{ru.miniApp.profile.images}</strong>
+          <p className="text-sm text-muted">{ru.miniApp.profile.imagesDescription}</p>
         </div>
         <Button type="button" variant="secondary">
-          Добавить
+          {ru.miniApp.profile.add}
         </Button>
       </Card>
       {save.isError ? <p className="error-box">{save.error.message}</p> : null}
       <div className="sticky-submit">
         <Button type="submit" className="w-full" loading={save.isPending}>
-          <Check className="h-4 w-4" /> Отправить на модерацию <ArrowRight className="h-4 w-4" />
+          <Check className="h-4 w-4" /> {ru.miniApp.profile.submit}{' '}
+          <ArrowRight className="h-4 w-4" />
         </Button>
       </div>
     </form>

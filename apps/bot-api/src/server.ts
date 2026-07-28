@@ -11,6 +11,7 @@ import swaggerUi from '@fastify/swagger-ui';
 import {
   OWNER_TELEGRAM_ID,
   profileSchema,
+  ru,
   sha256,
   validateTelegramInitData,
 } from '@rolemate/shared';
@@ -26,7 +27,7 @@ const swipeBodySchema = z.object({
   targetUserId: z.string().uuid(),
   action: z.enum(['like', 'skip', 'super_like', 'rewind']),
 });
-const deleteBodySchema = z.object({ confirmation: z.literal('УДАЛИТЬ') });
+const deleteBodySchema = z.object({ confirmation: z.literal(ru.api.deleteConfirmation) });
 const captchaBodySchema = z.object({
   token: z.string().min(1).max(4_096),
   action: z.string().max(64),
@@ -137,7 +138,7 @@ export async function buildServer(env: AppEnv): Promise<FastifyInstance> {
     errorResponseBuilder: () => ({
       statusCode: 429,
       error: 'RATE_LIMITED',
-      message: 'Слишком много запросов. Попробуй немного позже.',
+      message: ru.api.rateLimit,
     }),
   });
   await app.register(swagger, {
@@ -642,7 +643,7 @@ export async function buildServer(env: AppEnv): Promise<FastifyInstance> {
     if (status >= 500) request.log.error({ err: error, requestId: request.id }, 'request failed');
     return reply.code(status).send({
       error: code,
-      message: status >= 500 ? 'Внутренняя ошибка сервиса' : errorMessage,
+      message: status >= 500 ? ru.api.internalError : errorMessage,
       requestId: request.id,
     });
   });

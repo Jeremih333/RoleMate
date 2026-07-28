@@ -1,5 +1,6 @@
 import type { ButtonHTMLAttributes, PropsWithChildren, ReactNode } from 'react';
 import { LoaderCircle } from 'lucide-react';
+import { ru } from '@rolemate/shared';
 
 export function Card({ children, className = '' }: PropsWithChildren<{ className?: string }>) {
   return <div className={`glass-card ${className}`}>{children}</div>;
@@ -63,7 +64,7 @@ export function EmptyState({
       <h3 className="font-display text-2xl font-semibold">{title}</h3>
       <p className="mt-2 max-w-sm text-sm leading-relaxed text-muted">{description}</p>
       {action ? <div className="mt-5">{action}</div> : null}
-      <p className="mt-7 text-xs text-muted">При поддержке: @piarchaticksss</p>
+      <p className="mt-7 text-xs text-muted">{ru.miniApp.attribution}</p>
     </Card>
   );
 }

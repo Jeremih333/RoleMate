@@ -2,6 +2,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { motion, AnimatePresence } from 'framer-motion';
 import { Ban, Flag, Heart, RotateCcw, SlidersHorizontal, Star, X } from 'lucide-react';
 import { useState } from 'react';
+import { ru } from '@rolemate/shared';
 import { api, type SearchProfile } from '../api.js';
 import { Button, Card, EmptyState, Skeleton } from '../components/ui.js';
 import { haptic } from '../telegram.js';
@@ -24,7 +25,7 @@ function ProfileCard({ profile }: { profile: SearchProfile }) {
     <Card className="profile-card overflow-hidden">
       <div className="profile-cover">
         <div className="compatibility">
-          {profile.compatibility}%<span>совпадение</span>
+          {profile.compatibility}%<span>{ru.miniApp.search.matchPercent}</span>
         </div>
         {profile.is_premium ? (
           <span className="premium-badge">
@@ -38,7 +39,7 @@ function ProfileCard({ profile }: { profile: SearchProfile }) {
             <h2 className="font-display text-3xl font-semibold">{profile.display_name}</h2>
             <p className="mt-1 text-sm text-muted">{profile.short_headline}</p>
           </div>
-          <span className="activity-dot" title="Был(а) недавно" />
+          <span className="activity-dot" title={ru.miniApp.search.recentlyActive} />
         </div>
         <div className="mt-4 flex flex-wrap gap-2">
           {[...fandoms.slice(0, 3), ...genres.slice(0, 2)].map((tag) => (
@@ -49,10 +50,18 @@ function ProfileCard({ profile }: { profile: SearchProfile }) {
         </div>
         <p className="mt-4 line-clamp-4 text-sm leading-relaxed text-soft">{profile.about}</p>
         <div className="mt-5 grid grid-cols-2 gap-2 text-xs text-muted">
-          <span>Стиль: {profile.writing_style}</span>
-          <span>Посты: {profile.average_post_length}</span>
-          <span>Активность: {profile.activity_frequency}</span>
-          <span>Возраст: {profile.age_group}</span>
+          <span>
+            {ru.miniApp.search.style}: {profile.writing_style}
+          </span>
+          <span>
+            {ru.miniApp.search.posts}: {profile.average_post_length}
+          </span>
+          <span>
+            {ru.miniApp.search.activity}: {profile.activity_frequency}
+          </span>
+          <span>
+            {ru.miniApp.search.age}: {profile.age_group}
+          </span>
         </div>
       </div>
     </Card>
@@ -91,9 +100,9 @@ export function SearchPage() {
     return (
       <EmptyState
         icon={<Star className="h-7 w-7" />}
-        title="Новые истории скоро появятся"
-        description="Пока не удалось найти новые подходящие анкеты. Измени фильтры или загляни немного позже."
-        action={<Button onClick={() => void profiles.refetch()}>Проверить снова</Button>}
+        title={ru.miniApp.search.emptyTitle}
+        description={ru.miniApp.search.emptyDescription}
+        action={<Button onClick={() => void profiles.refetch()}>{ru.miniApp.search.retry}</Button>}
       />
     );
   }
@@ -102,10 +111,10 @@ export function SearchPage() {
     <div className="mx-auto max-w-lg">
       <div className="mb-4 flex items-center justify-between">
         <div>
-          <p className="eyebrow">подобрано для тебя</p>
-          <h1 className="font-display text-3xl font-semibold">Поиск</h1>
+          <p className="eyebrow">{ru.miniApp.search.eyebrow}</p>
+          <h1 className="font-display text-3xl font-semibold">{ru.miniApp.search.title}</h1>
         </div>
-        <Button variant="ghost" aria-label="Фильтры">
+        <Button variant="ghost" aria-label={ru.miniApp.search.filters}>
           <SlidersHorizontal className="h-5 w-5" />
         </Button>
       </div>
@@ -120,26 +129,26 @@ export function SearchPage() {
         </motion.div>
       </AnimatePresence>
       <div className="swipe-actions">
-        <Button variant="ghost" aria-label="Вернуть">
+        <Button variant="ghost" aria-label={ru.miniApp.search.rewind}>
           <RotateCcw />
         </Button>
         <Button
           variant="secondary"
-          aria-label="Пропустить"
+          aria-label={ru.miniApp.search.skip}
           onClick={() => swipe.mutate({ action: 'skip', profile: current })}
         >
           <X />
         </Button>
         <Button
           className="like-button"
-          aria-label="Нравится"
+          aria-label={ru.miniApp.search.like}
           onClick={() => swipe.mutate({ action: 'like', profile: current })}
         >
           <Heart />
         </Button>
         <Button
           variant="secondary"
-          aria-label="Суперсимпатия"
+          aria-label={ru.miniApp.search.superLike}
           onClick={() => swipe.mutate({ action: 'super_like', profile: current })}
         >
           <Star />
@@ -147,10 +156,10 @@ export function SearchPage() {
       </div>
       <div className="mt-3 flex justify-center gap-6 text-xs text-muted">
         <button className="inline-flex gap-1">
-          <Ban className="h-3.5 w-3.5" /> Заблокировать
+          <Ban className="h-3.5 w-3.5" /> {ru.miniApp.search.block}
         </button>
         <button className="inline-flex gap-1">
-          <Flag className="h-3.5 w-3.5" /> Пожаловаться
+          <Flag className="h-3.5 w-3.5" /> {ru.miniApp.search.report}
         </button>
       </div>
     </div>

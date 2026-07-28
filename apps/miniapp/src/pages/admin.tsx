@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { ru } from '@rolemate/shared';
 import {
   Activity,
   AlertTriangle,
@@ -29,23 +30,23 @@ export function AdminPage() {
   if (!isAdmin) return <Redirect to="/" replace />;
   return (
     <div>
-      <SectionTitle eyebrow="доступ владельца">Управление RoleMate</SectionTitle>
+      <SectionTitle eyebrow={ru.miniApp.admin.eyebrow}>{ru.miniApp.admin.title}</SectionTitle>
       <div className="admin-banner">
         <Shield />
         <div>
-          <strong>Защищённая панель</strong>
-          <p>Admin ID проверяется backend; мутации записываются в неизменяемый audit log.</p>
+          <strong>{ru.miniApp.admin.protectedTitle}</strong>
+          <p>{ru.miniApp.admin.protectedDescription}</p>
         </div>
       </div>
       <div className="mt-4 flex flex-wrap gap-2">
         {(
           [
-            ['dashboard', 'Dashboard'],
-            ['users', 'Пользователи'],
-            ['profiles', 'Анкеты'],
-            ['reports', 'Жалобы'],
-            ['flags', 'Feature flags'],
-            ['audit', 'Audit log'],
+            ['dashboard', ru.miniApp.admin.sections[0]],
+            ['users', ru.miniApp.admin.sections[1]],
+            ['profiles', ru.miniApp.admin.sections[2]],
+            ['reports', ru.miniApp.admin.sections[3]],
+            ['flags', ru.miniApp.admin.sections[4]],
+            ['audit', ru.miniApp.admin.sections[5]],
           ] as const
         ).map(([key, label]) => (
           <Button
@@ -74,20 +75,20 @@ function Dashboard() {
   if (stats.isLoading) return <Skeleton className="h-96" />;
   const data = stats.data;
   const items = [
-    ['Пользователи', data?.users, Users],
-    ['Новые за сутки', data?.newUsers24h, UserPlus],
-    ['Активные за сутки', data?.activeUsers24h, Activity],
-    ['Активные анкеты', data?.profiles, FileCheck],
-    ['Мэтчи', data?.matches, Heart],
-    ['Активные чаты', data?.conversations, MessageCircle],
-    ['Открытые жалобы', data?.openReports, AlertTriangle],
-    ['Заблокированы', data?.bannedUsers, Ban],
-    ['Premium', data?.premiumUsers, Crown],
-    ['Stars payments', data?.starsPayments, Database],
-    ['Рефералы', data?.qualifiedReferrals, UserPlus],
-    ['CAPTCHA за сутки', data?.captcha24h, Shield],
-    ['Ожидающие jobs', data?.pendingJobs, History],
-    ['Ошибки jobs', data?.failedJobs, AlertTriangle],
+    [ru.miniApp.admin.stats[0], data?.users, Users],
+    [ru.miniApp.admin.stats[1], data?.newUsers24h, UserPlus],
+    [ru.miniApp.admin.stats[2], data?.activeUsers24h, Activity],
+    [ru.miniApp.admin.stats[3], data?.profiles, FileCheck],
+    [ru.miniApp.admin.stats[4], data?.matches, Heart],
+    [ru.miniApp.admin.stats[5], data?.conversations, MessageCircle],
+    [ru.miniApp.admin.stats[6], data?.openReports, AlertTriangle],
+    [ru.miniApp.admin.stats[7], data?.bannedUsers, Ban],
+    [ru.miniApp.admin.stats[8], data?.premiumUsers, Crown],
+    [ru.miniApp.admin.stats[9], data?.starsPayments, Database],
+    [ru.miniApp.admin.stats[10], data?.qualifiedReferrals, UserPlus],
+    [ru.miniApp.admin.stats[11], data?.captcha24h, Shield],
+    [ru.miniApp.admin.stats[12], data?.pendingJobs, History],
+    [ru.miniApp.admin.stats[13], data?.failedJobs, AlertTriangle],
   ] as const;
   return (
     <div className="admin-grid">
@@ -130,7 +131,7 @@ function UsersQueue() {
           className="input-field"
           value={search}
           onChange={(event) => setSearch(event.target.value)}
-          placeholder="Telegram ID, username или псевдоним"
+          placeholder={ru.miniApp.admin.searchPlaceholder}
         />
       </label>
       <div className="mt-4 space-y-3">
@@ -155,48 +156,48 @@ function UsersQueue() {
                     moderate.mutate({
                       userId: user.id,
                       action: 'unban',
-                      reason: 'Разблокировка владельцем',
+                      reason: ru.miniApp.admin.ownerUnbanReason,
                     })
                   }
                 >
-                  Снять бан
+                  {ru.miniApp.admin.unban}
                 </Button>
               ) : (
                 <Button
                   variant="secondary"
                   onClick={() => {
-                    const reason = window.prompt('Причина постоянного бана');
+                    const reason = window.prompt(ru.miniApp.admin.banReasonPrompt);
                     if (reason)
                       moderate.mutate({ userId: user.id, action: 'permanent_ban', reason });
                   }}
                 >
-                  Бан
+                  {ru.miniApp.admin.ban}
                 </Button>
               )}
               <Button
                 variant="secondary"
                 onClick={() => {
-                  const value = window.prompt('Сколько дней Premium?', '7');
+                  const value = window.prompt(ru.miniApp.admin.premiumDaysPrompt, '7');
                   const days = Number(value);
                   if (Number.isInteger(days) && days > 0)
                     premium.mutate({
                       userId: user.id,
                       durationDays: days,
-                      reason: 'Ручная выдача владельцем',
+                      reason: ru.miniApp.admin.ownerGrantReason,
                     });
                 }}
               >
-                Выдать Premium
+                {ru.miniApp.admin.grantPremium}
               </Button>
               <Button
                 variant="secondary"
                 onClick={() =>
                   void api
-                    .adminRevokePremium(user.id, 'Ручной отзыв владельцем')
+                    .adminRevokePremium(user.id, ru.miniApp.admin.ownerRevokeReason)
                     .then(() => queryClient.invalidateQueries({ queryKey: ['admin-users'] }))
                 }
               >
-                Отозвать Premium
+                {ru.miniApp.admin.revokePremium}
               </Button>
             </div>
           </Card>
@@ -241,7 +242,7 @@ function ProfilesQueue() {
                 moderate.mutate({
                   profileId: profile.id,
                   status: 'approved',
-                  reason: 'Проверено владельцем',
+                  reason: ru.miniApp.admin.ownerApprovedReason,
                 })
               }
             >
@@ -250,7 +251,7 @@ function ProfilesQueue() {
             <Button
               variant="secondary"
               onClick={() => {
-                const reason = window.prompt('Причина отклонения');
+                const reason = window.prompt(ru.miniApp.admin.rejectionReasonPrompt);
                 if (reason) moderate.mutate({ profileId: profile.id, status: 'rejected', reason });
               }}
             >
@@ -262,11 +263,11 @@ function ProfilesQueue() {
                 moderate.mutate({
                   profileId: profile.id,
                   status: 'archived',
-                  reason: 'Архивировано владельцем',
+                  reason: ru.miniApp.admin.ownerArchivedReason,
                 })
               }
             >
-              Архив
+              {ru.miniApp.admin.archive}
             </Button>
           </div>
         </Card>
@@ -297,9 +298,12 @@ function ReportsQueue() {
             <strong>{report.category}</strong>
             <span className="status-pill">{report.status}</span>
           </div>
-          <p className="mt-2 text-sm text-soft">{report.description || 'Без комментария'}</p>
+          <p className="mt-2 text-sm text-soft">
+            {report.description || ru.miniApp.admin.noComment}
+          </p>
           <p className="mt-2 text-xs text-muted">
-            На пользователя {report.reported_display_name ?? report.reported_telegram_id}
+            {ru.miniApp.admin.reportedUser}{' '}
+            {report.reported_display_name ?? report.reported_telegram_id}
           </p>
           <div className="mt-3 flex gap-2">
             <Button
@@ -307,11 +311,15 @@ function ReportsQueue() {
                 resolve.mutate({
                   reportId: report.id,
                   status: 'resolved',
-                  resolution: window.prompt('Решение по жалобе', 'Нарушение подтверждено') ?? '',
+                  resolution:
+                    window.prompt(
+                      ru.miniApp.admin.resolutionPrompt,
+                      ru.miniApp.admin.violationConfirmed,
+                    ) ?? '',
                 })
               }
             >
-              Закрыть
+              {ru.miniApp.admin.close}
             </Button>
             <Button
               variant="secondary"
@@ -319,11 +327,11 @@ function ReportsQueue() {
                 resolve.mutate({
                   reportId: report.id,
                   status: 'dismissed',
-                  resolution: 'Нарушение не подтверждено',
+                  resolution: ru.miniApp.admin.violationNotConfirmed,
                 })
               }
             >
-              Отклонить
+              {ru.miniApp.admin.dismiss}
             </Button>
           </div>
         </Card>

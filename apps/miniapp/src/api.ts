@@ -1,3 +1,5 @@
+import { ru } from '@rolemate/shared';
+
 const API_BASE = '/api';
 
 let csrfToken = sessionStorage.getItem('rm_csrf') ?? '';
@@ -31,7 +33,7 @@ async function request<T>(path: string, options: RequestInit & { body?: string }
     throw new ApiError(
       response.status,
       body.error ?? 'REQUEST_FAILED',
-      body.message ?? 'Не удалось выполнить запрос',
+      body.message ?? ru.api.requestFailed,
     );
   }
   const payload: unknown = await response.json();
@@ -165,7 +167,7 @@ export const api = {
   deleteAccount: () =>
     request<{ deleted: true }>('/account', {
       method: 'DELETE',
-      body: JSON.stringify({ confirmation: 'УДАЛИТЬ' }),
+      body: JSON.stringify({ confirmation: ru.api.deleteConfirmation }),
     }),
 };
 

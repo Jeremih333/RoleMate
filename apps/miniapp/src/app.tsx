@@ -1,5 +1,6 @@
 import { type ReactNode, useEffect } from 'react';
 import { useQuery } from '@tanstack/react-query';
+import { ru } from '@rolemate/shared';
 import { Redirect, Route, Switch } from 'wouter';
 import { api } from './api.js';
 import { Layout } from './components/layout.js';
@@ -34,7 +35,7 @@ function AuthGate({ children }: { children: ReactNode }) {
             isAdmin: me.isAdmin,
           };
         }
-        throw new Error('Открой RoleMate внутри Telegram');
+        throw new Error(ru.miniApp.auth.telegramOnly);
       }
       const user = await api.authenticate(telegram.initData);
       const me = await api.me();
@@ -49,14 +50,14 @@ function AuthGate({ children }: { children: ReactNode }) {
     return (
       <div className="splash">
         <span className="brand-mark large">R</span>
-        <p>Открываем следующую историю…</p>
+        <p>{ru.miniApp.auth.opening}</p>
       </div>
     );
   if (auth.isError)
     return (
       <div className="splash error">
         <span className="brand-mark large">R</span>
-        <h1>RoleMate открывается в Telegram</h1>
+        <h1>{ru.miniApp.auth.title}</h1>
         <p>{auth.error.message}</p>
       </div>
     );
@@ -64,7 +65,7 @@ function AuthGate({ children }: { children: ReactNode }) {
     return (
       <div className="splash">
         <span className="brand-mark large">R</span>
-        <p>Готовим пространство…</p>
+        <p>{ru.miniApp.auth.preparing}</p>
       </div>
     );
   }

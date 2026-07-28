@@ -1,6 +1,7 @@
 import { useQuery } from '@tanstack/react-query';
 import { ArrowRight, BookOpen, Crown, Heart, MessageCircle, Sparkles, Users } from 'lucide-react';
 import { Link } from 'wouter';
+import { ru } from '@rolemate/shared';
 import { api } from '../api.js';
 import { Card, SectionTitle, Skeleton } from '../components/ui.js';
 
@@ -14,52 +15,56 @@ export function HomePage() {
       <section className="hero">
         <div className="hero-overlay" />
         <div className="relative z-10 max-w-md">
-          <p className="eyebrow">пространство историй</p>
+          <p className="eyebrow">{ru.miniApp.home.heroEyebrow}</p>
           <h1 className="font-display text-5xl font-semibold leading-[0.95]">
-            Найди того,
+            {ru.miniApp.home.heroTitle[0]}
             <br />
-            кто продолжит
+            {ru.miniApp.home.heroTitle[1]}
             <br />
-            твою историю
+            {ru.miniApp.home.heroTitle[2]}
           </h1>
           <p className="mt-4 max-w-sm text-sm leading-relaxed text-white/70">
-            Анонимный поиск со-ролевиков по фандомам, стилю письма и творческому ритму.
+            {ru.miniApp.home.heroDescription}
           </p>
           <Link href="/search" className="button button-primary mt-6 inline-flex">
-            Начать поиск <ArrowRight className="h-4 w-4" />
+            {ru.miniApp.home.startSearch} <ArrowRight className="h-4 w-4" />
           </Link>
         </div>
       </section>
 
       <section>
-        <SectionTitle eyebrow="твой прогресс">Сегодня в RoleMate</SectionTitle>
+        <SectionTitle eyebrow={ru.miniApp.home.progressEyebrow}>
+          {ru.miniApp.home.today}
+        </SectionTitle>
         <div className="stats-grid">
           <Card>
             <span className="stat-icon">
               <Heart />
             </span>
             <strong>0</strong>
-            <small>новых симпатий</small>
+            <small>{ru.miniApp.home.newLikes}</small>
           </Card>
           <Card>
             <span className="stat-icon">
               <MessageCircle />
             </span>
             <strong>{chats.data?.length ?? 0}</strong>
-            <small>активных чатов</small>
+            <small>{ru.miniApp.home.activeChats}</small>
           </Card>
           <Card>
             <span className="stat-icon">
               <Users />
             </span>
             <strong>{referrals.data?.qualified ?? 0}</strong>
-            <small>друзей пришло</small>
+            <small>{ru.miniApp.home.referredFriends}</small>
           </Card>
         </div>
       </section>
 
       <section>
-        <SectionTitle eyebrow="анкета">Готовность к поиску</SectionTitle>
+        <SectionTitle eyebrow={ru.miniApp.home.profileEyebrow}>
+          {ru.miniApp.home.searchReadiness}
+        </SectionTitle>
         <Card className="p-5">
           {me.isLoading ? (
             <Skeleton className="h-20" />
@@ -71,10 +76,8 @@ export function HomePage() {
                     <BookOpen className="h-5 w-5" />
                   </div>
                   <div>
-                    <strong className="block">Расскажи о своём мире</strong>
-                    <span className="text-sm text-muted">
-                      Заполни анкету, чтобы попасть в поиск
-                    </span>
+                    <strong className="block">{ru.miniApp.home.tellAboutWorld}</strong>
+                    <span className="text-sm text-muted">{ru.miniApp.home.completeProfile}</span>
                   </div>
                 </div>
                 <span className="text-sm font-semibold text-lilac">0%</span>
@@ -86,7 +89,7 @@ export function HomePage() {
                 href="/profile/edit"
                 className="mt-4 inline-flex items-center gap-2 text-sm font-semibold text-lilac"
               >
-                Создать анкету <ArrowRight className="h-4 w-4" />
+                {ru.miniApp.home.createProfile} <ArrowRight className="h-4 w-4" />
               </Link>
             </>
           )}
@@ -99,7 +102,7 @@ export function HomePage() {
             <Crown />
             <div>
               <strong>RoleMate Premium</strong>
-              <small>Больше возможностей для поиска</small>
+              <small>{ru.miniApp.home.premiumDescription}</small>
             </div>
             <Sparkles className="ml-auto opacity-60" />
           </Card>
@@ -108,8 +111,8 @@ export function HomePage() {
           <Card className="feature-card">
             <Users />
             <div>
-              <strong>Пригласи друзей</strong>
-              <small>1 друг = 1 день Premium</small>
+              <strong>{ru.miniApp.home.inviteFriends}</strong>
+              <small>{ru.miniApp.home.referralReward}</small>
             </div>
             <ArrowRight className="ml-auto opacity-60" />
           </Card>
@@ -119,8 +122,8 @@ export function HomePage() {
       <a href="https://t.me/piarchaticksss" className="promo-strip">
         <span className="brand-mark small">P</span>
         <span>
-          <strong>Пиар-чат для авторов</strong>
-          <small>@piarchaticksss · поддерживает RoleMate</small>
+          <strong>{ru.miniApp.home.promoTitle}</strong>
+          <small>{ru.miniApp.home.promoDescription}</small>
         </span>
         <ArrowRight className="ml-auto h-4 w-4" />
       </a>

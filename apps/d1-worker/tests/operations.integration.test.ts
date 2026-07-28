@@ -222,6 +222,94 @@ describe('D1 domain operations', () => {
     ).resolves.toEqual({ claimed: false });
   });
 
+  it('queues profile images for owner-only moderation and protects their delivery', async () => {
+    const owner = await onboard(2050);
+    const viewer = await onboard(2051);
+    const adminId = await upsert(1_040_929_628);
+    const added = (await executeOperation(
+      env,
+      'profiles.media.add',
+      {
+        userId: owner,
+        telegramFileId: 'telegram-file-id-1',
+        telegramFileUniqueId: 'telegram-unique-id-1',
+        mediaType: 'photo',
+      },
+      crypto.randomUUID(),
+    )) as { id: string; moderationStatus: string };
+    expect(added.moderationStatus).toBe('pending');
+    await expect(
+      executeOperation(
+        env,
+        'profiles.media.resolve',
+        { requesterUserId: viewer, mediaId: added.id },
+        crypto.randomUUID(),
+      ),
+    ).rejects.toMatchObject<ApiError>({ code: 'MEDIA_NOT_FOUND' });
+    await expect(
+      executeOperation(
+        env,
+        'profiles.media.resolve',
+        { requesterUserId: owner, mediaId: added.id },
+        crypto.randomUUID(),
+      ),
+    ).resolves.toMatchObject({ telegram_file_id: 'telegram-file-id-1' });
+    await expect(
+      executeOperation(
+        env,
+        'profiles.media.add',
+        {
+          userId: owner,
+          telegramFileId: 'telegram-file-id-1',
+          telegramFileUniqueId: 'telegram-unique-id-1',
+          mediaType: 'photo',
+        },
+        crypto.randomUUID(),
+      ),
+    ).rejects.toMatchObject<ApiError>({ code: 'MEDIA_DUPLICATE' });
+    await expect(
+      executeOperation(
+        env,
+        'admin.media.list',
+        { adminUserId: adminId, status: 'pending', limit: 20 },
+        crypto.randomUUID(),
+      ),
+    ).resolves.toEqual([expect.objectContaining({ id: added.id, user_id: owner })]);
+    await executeOperation(
+      env,
+      'admin.media.moderate',
+      {
+        adminUserId: adminId,
+        mediaId: added.id,
+        status: 'approved',
+        reason: 'Safe test image',
+      },
+      crypto.randomUUID(),
+    );
+    await expect(
+      executeOperation(
+        env,
+        'profiles.media.resolve',
+        { requesterUserId: viewer, mediaId: added.id },
+        crypto.randomUUID(),
+      ),
+    ).resolves.toMatchObject({ moderation_status: 'approved' });
+    await executeOperation(
+      env,
+      'blocks.create',
+      { blockerUserId: viewer, blockedUserId: owner, reason: 'test' },
+      crypto.randomUUID(),
+    );
+    await expect(
+      executeOperation(
+        env,
+        'profiles.media.resolve',
+        { requesterUserId: viewer, mediaId: added.id },
+        crypto.randomUUID(),
+      ),
+    ).rejects.toMatchObject<ApiError>({ code: 'MEDIA_NOT_FOUND' });
+  });
+
   it('authorizes admin operations from persisted role and owner identity', async () => {
     const userId = await upsert(2003);
     await expect(

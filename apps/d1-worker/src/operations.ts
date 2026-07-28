@@ -367,6 +367,103 @@ const handlers: { [K in WorkerOperation]: Handler<K> } = {
     if (!profile) throw new ApiError(404, 'PROFILE_NOT_FOUND', 'Profile not found');
     return profile;
   },
+  'profiles.media.list': async (env, input) => {
+    return (
+      await env.DB.prepare(
+        `SELECT pm.id, pm.media_type, pm.sort_order, pm.moderation_status, pm.created_at
+         FROM profile_media pm
+         JOIN profiles p ON p.id = pm.profile_id
+         WHERE p.user_id = ?1
+         ORDER BY pm.sort_order, pm.created_at`,
+      )
+        .bind(input.userId)
+        .all()
+    ).results;
+  },
+  'profiles.media.add': async (env, input) => {
+    const profile = await env.DB.prepare('SELECT id FROM profiles WHERE user_id = ?1')
+      .bind(input.userId)
+      .first<{ id: string }>();
+    if (!profile) throw new ApiError(409, 'PROFILE_REQUIRED', 'Create a profile first');
+    const existing = await env.DB.prepare(
+      `SELECT id FROM profile_media
+       WHERE profile_id = ?1 AND telegram_file_unique_id = ?2`,
+    )
+      .bind(profile.id, input.telegramFileUniqueId)
+      .first<{ id: string }>();
+    if (existing) throw new ApiError(409, 'MEDIA_DUPLICATE', 'This image is already attached');
+    const count = await env.DB.prepare(
+      'SELECT COUNT(*) AS total FROM profile_media WHERE profile_id = ?1',
+    )
+      .bind(profile.id)
+      .first<{ total: number }>();
+    if (Number(count?.total ?? 0) >= 4)
+      throw new ApiError(409, 'MEDIA_LIMIT', 'A profile can contain up to four images');
+    const id = crypto.randomUUID();
+    await env.DB.prepare(
+      `INSERT INTO profile_media
+         (id, profile_id, telegram_file_id, telegram_file_unique_id, media_type,
+          sort_order, moderation_status)
+       VALUES (?1, ?2, ?3, ?4, ?5, ?6, 'pending')`,
+    )
+      .bind(
+        id,
+        profile.id,
+        input.telegramFileId,
+        input.telegramFileUniqueId,
+        input.mediaType,
+        Number(count?.total ?? 0),
+      )
+      .run();
+    return { id, moderationStatus: 'pending' };
+  },
+  'profiles.media.delete': async (env, input) => {
+    const result = await env.DB.prepare(
+      `DELETE FROM profile_media
+       WHERE id = ?1 AND profile_id IN (SELECT id FROM profiles WHERE user_id = ?2)`,
+    )
+      .bind(input.mediaId, input.userId)
+      .run();
+    if (result.meta.changes !== 1) throw new ApiError(404, 'MEDIA_NOT_FOUND', 'Image not found');
+    return { deleted: true };
+  },
+  'profiles.media.resolve': async (env, input) => {
+    const media = await env.DB.prepare(
+      `SELECT pm.telegram_file_id, pm.media_type, pm.moderation_status, p.user_id
+       FROM profile_media pm
+       JOIN profiles p ON p.id = pm.profile_id
+       JOIN users u ON u.id = p.user_id
+       WHERE pm.id = ?1
+         AND (
+           p.user_id = ?2
+           OR EXISTS (
+             SELECT 1 FROM users requester
+             WHERE requester.id = ?2 AND requester.role = 'admin'
+               AND requester.telegram_user_id = 1040929628
+           )
+           OR (
+             pm.moderation_status = 'approved'
+             AND p.moderation_status = 'approved' AND p.is_active = 1
+             AND u.is_banned = 0 AND u.deleted_at IS NULL
+             AND NOT EXISTS (
+               SELECT 1 FROM blocks b
+               WHERE (b.blocker_user_id = ?2 AND b.blocked_user_id = p.user_id)
+                  OR (b.blocker_user_id = p.user_id AND b.blocked_user_id = ?2)
+             )
+           )
+         )`,
+    )
+      .bind(input.mediaId, input.requesterUserId)
+      .first<{
+        telegram_file_id: string | null;
+        media_type: string;
+        moderation_status: string;
+        user_id: string;
+      }>();
+    if (!media?.telegram_file_id)
+      throw new ApiError(404, 'MEDIA_NOT_FOUND', 'Image not found or unavailable');
+    return media;
+  },
   'search.preferences.get': async (env, input) => {
     const premium = Boolean(await premiumEnd(env, input.userId));
     const preferences = await env.DB.prepare(
@@ -556,6 +653,9 @@ const handlers: { [K in WorkerOperation]: Handler<K> } = {
       `SELECT p.id, p.user_id, p.display_name, p.age_group, p.short_headline,
               p.about, p.fandoms, p.genres, p.writing_style, p.average_post_length,
               p.activity_frequency, u.last_activity_at,
+              (SELECT pm.id FROM profile_media pm
+               WHERE pm.profile_id = p.id AND pm.moderation_status = 'approved'
+               ORDER BY pm.sort_order, pm.created_at LIMIT 1) AS media_id,
               CASE WHEN EXISTS (
                 SELECT 1 FROM premium_entitlements pe
                 JOIN user_settings settings ON settings.user_id = p.user_id
@@ -1710,6 +1810,24 @@ const handlers: { [K in WorkerOperation]: Handler<K> } = {
         .all()
     ).results;
   },
+  'admin.media.list': async (env, input) => {
+    await assertAdmin(env, input.adminUserId);
+    return (
+      await env.DB.prepare(
+        `SELECT pm.id, pm.media_type, pm.sort_order, pm.moderation_status, pm.created_at,
+                p.id AS profile_id, p.user_id, p.display_name, u.telegram_user_id
+         FROM profile_media pm
+         JOIN profiles p ON p.id = pm.profile_id
+         JOIN users u ON u.id = p.user_id
+         WHERE (?1 = 'all' OR pm.moderation_status = ?1)
+         ORDER BY CASE pm.moderation_status WHEN 'pending' THEN 0 ELSE 1 END,
+                  pm.created_at DESC
+         LIMIT ?2`,
+      )
+        .bind(input.status, input.limit)
+        .all()
+    ).results;
+  },
   'admin.reports.list': async (env, input) => {
     await assertAdmin(env, input.adminUserId);
     return (
@@ -2162,6 +2280,38 @@ const handlers: { [K in WorkerOperation]: Handler<K> } = {
         input.reason,
         json({ status: profile.moderation_status, isActive: profile.is_active }),
         json({ status: input.status, isActive }),
+        requestId,
+      ),
+    ]);
+    return { updated: true };
+  },
+  'admin.media.moderate': async (env, input, requestId) => {
+    await assertAdmin(env, input.adminUserId);
+    const media = await env.DB.prepare(
+      `SELECT pm.moderation_status, p.user_id
+       FROM profile_media pm JOIN profiles p ON p.id = pm.profile_id
+       WHERE pm.id = ?1`,
+    )
+      .bind(input.mediaId)
+      .first<{ moderation_status: string; user_id: string }>();
+    if (!media) throw new ApiError(404, 'MEDIA_NOT_FOUND', 'Image not found');
+    await env.DB.batch([
+      env.DB.prepare('UPDATE profile_media SET moderation_status = ?2 WHERE id = ?1').bind(
+        input.mediaId,
+        input.status,
+      ),
+      env.DB.prepare(
+        `INSERT INTO admin_audit_logs
+           (id, admin_user_id, target_user_id, action, reason, old_state, new_state,
+            request_id, result)
+         VALUES (?1, ?2, ?3, 'profile_media.moderate', ?4, ?5, ?6, ?7, 'success')`,
+      ).bind(
+        crypto.randomUUID(),
+        input.adminUserId,
+        media.user_id,
+        input.reason,
+        json({ status: media.moderation_status }),
+        json({ status: input.status, mediaId: input.mediaId }),
         requestId,
       ),
     ]);

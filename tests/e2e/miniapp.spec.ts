@@ -46,6 +46,32 @@ async function mockApi(page: Page, admin = false): Promise<void> {
         riskScore: 0,
       },
       '/api/conversations': [],
+      '/api/profile': {
+        id: '00000000-0000-4000-8000-000000000010',
+        user_id: '00000000-0000-4000-8000-000000000001',
+        display_name: 'Лис',
+        age_group: '21_25',
+        short_headline: 'Ищу соавтора для долгой истории',
+        about: 'Люблю сложные сюжеты и спокойное обсуждение границ.',
+        roleplay_experience: '1_3_years',
+        preferred_role: '["без предпочтений"]',
+        writing_style: 'literary',
+        average_post_length: 'paragraphs_3_5',
+        activity_frequency: 'daily',
+        timezone: 'UTC+3',
+        active_hours: 'вечером',
+        languages: '["ru"]',
+        fandoms: '["Arcane"]',
+        genres: '["драма"]',
+        settings: '',
+        plots: 'Долгая история',
+        looking_for: '["долгосрочного партнёра"]',
+        boundaries: 'Без спешки',
+        adult_topics_allowed: 0,
+        contact_reveal_policy: 'mutual_only',
+        moderation_status: 'approved',
+      },
+      '/api/profile/media': [],
       '/api/referrals': {
         link: 'https://t.me/rolemate_bot?start=ref_example',
         rewardDays: 2,
@@ -102,6 +128,7 @@ async function mockApi(page: Page, admin = false): Promise<void> {
         premiumUsers: 14,
         starsPayments: 19,
       },
+      '/api/admin/media': [],
     };
     await route.fulfill({
       status: 200,
@@ -131,6 +158,17 @@ test('admin route is absent for a regular user', async ({ page }) => {
   await page.goto('/admin');
   await expect(page).toHaveURL('/');
   await expect(page.getByText('Управление RoleMate')).toHaveCount(0);
+});
+
+test('profile editor loads existing values without destructive defaults', async ({ page }) => {
+  await mockApi(page);
+  await page.goto('/profile/edit');
+  await expect(page.locator('input[name="displayName"]')).toHaveValue('Лис');
+  await expect(page.locator('input[name="shortHeadline"]')).toHaveValue(
+    'Ищу соавтора для долгой истории',
+  );
+  await expect(page.locator('textarea[name="about"]')).toHaveValue(/Люблю сложные сюжеты/);
+  await expect(page.locator('select[name="ageGroup"]')).toHaveValue('21_25');
 });
 
 test('owner sees the protected dashboard', async ({ page }) => {

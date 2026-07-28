@@ -403,6 +403,13 @@ select:focus-visible {
   color: rgba(226, 213, 255, 0.22);
   font-size: 80px;
 }
+.profile-cover:has(> img)::before {
+  display: none;
+}
+.profile-cover > .compatibility,
+.profile-cover > .premium-badge {
+  z-index: 1;
+}
 .compatibility {
   position: absolute;
   right: 16px;

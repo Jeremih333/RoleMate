@@ -271,6 +271,16 @@ export function createBot(env: AppEnv, dataApi: DataApiClient): Bot {
       await sendNativeCaptcha(context, user.userId);
       return;
     }
+    if (parameter === 'profile_photo') {
+      await context.reply(ru.bot.profilePhotoPrompt, {
+        reply_markup: {
+          force_reply: true,
+          selective: true,
+          input_field_placeholder: ru.bot.profilePhotoReplyPlaceholder,
+        },
+      });
+      return;
+    }
     const buttons = new InlineKeyboard()
       .text(ru.bot.buttons.start, 'onboarding:start')
       .row()
@@ -761,6 +771,29 @@ export function createBot(env: AppEnv, dataApi: DataApiClient): Bot {
     ],
     async (context) => {
       if (!context.from) return;
+      if (
+        'photo' in context.message &&
+        context.message.reply_to_message &&
+        context.message.reply_to_message.from?.id === context.me.id &&
+        'text' in context.message.reply_to_message &&
+        context.message.reply_to_message.text === ru.bot.profilePhotoPrompt
+      ) {
+        const photo = context.message.photo.at(-1);
+        if (!photo) return;
+        if ((photo.file_size ?? 0) > 5 * 1024 * 1024) {
+          await context.reply(ru.bot.profilePhotoTooLarge);
+          return;
+        }
+        const user = await upsertUser(context, dataApi);
+        await dataApi.execute('profiles.media.add', {
+          userId: user.userId,
+          telegramFileId: photo.file_id,
+          telegramFileUniqueId: photo.file_unique_id,
+          mediaType: 'photo',
+        });
+        await context.reply(ru.bot.profilePhotoPending);
+        return;
+      }
       const caption = 'caption' in context.message ? context.message.caption : undefined;
       if (caption && containsContact(caption)) {
         await context.reply(ru.contactBlocked);

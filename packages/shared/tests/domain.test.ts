@@ -116,4 +116,36 @@ describe('domain rules', () => {
     });
     expect(result.success).toBe(false);
   });
+
+  it('rejects adult topics for every minor age group', () => {
+    const profile = {
+      displayName: 'Лис',
+      ageGroup: '16_17',
+      shortHeadline: 'Ищу соавтора для большой истории',
+      about: 'Подробное описание автора, стиля письма и желаемого формата совместной игры.',
+      roleplayExperience: '1_3_years',
+      preferredRole: ['любая'],
+      writingStyle: 'literary',
+      averagePostLength: 'paragraphs_3_5',
+      activityFrequency: 'daily',
+      timezone: 'UTC+3',
+      activeHours: 'вечером',
+      languages: ['ru'],
+      fandoms: ['Arcane'],
+      genres: ['драма'],
+      settings: '',
+      plots: '',
+      lookingFor: ['долгосрочный сюжет'],
+      boundaries: 'Без нежелательных и заранее не согласованных тем.',
+      adultTopicsAllowed: true,
+      contactRevealPolicy: 'mutual_only',
+    };
+    const result = profileSchema.safeParse(profile);
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      expect(result.error.issues).toEqual(
+        expect.arrayContaining([expect.objectContaining({ path: ['adultTopicsAllowed'] })]),
+      );
+    }
+  });
 });

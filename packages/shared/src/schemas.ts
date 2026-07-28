@@ -67,6 +67,16 @@ export const profileSchema = z
     contactRevealPolicy: z.enum(['mutual_only', 'disabled']),
   })
   .superRefine((profile, context) => {
+    if (
+      (profile.ageGroup === 'under_16' || profile.ageGroup === '16_17') &&
+      profile.adultTopicsAllowed
+    ) {
+      context.addIssue({
+        code: 'custom',
+        path: ['adultTopicsAllowed'],
+        message: 'Взрослые темы недоступны несовершеннолетним',
+      });
+    }
     for (const key of ['settings', 'plots', 'boundaries'] as const) {
       if (containsContact(profile[key])) {
         context.addIssue({

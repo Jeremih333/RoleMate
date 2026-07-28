@@ -263,7 +263,8 @@ function ProfilesQueue() {
             <div>
               <strong>{profile.display_name}</strong>
               <p className="text-sm text-muted">
-                Telegram {profile.telegram_user_id} · risk {profile.risk_score}
+                {ru.miniApp.admin.telegramUser(profile.telegram_user_id)} · risk{' '}
+                {profile.risk_score}
               </p>
             </div>
             <span className="status-pill">{profile.moderation_status}</span>
@@ -280,7 +281,7 @@ function ProfilesQueue() {
                 })
               }
             >
-              Approve
+              {ru.miniApp.admin.approve}
             </Button>
             <Button
               variant="secondary"
@@ -289,7 +290,7 @@ function ProfilesQueue() {
                 if (reason) moderate.mutate({ profileId: profile.id, status: 'rejected', reason });
               }}
             >
-              Reject
+              {ru.miniApp.admin.reject}
             </Button>
             <Button
               variant="secondary"
@@ -306,7 +307,66 @@ function ProfilesQueue() {
           </div>
         </Card>
       ))}
+      <MediaQueue />
     </div>
+  );
+}
+
+function MediaQueue() {
+  const queryClient = useQueryClient();
+  const media = useQuery({
+    queryKey: ['admin-media'],
+    queryFn: () => api.adminMedia('pending'),
+  });
+  const moderate = useMutation({
+    mutationFn: (input: { mediaId: string; status: 'approved' | 'rejected'; reason: string }) =>
+      api.adminModerateMedia(input.mediaId, input.status, input.reason),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['admin-media'] }),
+  });
+  return (
+    <section className="mt-6">
+      <h2 className="font-display text-2xl">{ru.miniApp.admin.mediaQueueTitle}</h2>
+      <div className="mt-3 grid gap-3 sm:grid-cols-2">
+        {media.data?.map((item) => (
+          <Card className="overflow-hidden" key={item.id}>
+            <img
+              className="aspect-square w-full object-cover"
+              src={`/api/profile-media/${item.id}`}
+              alt=""
+              loading="lazy"
+            />
+            <div className="p-4">
+              <strong>{item.display_name}</strong>
+              <p className="text-xs text-muted">
+                {ru.miniApp.admin.telegramUser(item.telegram_user_id)}
+              </p>
+              <div className="mt-3 flex gap-2">
+                <Button
+                  onClick={() =>
+                    moderate.mutate({
+                      mediaId: item.id,
+                      status: 'approved',
+                      reason: ru.miniApp.admin.mediaApprovedReason,
+                    })
+                  }
+                >
+                  {ru.miniApp.admin.approve}
+                </Button>
+                <Button
+                  variant="secondary"
+                  onClick={() => {
+                    const reason = window.prompt(ru.miniApp.admin.mediaRejectedReasonPrompt);
+                    if (reason) moderate.mutate({ mediaId: item.id, status: 'rejected', reason });
+                  }}
+                >
+                  {ru.miniApp.admin.reject}
+                </Button>
+              </div>
+            </div>
+          </Card>
+        ))}
+      </div>
+    </section>
   );
 }
 

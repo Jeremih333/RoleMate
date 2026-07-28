@@ -64,6 +64,9 @@ export const api = {
       method: 'PUT',
       body: JSON.stringify(profile),
     }),
+  profileMedia: () => request<ProfileMedia[]>('/profile/media'),
+  deleteProfileMedia: (mediaId: string) =>
+    request<{ deleted: true }>(`/profile/media/${mediaId}`, { method: 'DELETE' }),
   search: () => request<SearchProfile[]>('/search?limit=20'),
   searchPreferences: () => request<SearchPreferences>('/search/preferences'),
   saveSearchPreferences: (preferences: SearchPreferencesInput) =>
@@ -168,6 +171,13 @@ export const api = {
     request<AdminUser[]>(`/admin/users?q=${encodeURIComponent(query)}&limit=50`),
   adminProfiles: (status = 'pending') =>
     request<AdminProfile[]>(`/admin/profiles?status=${encodeURIComponent(status)}&limit=50`),
+  adminMedia: (status = 'pending') =>
+    request<AdminMedia[]>(`/admin/media?status=${encodeURIComponent(status)}&limit=50`),
+  adminModerateMedia: (mediaId: string, status: 'approved' | 'rejected', reason: string) =>
+    request<{ updated: true }>(`/admin/media/${mediaId}/moderate`, {
+      method: 'POST',
+      body: JSON.stringify({ status, reason }),
+    }),
   adminReports: (status = 'open') =>
     request<AdminReport[]>(`/admin/reports?status=${encodeURIComponent(status)}&limit=50`),
   adminPayments: (status = 'all') =>
@@ -289,6 +299,15 @@ export interface SearchProfile {
   activity_frequency: string;
   compatibility: number;
   is_premium: number;
+  media_id?: string | null;
+}
+
+export interface ProfileMedia {
+  id: string;
+  media_type: 'photo' | 'animation';
+  sort_order: number;
+  moderation_status: 'pending' | 'approved' | 'rejected';
+  created_at: string;
 }
 
 export interface SearchPreferences {
@@ -477,6 +496,17 @@ export interface AdminProfile {
   moderation_status: string;
   risk_score: number;
   telegram_user_id: number;
+}
+
+export interface AdminMedia {
+  id: string;
+  media_type: 'photo' | 'animation';
+  moderation_status: 'pending' | 'approved' | 'rejected';
+  profile_id: string;
+  user_id: string;
+  display_name: string;
+  telegram_user_id: number;
+  created_at: string;
 }
 
 export interface AdminReport {

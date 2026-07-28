@@ -368,6 +368,39 @@ export async function buildServer(env: AppEnv): Promise<FastifyInstance> {
     const profile = profileSchema.parse(request.body);
     return dataApi.execute('profiles.upsert', { userId: session.userId, profile });
   });
+  app.get('/api/profile/media', async (request) => {
+    const session = await authenticate(request);
+    return dataApi.execute('profiles.media.list', { userId: session.userId });
+  });
+  app.delete('/api/profile/media/:mediaId', async (request) => {
+    const session = await mutateSafe(request);
+    const { mediaId } = z.object({ mediaId: z.string().uuid() }).parse(request.params);
+    return dataApi.execute('profiles.media.delete', { userId: session.userId, mediaId });
+  });
+  app.get('/api/profile-media/:mediaId', async (request, reply) => {
+    const session = await authenticate(request);
+    const { mediaId } = z.object({ mediaId: z.string().uuid() }).parse(request.params);
+    const media = await dataApi.execute<{
+      telegram_file_id: string;
+      media_type: 'photo' | 'animation';
+    }>('profiles.media.resolve', {
+      requesterUserId: session.userId,
+      mediaId,
+    });
+    const file = await bot.api.getFile(media.telegram_file_id);
+    if (!file.file_path) throw new DataApiError('MEDIA_UNAVAILABLE', 'Image unavailable', 404);
+    const telegramResponse = await fetch(
+      `https://api.telegram.org/file/bot${env.TELEGRAM_BOT_TOKEN}/${file.file_path}`,
+      { signal: AbortSignal.timeout(8_000) },
+    );
+    if (!telegramResponse.ok) throw new DataApiError('MEDIA_UNAVAILABLE', 'Image unavailable', 502);
+    const contentType =
+      telegramResponse.headers.get('content-type') ??
+      (media.media_type === 'animation' ? 'image/gif' : 'image/jpeg');
+    reply.header('Content-Type', contentType);
+    reply.header('Cache-Control', 'private, max-age=300');
+    return reply.send(Buffer.from(await telegramResponse.arrayBuffer()));
+  });
   app.get('/api/search', async (request) => {
     const session = await authenticate(request);
     const query = z
@@ -653,6 +686,20 @@ export async function buildServer(env: AppEnv): Promise<FastifyInstance> {
       limit: query.limit,
     });
   });
+  app.get('/api/admin/media', async (request) => {
+    const session = await requireAdmin(request);
+    const query = z
+      .object({
+        status: z.enum(['pending', 'approved', 'rejected', 'all']).default('pending'),
+        limit: z.coerce.number().int().min(1).max(100).default(50),
+      })
+      .parse(request.query);
+    return dataApi.execute('admin.media.list', {
+      adminUserId: session.userId,
+      status: query.status,
+      limit: query.limit,
+    });
+  });
   app.get('/api/admin/reports', async (request) => {
     const session = await requireAdmin(request);
     const query = z
@@ -823,6 +870,21 @@ export async function buildServer(env: AppEnv): Promise<FastifyInstance> {
     });
     await writeAdminAudit(request, session.userId, `profile.${body.status}`, body.reason);
     return result;
+  });
+  app.post('/api/admin/media/:mediaId/moderate', async (request) => {
+    const session = await requireAdmin(request, true);
+    const { mediaId } = z.object({ mediaId: z.string().uuid() }).parse(request.params);
+    const body = z
+      .object({
+        status: z.enum(['approved', 'rejected']),
+        reason: z.string().max(1_000).default(''),
+      })
+      .parse(request.body);
+    return dataApi.execute('admin.media.moderate', {
+      adminUserId: session.userId,
+      mediaId,
+      ...body,
+    });
   });
   app.post('/api/admin/reports/:reportId/resolve', async (request) => {
     const session = await requireAdmin(request, true);

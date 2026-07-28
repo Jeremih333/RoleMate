@@ -29,6 +29,14 @@ function ProfileCard({ profile }: { profile: SearchProfile }) {
   return (
     <Card className="profile-card overflow-hidden">
       <div className="profile-cover">
+        {profile.media_id ? (
+          <img
+            className="absolute inset-0 h-full w-full object-cover"
+            src={`/api/profile-media/${profile.media_id}`}
+            alt=""
+            loading="eager"
+          />
+        ) : null}
         <div className="compatibility">
           {profile.compatibility}%<span>{ru.miniApp.search.matchPercent}</span>
         </div>

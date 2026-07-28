@@ -84,6 +84,21 @@ export const workerOperations = {
   'users.delete': z.object({ userId: z.string().uuid() }),
   'profiles.upsert': z.object({ userId: z.string().uuid(), profile: profileSchema }),
   'profiles.getOwn': z.object({ userId: z.string().uuid() }),
+  'profiles.media.list': z.object({ userId: z.string().uuid() }),
+  'profiles.media.add': z.object({
+    userId: z.string().uuid(),
+    telegramFileId: z.string().min(1).max(512),
+    telegramFileUniqueId: z.string().min(1).max(256),
+    mediaType: z.enum(['photo', 'animation']),
+  }),
+  'profiles.media.delete': z.object({
+    userId: z.string().uuid(),
+    mediaId: z.string().uuid(),
+  }),
+  'profiles.media.resolve': z.object({
+    requesterUserId: z.string().uuid(),
+    mediaId: z.string().uuid(),
+  }),
   'search.list': z.object({ userId: z.string().uuid() }).merge(paginationSchema),
   'search.preferences.get': z.object({ userId: z.string().uuid() }),
   'search.preferences.update': z.object({
@@ -258,6 +273,18 @@ export const workerOperations = {
         .default('pending'),
     })
     .merge(paginationSchema),
+  'admin.media.list': z
+    .object({
+      adminUserId: z.string().uuid(),
+      status: z.enum(['pending', 'approved', 'rejected', 'all']).default('pending'),
+    })
+    .merge(paginationSchema),
+  'admin.media.moderate': z.object({
+    adminUserId: z.string().uuid(),
+    mediaId: z.string().uuid(),
+    status: z.enum(['approved', 'rejected']),
+    reason: z.string().max(1_000),
+  }),
   'admin.reports.list': z
     .object({
       adminUserId: z.string().uuid(),

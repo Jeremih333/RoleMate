@@ -982,6 +982,40 @@ describe('D1 domain operations', () => {
     ).toEqual({ status: 'revoked' });
   });
 
+  it('expires abandoned Stars orders and reports the final status to admin', async () => {
+    const userId = await upsert(4010);
+    const adminId = await upsert(1_040_929_628);
+    const product = sqlite.prepare("SELECT id FROM products WHERE code = 'premium_7d'").get() as {
+      id: string;
+    };
+    const order = (await executeOperation(
+      env,
+      'payments.create',
+      {
+        userId,
+        productId: product.id,
+        idempotencyKey: 'payment-order-expiry-001',
+      },
+      crypto.randomUUID(),
+    )) as { orderId: string };
+    sqlite
+      .prepare("UPDATE payment_orders SET expires_at = datetime('now', '-1 minute') WHERE id = ?")
+      .run(order.orderId);
+
+    await expect(
+      executeOperation(env, 'payments.expirePending', {}, crypto.randomUUID()),
+    ).resolves.toEqual({ expired: 1 });
+    const payments = (await executeOperation(
+      env,
+      'admin.payments.list',
+      { adminUserId: adminId, status: 'all', limit: 20 },
+      crypto.randomUUID(),
+    )) as Array<{ id: string; status: string; expires_at: string }>;
+    expect(payments).toContainEqual(
+      expect.objectContaining({ id: order.orderId, status: 'expired' }),
+    );
+  });
+
   it('handles mocked webhook, search, relay, referral, notification, and session bursts', async () => {
     const users = await Promise.all(
       Array.from({ length: 10 }, (_, index) => onboard(6000 + index)),

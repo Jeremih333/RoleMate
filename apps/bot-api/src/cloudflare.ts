@@ -106,13 +106,19 @@ async function getServer(env: WorkerEnv): Promise<EdgeApplication> {
   return serverPromise;
 }
 
-async function dispatchScheduledBroadcast(env: WorkerEnv): Promise<void> {
+async function dispatchScheduledTasks(env: WorkerEnv): Promise<void> {
   const runtime = appEnv(env);
   const dataApi = new DataApiClient({
     baseUrl: runtime.D1_WORKER_URL,
     serviceId: runtime.INTERNAL_SERVICE_ID,
     secret: runtime.INTERNAL_API_SECRET,
     fetchImpl: bindingFetch(env.DATA_API),
+  });
+  await dataApi.execute('payments.expirePending', {}).catch((error) => {
+    console.error({
+      event: 'scheduled_payment_expiry_failed',
+      error: error instanceof Error ? error.message : 'unknown',
+    });
   });
   const bot = createBot(runtime, dataApi, fetch, false);
   await bot.init();
@@ -146,6 +152,6 @@ export default {
     env: WorkerEnv,
     context: WorkerExecutionContext,
   ): void {
-    context.waitUntil(dispatchScheduledBroadcast(env));
+    context.waitUntil(dispatchScheduledTasks(env));
   },
 };

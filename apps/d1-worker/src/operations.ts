@@ -1419,6 +1419,14 @@ const handlers: { [K in WorkerOperation]: Handler<K> } = {
       .run();
     return { orderId, invoicePayload: payload, amount: product.stars_amount, currency: 'XTR' };
   },
+  'payments.expirePending': async (env) => {
+    const result = await env.DB.prepare(
+      `UPDATE payment_orders SET status = 'expired', updated_at = CURRENT_TIMESTAMP
+       WHERE status IN ('pending', 'precheckout_approved')
+         AND expires_at <= CURRENT_TIMESTAMP`,
+    ).run();
+    return { expired: result.meta.changes };
+  },
   'payments.getByPayload': async (env, input) => {
     const order = await env.DB.prepare(
       `SELECT po.*, p.name, p.description, p.duration_days, p.billing_type
@@ -1898,14 +1906,23 @@ const handlers: { [K in WorkerOperation]: Handler<K> } = {
   },
   'admin.payments.list': async (env, input) => {
     await assertAdmin(env, input.adminUserId);
+    await env.DB.prepare(
+      `UPDATE payment_orders SET status = 'expired', updated_at = CURRENT_TIMESTAMP
+       WHERE status IN ('pending', 'precheckout_approved')
+         AND expires_at <= CURRENT_TIMESTAMP`,
+    ).run();
     return (
       await env.DB.prepare(
         `SELECT po.id, po.provider, po.currency, po.amount, po.status, po.paid_at,
-                po.refunded_at, po.created_at, p.name AS product_name,
+                po.refunded_at, po.created_at, po.expires_at,
+                po.telegram_payment_charge_id, p.id AS product_id, p.code AS product_code,
+                p.name AS product_name, p.billing_type, p.duration_days,
+                pe.ends_at AS entitlement_ends_at, pe.status AS entitlement_status,
                 u.telegram_user_id, u.telegram_username
          FROM payment_orders po
          JOIN users u ON u.id = po.user_id
          JOIN products p ON p.id = po.product_id
+         LEFT JOIN premium_entitlements pe ON pe.payment_order_id = po.id
          WHERE (?1 = 'all' OR po.status = ?1)
          ORDER BY po.created_at DESC LIMIT ?2`,
       )

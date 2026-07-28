@@ -139,6 +139,56 @@ async function mockApi(page: Page, admin = false): Promise<void> {
         premiumUsers: 14,
         starsPayments: 19,
       },
+      '/api/admin/users': [],
+      '/api/admin/profiles': [],
+      '/api/admin/reports': [],
+      '/api/admin/referrals': [],
+      '/api/admin/broadcasts': [],
+      '/api/admin/flags': [],
+      '/api/admin/config': [],
+      '/api/admin/audit': [],
+      '/api/admin/system': {
+        api: 'ok',
+        d1: 'ok',
+        version: '0.1.0',
+        commitSha: '5321e19-long-cloudflare-worker-commit',
+        environment: 'production',
+        uptimeSeconds: 123,
+        checkedAt: '2026-07-29T00:00:00.000Z',
+        maintenanceMode: false,
+        jobs: { pending: 0, running: 0, failed: 0, deadLetters: 0 },
+        lastFailures: [],
+        runtime: { provider: 'cloudflare-workers', service: null },
+      },
+      '/api/admin/products': [
+        {
+          id: '00000000-0000-4000-8000-000000000007',
+          code: 'premium_7d',
+          name: 'Premium на 7 дней',
+          description: 'Тестовый тариф',
+          billing_type: 'one_time',
+          duration_days: 7,
+          stars_amount: 75,
+          is_active: 1,
+        },
+      ],
+      '/api/admin/payments': [
+        {
+          id: '10000000-0000-4000-8000-000000000001',
+          provider: 'telegram_stars',
+          currency: 'XTR',
+          amount: 75,
+          status: 'expired',
+          product_id: '00000000-0000-4000-8000-000000000007',
+          product_code: 'premium_7d',
+          product_name: 'Premium на 7 дней',
+          billing_type: 'one_time',
+          duration_days: 7,
+          telegram_user_id: 1040929628,
+          created_at: '2026-07-28 21:20:23',
+          expires_at: '2026-07-28 21:50:23',
+        },
+      ],
       '/api/admin/media': [],
     };
     await route.fulfill({
@@ -196,6 +246,51 @@ test('owner sees the protected dashboard', async ({ page }) => {
   await expect(page.getByRole('heading', { name: 'Управление RoleMate' })).toBeVisible();
   await expect(page.getByText('Защищённая панель')).toBeVisible();
   await expect(page.getByText('120')).toBeVisible();
+});
+
+test('owner can open system status without breaking the mobile admin layout', async ({ page }) => {
+  await mockApi(page, true);
+  await page.goto('/admin');
+  await page.getByRole('button', { name: 'Система' }).click();
+  await expect(page.getByText('cloudflare-workers')).toBeVisible();
+  await expect(page.getByText('5321e19-long-cloudflare-worker-commit')).toBeVisible();
+  await expect(page.getByText('Раздел временно недоступен')).toHaveCount(0);
+  const overflow = await page.evaluate(
+    () => document.documentElement.scrollWidth > document.documentElement.clientWidth,
+  );
+  expect(overflow).toBe(false);
+});
+
+test('owner can inspect expired payments and edit Stars prices', async ({ page }) => {
+  await mockApi(page, true);
+  await page.goto('/admin');
+  await page.getByRole('button', { name: 'Платежи' }).click();
+  await expect(page.getByRole('heading', { name: 'Тарифы Premium' })).toBeVisible();
+  await expect(page.getByText('Premium на 7 дней')).toHaveCount(2);
+  await expect(page.locator('.status-pill', { hasText: 'Истёк' })).toBeVisible();
+  await page.getByLabel('Цена, Stars').fill('80');
+  await page.getByRole('button', { name: 'Сохранить', exact: true }).click();
+  await expect(page.getByText('Тариф обновлён.')).toBeVisible();
+});
+
+test('every admin section remains renderable and isolated on mobile', async ({ page }) => {
+  await mockApi(page, true);
+  await page.goto('/admin');
+  for (const section of [
+    'Dashboard',
+    'Пользователи',
+    'Анкеты',
+    'Жалобы',
+    'Платежи',
+    'Рефералы',
+    'Рассылки',
+    'Настройки',
+    'Система',
+    'Audit log',
+  ]) {
+    await page.getByRole('button', { name: section, exact: true }).click();
+    await expect(page.getByText('Раздел временно недоступен')).toHaveCount(0);
+  }
 });
 
 test('reduced motion is respected', async ({ page }) => {

@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { Component, useState, type ErrorInfo, type ReactNode } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { ru } from '@rolemate/shared';
 import {
@@ -7,7 +7,6 @@ import {
   Ban,
   Crown,
   Database,
-  DollarSign,
   FileCheck,
   Flag,
   Heart,
@@ -17,11 +16,12 @@ import {
   Send,
   Server,
   Shield,
+  Star,
   UserPlus,
   Users,
 } from 'lucide-react';
 import { Redirect } from 'wouter';
-import { api, type AdminConfig } from '../api.js';
+import { api, type AdminConfig, type Product } from '../api.js';
 import { Button, Card, SectionTitle, Skeleton } from '../components/ui.js';
 import { useUserStore } from '../store.js';
 
@@ -76,24 +76,61 @@ export function AdminPage() {
         ))}
       </div>
       <div className="mt-6">
-        {section === 'dashboard' ? <Dashboard /> : null}
-        {section === 'users' ? <UsersQueue /> : null}
-        {section === 'profiles' ? <ProfilesQueue /> : null}
-        {section === 'reports' ? <ReportsQueue /> : null}
-        {section === 'payments' ? <Payments /> : null}
-        {section === 'referrals' ? <Referrals /> : null}
-        {section === 'broadcasts' ? <Broadcasts /> : null}
-        {section === 'flags' ? <Flags /> : null}
-        {section === 'system' ? <SystemStatus /> : null}
-        {section === 'audit' ? <AuditLog /> : null}
+        <AdminSectionBoundary key={section}>
+          {section === 'dashboard' ? <Dashboard /> : null}
+          {section === 'users' ? <UsersQueue /> : null}
+          {section === 'profiles' ? <ProfilesQueue /> : null}
+          {section === 'reports' ? <ReportsQueue /> : null}
+          {section === 'payments' ? <Payments /> : null}
+          {section === 'referrals' ? <Referrals /> : null}
+          {section === 'broadcasts' ? <Broadcasts /> : null}
+          {section === 'flags' ? <Flags /> : null}
+          {section === 'system' ? <SystemStatus /> : null}
+          {section === 'audit' ? <AuditLog /> : null}
+        </AdminSectionBoundary>
       </div>
     </div>
   );
 }
 
+class AdminSectionBoundary extends Component<
+  { children: ReactNode },
+  { failed: boolean; details: string }
+> {
+  override state = { failed: false, details: '' };
+
+  static getDerivedStateFromError(error: unknown) {
+    return {
+      failed: true,
+      details: error instanceof Error ? error.message : ru.miniApp.admin.unknownSectionError,
+    };
+  }
+
+  override componentDidCatch(error: Error, info: ErrorInfo) {
+    console.error('Admin section render failed', { name: error.name, stack: info.componentStack });
+  }
+
+  override render() {
+    if (!this.state.failed) return this.props.children;
+    return (
+      <Card className="admin-error-card">
+        <AlertTriangle />
+        <div>
+          <strong>{ru.miniApp.admin.sectionErrorTitle}</strong>
+          <p>{this.state.details}</p>
+          <Button className="mt-3" onClick={() => this.setState({ failed: false, details: '' })}>
+            {ru.miniApp.admin.retrySection}
+          </Button>
+        </div>
+      </Card>
+    );
+  }
+}
+
 function Dashboard() {
   const stats = useQuery({ queryKey: ['admin-dashboard'], queryFn: api.adminDashboard });
   if (stats.isLoading) return <Skeleton className="h-96" />;
+  if (stats.isError) return <AdminRequestError error={stats.error} retry={() => stats.refetch()} />;
   const data = stats.data;
   const items = [
     [ru.miniApp.admin.stats[0], data?.users, Users],
@@ -137,6 +174,7 @@ function UsersQueue() {
       action:
         'warn' | 'temporary_ban' | 'permanent_ban' | 'unban' | 'disable_profile' | 'reset_captcha';
       reason: string;
+      bannedUntil?: string;
     }) => api.adminModerateUser(input.userId, input),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ['admin-users'] }),
   });
@@ -145,6 +183,13 @@ function UsersQueue() {
       api.adminGrantPremium(input.userId, input.durationDays, input.reason),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ['admin-users'] }),
   });
+  const revokePremium = useMutation({
+    mutationFn: (userId: string) =>
+      api.adminRevokePremium(userId, ru.miniApp.admin.ownerRevokeReason),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['admin-users'] }),
+  });
+  if (users.isLoading) return <Skeleton className="h-72" />;
+  if (users.isError) return <AdminRequestError error={users.error} retry={() => users.refetch()} />;
   return (
     <div>
       <label className="flex items-center gap-2">
@@ -211,14 +256,7 @@ function UsersQueue() {
               >
                 {ru.miniApp.admin.grantPremium}
               </Button>
-              <Button
-                variant="secondary"
-                onClick={() =>
-                  void api
-                    .adminRevokePremium(user.id, ru.miniApp.admin.ownerRevokeReason)
-                    .then(() => queryClient.invalidateQueries({ queryKey: ['admin-users'] }))
-                }
-              >
+              <Button variant="secondary" onClick={() => revokePremium.mutate(user.id)}>
                 {ru.miniApp.admin.revokePremium}
               </Button>
               <Button
@@ -233,7 +271,50 @@ function UsersQueue() {
               >
                 {ru.miniApp.admin.resetCaptcha}
               </Button>
+              <Button
+                variant="secondary"
+                onClick={() => {
+                  const reason = window.prompt(ru.miniApp.admin.warningReasonPrompt);
+                  if (reason) moderate.mutate({ userId: user.id, action: 'warn', reason });
+                }}
+              >
+                {ru.miniApp.admin.warn}
+              </Button>
+              {!user.is_banned ? (
+                <Button
+                  variant="secondary"
+                  onClick={() => {
+                    const reason = window.prompt(ru.miniApp.admin.temporaryBanReasonPrompt);
+                    if (!reason) return;
+                    const bannedUntil = new Date(Date.now() + 24 * 60 * 60 * 1_000).toISOString();
+                    moderate.mutate({
+                      userId: user.id,
+                      action: 'temporary_ban',
+                      reason,
+                      bannedUntil,
+                    });
+                  }}
+                >
+                  {ru.miniApp.admin.temporaryBan}
+                </Button>
+              ) : null}
+              <Button
+                variant="secondary"
+                onClick={() =>
+                  moderate.mutate({
+                    userId: user.id,
+                    action: 'disable_profile',
+                    reason: ru.miniApp.admin.ownerDisableProfileReason,
+                  })
+                }
+              >
+                {ru.miniApp.admin.disableProfile}
+              </Button>
             </div>
+            <MutationFeedback
+              states={[moderate, premium, revokePremium]}
+              success={ru.miniApp.admin.actionCompleted}
+            />
           </Card>
         ))}
       </div>
@@ -255,6 +336,9 @@ function ProfilesQueue() {
     }) => api.adminModerateProfile(input.profileId, input.status, input.reason),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ['admin-profiles'] }),
   });
+  if (profiles.isLoading) return <Skeleton className="h-72" />;
+  if (profiles.isError)
+    return <AdminRequestError error={profiles.error} retry={() => profiles.refetch()} />;
   return (
     <div className="space-y-3">
       {profiles.data?.map((profile) => (
@@ -304,9 +388,22 @@ function ProfilesQueue() {
             >
               {ru.miniApp.admin.archive}
             </Button>
+            <Button
+              variant="secondary"
+              onClick={() =>
+                moderate.mutate({
+                  profileId: profile.id,
+                  status: 'paused',
+                  reason: ru.miniApp.admin.ownerPausedReason,
+                })
+              }
+            >
+              {ru.miniApp.admin.pauseProfile}
+            </Button>
           </div>
         </Card>
       ))}
+      <MutationFeedback states={[moderate]} success={ru.miniApp.admin.actionCompleted} />
       <MediaQueue />
     </div>
   );
@@ -323,6 +420,8 @@ function MediaQueue() {
       api.adminModerateMedia(input.mediaId, input.status, input.reason),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ['admin-media'] }),
   });
+  if (media.isLoading) return <Skeleton className="mt-6 h-72" />;
+  if (media.isError) return <AdminRequestError error={media.error} retry={() => media.refetch()} />;
   return (
     <section className="mt-6">
       <h2 className="font-display text-2xl">{ru.miniApp.admin.mediaQueueTitle}</h2>
@@ -366,6 +465,7 @@ function MediaQueue() {
           </Card>
         ))}
       </div>
+      <MutationFeedback states={[moderate]} success={ru.miniApp.admin.actionCompleted} />
     </section>
   );
 }
@@ -384,6 +484,9 @@ function ReportsQueue() {
     }) => api.adminResolveReport(input.reportId, input.status, input.resolution),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ['admin-reports'] }),
   });
+  if (reports.isLoading) return <Skeleton className="h-72" />;
+  if (reports.isError)
+    return <AdminRequestError error={reports.error} retry={() => reports.refetch()} />;
   return (
     <div className="space-y-3">
       {reports.data?.map((report) => (
@@ -400,6 +503,20 @@ function ReportsQueue() {
             {report.reported_display_name ?? report.reported_telegram_id}
           </p>
           <div className="mt-3 flex gap-2">
+            {report.status === 'open' ? (
+              <Button
+                variant="secondary"
+                onClick={() =>
+                  resolve.mutate({
+                    reportId: report.id,
+                    status: 'reviewing',
+                    resolution: ru.miniApp.admin.reviewStarted,
+                  })
+                }
+              >
+                {ru.miniApp.admin.startReview}
+              </Button>
+            ) : null}
             <Button
               onClick={() =>
                 resolve.mutate({
@@ -430,50 +547,187 @@ function ReportsQueue() {
           </div>
         </Card>
       ))}
+      <MutationFeedback states={[resolve]} success={ru.miniApp.admin.actionCompleted} />
     </div>
   );
 }
 
 function Payments() {
   const queryClient = useQueryClient();
-  const payments = useQuery({ queryKey: ['admin-payments'], queryFn: () => api.adminPayments() });
+  const [status, setStatus] = useState<
+    'all' | 'pending' | 'precheckout_approved' | 'paid' | 'refunded' | 'failed' | 'expired'
+  >('all');
+  const payments = useQuery({
+    queryKey: ['admin-payments', status],
+    queryFn: () => api.adminPayments(status),
+  });
+  const products = useQuery({ queryKey: ['admin-products'], queryFn: api.adminProducts });
   const refund = useMutation({
     mutationFn: api.adminRefundPayment,
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['admin-payments'] }),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ['admin-payments'] });
+      void queryClient.invalidateQueries({ queryKey: ['admin-products'] });
+    },
   });
-  if (payments.isLoading) return <Skeleton className="h-72" />;
+  if (payments.isLoading || products.isLoading) return <Skeleton className="h-72" />;
+  if (payments.isError)
+    return <AdminRequestError error={payments.error} retry={() => payments.refetch()} />;
+  if (products.isError)
+    return <AdminRequestError error={products.error} retry={() => products.refetch()} />;
   return (
-    <div className="space-y-3">
-      {payments.data?.map((payment) => (
-        <Card key={payment.id} className="p-4">
-          <div className="flex justify-between gap-3">
-            <span className="flex items-center gap-2">
-              <DollarSign className="h-4 w-4" />
-              <strong>{payment.product_name}</strong>
-            </span>
-            <span className="status-pill">{payment.status}</span>
-          </div>
-          <p className="mt-2 text-sm text-soft">
-            {payment.amount} {payment.currency} · Telegram {payment.telegram_user_id}
-          </p>
-          <p className="mt-1 text-xs text-muted">
-            {ru.miniApp.admin.paymentCreated}: {payment.created_at}
-          </p>
-          {payment.status === 'paid' ? (
-            <Button
-              className="mt-3"
-              variant="secondary"
-              disabled={refund.isPending}
-              onClick={() => refund.mutate(payment.id)}
-            >
-              {ru.miniApp.admin.refund}
-            </Button>
-          ) : null}
-        </Card>
-      ))}
-      {!payments.data?.length ? <Card className="p-4">{ru.miniApp.admin.noData}</Card> : null}
+    <div className="space-y-6">
+      <section>
+        <h2 className="font-display text-2xl">{ru.miniApp.admin.productsTitle}</h2>
+        <p className="mt-1 text-xs text-muted">{ru.miniApp.admin.productsDescription}</p>
+        <div className="mt-3 space-y-3">
+          {products.data?.map((product) => (
+            <ProductEditor key={product.id} product={product} />
+          ))}
+        </div>
+      </section>
+      <section>
+        <div className="admin-toolbar">
+          <h2 className="font-display text-2xl">{ru.miniApp.admin.paymentHistory}</h2>
+          <select
+            className="input-field admin-filter"
+            aria-label={ru.miniApp.admin.paymentStatusFilter}
+            value={status}
+            onChange={(event) => setStatus(event.target.value as typeof status)}
+          >
+            {Object.entries(ru.miniApp.admin.paymentStatuses).map(([value, label]) => (
+              <option key={value} value={value}>
+                {label}
+              </option>
+            ))}
+          </select>
+        </div>
+        {payments.data?.map((payment) => (
+          <Card key={payment.id} className="mt-3 p-4">
+            <div className="flex justify-between gap-3">
+              <span className="flex items-center gap-2">
+                <Star className="h-4 w-4 text-lilac" />
+                <strong>{payment.product_name}</strong>
+              </span>
+              <span className={`status-pill status-${payment.status}`}>
+                {ru.miniApp.admin.paymentStatuses[payment.status] ?? payment.status}
+              </span>
+            </div>
+            <p className="mt-2 text-sm text-soft">
+              {payment.amount} {payment.currency} · Telegram {payment.telegram_user_id}
+            </p>
+            <p className="mt-1 text-xs text-muted">
+              {ru.miniApp.admin.paymentCreated}: {formatAdminDate(payment.created_at)}
+            </p>
+            {payment.status === 'pending' || payment.status === 'precheckout_approved' ? (
+              <p className="mt-1 text-xs text-muted">
+                {ru.miniApp.admin.paymentExpires}: {formatAdminDate(payment.expires_at)}
+              </p>
+            ) : null}
+            {payment.paid_at ? (
+              <p className="mt-1 text-xs text-muted">
+                {ru.miniApp.admin.paymentPaid}: {formatAdminDate(payment.paid_at)}
+              </p>
+            ) : null}
+            {payment.entitlement_ends_at ? (
+              <p className="mt-1 text-xs text-muted">
+                {ru.miniApp.admin.premiumUntil}: {formatAdminDate(payment.entitlement_ends_at)}
+              </p>
+            ) : null}
+            {payment.status === 'paid' ? (
+              <Button
+                className="mt-3"
+                variant="secondary"
+                disabled={refund.isPending}
+                onClick={() => {
+                  if (window.confirm(ru.miniApp.admin.refundConfirmation(payment.amount))) {
+                    refund.mutate(payment.id);
+                  }
+                }}
+              >
+                {ru.miniApp.admin.refund}
+              </Button>
+            ) : null}
+          </Card>
+        ))}
+        {!payments.data?.length ? <Card className="p-4">{ru.miniApp.admin.noData}</Card> : null}
+        <MutationFeedback states={[refund]} success={ru.miniApp.admin.refundCompleted} />
+      </section>
     </div>
   );
+}
+
+function ProductEditor({ product }: { product: Product }) {
+  const queryClient = useQueryClient();
+  const [starsAmount, setStarsAmount] = useState(product.stars_amount);
+  const [isActive, setIsActive] = useState(Boolean(product.is_active));
+  const update = useMutation({
+    mutationFn: () => api.adminUpdateProduct(product.id, starsAmount, isActive),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ['admin-products'] });
+      void queryClient.invalidateQueries({ queryKey: ['products'] });
+    },
+  });
+  return (
+    <Card className="p-4">
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <div>
+          <strong>{product.name}</strong>
+          <p className="text-xs text-muted">
+            {product.duration_days} {ru.miniApp.admin.days} · {product.billing_type}
+          </p>
+        </div>
+        <label className="flex items-center gap-2 text-sm text-soft">
+          {ru.miniApp.admin.productEnabled}
+          <input
+            type="checkbox"
+            checked={isActive}
+            onChange={(event) => setIsActive(event.target.checked)}
+          />
+        </label>
+      </div>
+      <div className="mt-3 flex items-end gap-2">
+        <label className="min-w-0 flex-1 text-xs text-muted">
+          {ru.miniApp.admin.starsPrice}
+          <input
+            className="input-field mt-1"
+            type="number"
+            min={1}
+            max={10_000}
+            value={starsAmount}
+            onChange={(event) => setStarsAmount(Number(event.target.value))}
+          />
+        </label>
+        <Button
+          disabled={!Number.isInteger(starsAmount) || starsAmount < 1 || starsAmount > 10_000}
+          loading={update.isPending}
+          onClick={() => update.mutate()}
+        >
+          {ru.miniApp.admin.saveProduct}
+        </Button>
+      </div>
+      <MutationFeedback states={[update]} success={ru.miniApp.admin.productSaved} />
+    </Card>
+  );
+}
+
+function formatAdminDate(value: string) {
+  const normalized = value.includes('T') ? value : `${value.replace(' ', 'T')}Z`;
+  const date = new Date(normalized);
+  return Number.isNaN(date.getTime()) ? value : date.toLocaleString('ru-RU');
+}
+
+function MutationFeedback({
+  states,
+  success,
+}: {
+  states: Array<{ isError: boolean; isSuccess: boolean; error: Error | null }>;
+  success: string;
+}) {
+  const failed = states.find((state) => state.isError);
+  if (failed?.error) return <p className="admin-action-error">{failed.error.message}</p>;
+  if (states.some((state) => state.isSuccess))
+    return <p className="admin-action-success">{success}</p>;
+  return null;
 }
 
 function Referrals() {
@@ -488,6 +742,8 @@ function Referrals() {
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ['admin-referrals'] }),
   });
   if (referrals.isLoading) return <Skeleton className="h-72" />;
+  if (referrals.isError)
+    return <AdminRequestError error={referrals.error} retry={() => referrals.refetch()} />;
   return (
     <div className="space-y-3">
       <Button
@@ -573,6 +829,7 @@ function Referrals() {
         </Card>
       ))}
       {!referrals.data?.length ? <Card className="p-4">{ru.miniApp.admin.noData}</Card> : null}
+      <MutationFeedback states={[review]} success={ru.miniApp.admin.actionCompleted} />
     </div>
   );
 }
@@ -609,6 +866,9 @@ function Broadcasts() {
       api.adminControlBroadcast(input.id, input.action, input.phrase),
     onSuccess: refresh,
   });
+  if (broadcasts.isLoading) return <Skeleton className="h-72" />;
+  if (broadcasts.isError)
+    return <AdminRequestError error={broadcasts.error} retry={() => broadcasts.refetch()} />;
   return (
     <div className="space-y-4">
       <Card className="p-4">
@@ -707,6 +967,10 @@ function Broadcasts() {
           </div>
         </Card>
       ))}
+      <MutationFeedback
+        states={[create, dryRun, control]}
+        success={ru.miniApp.admin.actionCompleted}
+      />
     </div>
   );
 }
@@ -718,6 +982,8 @@ function SystemStatus() {
     refetchInterval: 30_000,
   });
   if (system.isLoading) return <Skeleton className="h-72" />;
+  if (system.isError)
+    return <AdminRequestError error={system.error} retry={() => system.refetch()} />;
   const data = system.data;
   if (!data) return null;
   const labels = ru.miniApp.admin.systemLabels;
@@ -734,15 +1000,16 @@ function SystemStatus() {
     ],
     [labels.jobs, `${data.jobs.pending}/${data.jobs.running}/${data.jobs.failed}`],
     [labels.deadLetters, data.jobs.deadLetters],
-    [labels.northflank, data.northflank.service ?? '—'],
+    [labels.runtime, data.runtime?.provider ?? '—'],
+    [labels.service, data.runtime?.service ?? '—'],
   ];
   return (
     <div className="space-y-4">
-      <div className="admin-grid">
+      <div className="admin-grid admin-system-grid">
         {items.map(([label, value]) => (
           <Card key={label} className="admin-stat">
             <Server />
-            <strong>{value}</strong>
+            <strong className="admin-system-value">{value}</strong>
             <small>{label}</small>
           </Card>
         ))}
@@ -763,6 +1030,21 @@ function SystemStatus() {
   );
 }
 
+function AdminRequestError({ error, retry }: { error: Error; retry: () => unknown }) {
+  return (
+    <Card className="admin-error-card">
+      <AlertTriangle />
+      <div>
+        <strong>{ru.miniApp.admin.requestErrorTitle}</strong>
+        <p>{error.message}</p>
+        <Button className="mt-3" onClick={() => void retry()}>
+          {ru.miniApp.admin.retrySection}
+        </Button>
+      </div>
+    </Card>
+  );
+}
+
 function Flags() {
   const queryClient = useQueryClient();
   const flags = useQuery({ queryKey: ['admin-flags'], queryFn: api.adminFlags });
@@ -772,6 +1054,10 @@ function Flags() {
       api.adminUpdateFlag(input.key, input.enabled),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ['admin-flags'] }),
   });
+  if (flags.isLoading || config.isLoading) return <Skeleton className="h-72" />;
+  if (flags.isError) return <AdminRequestError error={flags.error} retry={() => flags.refetch()} />;
+  if (config.isError)
+    return <AdminRequestError error={config.error} retry={() => config.refetch()} />;
   return (
     <div className="space-y-6">
       <div className="space-y-3">
@@ -789,6 +1075,7 @@ function Flags() {
           </Card>
         ))}
       </div>
+      <MutationFeedback states={[update]} success={ru.miniApp.admin.actionCompleted} />
       <div className="space-y-3">
         {config.data?.map((item) => (
           <ConfigEditor key={item.key} item={item} />
@@ -829,12 +1116,15 @@ function ConfigEditor({ item }: { item: AdminConfig }) {
       <Button className="mt-3" onClick={() => update.mutate()} loading={update.isPending}>
         {ru.miniApp.admin.saveConfig}
       </Button>
+      <MutationFeedback states={[update]} success={ru.miniApp.admin.configSaved} />
     </Card>
   );
 }
 
 function AuditLog() {
   const audit = useQuery({ queryKey: ['admin-audit'], queryFn: api.adminAudit });
+  if (audit.isLoading) return <Skeleton className="h-72" />;
+  if (audit.isError) return <AdminRequestError error={audit.error} retry={() => audit.refetch()} />;
   return (
     <div className="space-y-3">
       {audit.data?.map((entry) => (

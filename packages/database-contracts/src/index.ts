@@ -216,6 +216,7 @@ export const workerOperations = {
   'telegramUpdates.release': z.object({ updateId: z.number().int().nonnegative() }),
   'products.list': z.object({ activeOnly: z.boolean().default(true) }),
   'payments.create': z.object({ userId: z.string().uuid() }).merge(createPaymentSchema),
+  'payments.expirePending': z.object({}),
   'payments.getByPayload': z.object({ invoicePayload: z.string().min(1).max(128) }),
   'payments.markPrecheckout': z.object({
     orderId: z.string().uuid(),

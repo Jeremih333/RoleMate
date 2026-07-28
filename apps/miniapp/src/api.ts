@@ -182,6 +182,12 @@ export const api = {
     request<AdminReport[]>(`/admin/reports?status=${encodeURIComponent(status)}&limit=50`),
   adminPayments: (status = 'all') =>
     request<AdminPayment[]>(`/admin/payments?status=${encodeURIComponent(status)}&limit=50`),
+  adminProducts: () => request<Product[]>('/admin/products'),
+  adminUpdateProduct: (productId: string, starsAmount: number, isActive: boolean) =>
+    request<{ updated: true }>(`/admin/products/${productId}`, {
+      method: 'PUT',
+      body: JSON.stringify({ starsAmount, isActive }),
+    }),
   adminRefundPayment: (orderId: string) =>
     request<{ refunded: true }>(`/admin/payments/${orderId}/refund`, {
       method: 'POST',
@@ -448,6 +454,7 @@ export interface Product {
   billing_type: string;
   duration_days: number;
   stars_amount: number;
+  is_active: number;
 }
 
 export interface ReferralSummary {
@@ -527,8 +534,16 @@ export interface AdminPayment {
   amount: number;
   status: string;
   product_name: string;
+  product_id: string;
+  product_code: string;
+  billing_type: string;
+  duration_days: number;
   telegram_user_id: number;
   telegram_username?: string;
+  telegram_payment_charge_id?: string;
+  entitlement_ends_at?: string;
+  entitlement_status?: string;
+  expires_at: string;
   paid_at?: string;
   refunded_at?: string;
   created_at: string;
@@ -573,7 +588,7 @@ export interface AdminSystemStatus {
   maintenanceMode: boolean;
   jobs: { pending: number; running: number; failed: number; deadLetters: number };
   lastFailures: Array<{ error_code: string; safe_message: string; created_at: string }>;
-  northflank: { service?: string; project?: string };
+  runtime?: { provider?: string; service?: string | null };
 }
 
 export interface FeatureFlag {

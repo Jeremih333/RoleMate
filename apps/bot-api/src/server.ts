@@ -721,6 +721,10 @@ export async function buildServer(
       ...query,
     });
   });
+  app.get('/api/admin/products', async (request) => {
+    await requireAdmin(request);
+    return dataApi.execute('products.list', { activeOnly: false });
+  });
   app.get('/api/admin/referrals', async (request) => {
     const session = await requireAdmin(request);
     const query = z

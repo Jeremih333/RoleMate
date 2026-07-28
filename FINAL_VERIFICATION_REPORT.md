@@ -5,7 +5,7 @@
 ## Production
 
 - App Worker: `https://rolemate-app.carreljeremih.workers.dev`
-- Cloudflare version: `af7f7727-97f1-447e-8fa9-f6fccf573fda`
+- Cloudflare version: `6657359d-3fdc-4250-838e-c9862bb3680d`
 - Data API: `https://rolemate-data-api.carreljeremih.workers.dev`
 - Git branch: `agent/webhook-init-audit`
 - Draft PR: `https://github.com/Jeremih333/RoleMate/pull/1`
@@ -17,7 +17,7 @@ Northflank исключён из production. App Worker, D1, Static Assets, serv
 
 | Проверка                         | Результат                         |
 | -------------------------------- | --------------------------------- |
-| Worker startup                   | 40 мс                             |
+| Worker startup                   | 29 мс                             |
 | `/health/live`                   | 200, `ok`                         |
 | `/health/startup`                | 200                               |
 | `/health/ready`                  | 200, D1 `true`                    |
@@ -31,6 +31,7 @@ Northflank исключён из production. App Worker, D1, Static Assets, serv
 | Telegram Mini App menu           | успешно                           |
 | Telegram `getWebhookInfo`        | URL задан, last error отсутствует |
 | Cron Trigger                     | `* * * * *` активен               |
+| Невалидный Mini App initData     | 401, `INVALID_INIT_DATA`          |
 
 Четыре runtime secret находятся в Cloudflare Secret Store. Значения не включены
 в git, Worker bundle, отчёт или tool logs.
@@ -41,9 +42,9 @@ Northflank исключён из production. App Worker, D1, Static Assets, serv
 - format: passed;
 - lint: passed;
 - TypeScript strict typecheck: passed;
-- 37 unit/integration/migration tests: passed;
+- 38 unit/integration/migration tests: passed;
 - 18/18 Playwright E2E: passed на small Android, iPhone и desktop;
-- production Cloudflare bundle: 464,91 КиБ raw / 85,57 КиБ gzip;
+- production Cloudflare bundle: 465,81 КиБ raw / 85,78 КиБ gzip;
 - реальный локальный `workerd` smoke: passed;
 - dependency audit: no known vulnerabilities.
 
@@ -52,10 +53,13 @@ Northflank исключён из production. App Worker, D1, Static Assets, serv
 1. GitHub `verify` падает на известном порядке clean-runner CI: до `lint` не
    собирается `@rolemate/shared`. Изменение `.github/workflows/ci.yml`
    намеренно не сделано без отдельного разрешения владельца.
-2. Нужен ручной production-проход с двумя Telegram-пользователями: `/start`,
+2. Нужен новый реальный вход в Mini App после auth hotfix: успешный
+   `/api/auth/telegram`, создание web-сессии и последующий `/api/me` ещё не
+   зафиксированы в production.
+3. Нужен ручной production-проход с двумя Telegram-пользователями: `/start`,
    анкета, мэтч, текстовый/медиа relay, блокировка, жалоба, Stars purchase/refund
    и все кнопки.
-3. Для Premium custom emoji нужны реальные `custom_emoji_id`; до их получения
+4. Для Premium custom emoji нужны реальные `custom_emoji_id`; до их получения
    безопасно используется Unicode fallback.
 
 Эти пункты не скрыты под статусом «готово»: production-инфраструктура и

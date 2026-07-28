@@ -1,0 +1,11 @@
+export const OWNER_TELEGRAM_ID = 1_040_929_628;
+export const SUPPORT_URL = 'https://t.me/odinnadsat';
+export const PROMO_CHAT_URL = 'https://t.me/piarchaticksss';
+export const PROMO_HANDLE = '@piarchaticksss';
+export const SUPPORT_HANDLE = '@odinnadsat';
+export const FULL_FOOTER = 'Создано при поддержке пиар-чата @piarchaticksss';
+export const SHORT_FOOTER = 'При поддержке: @piarchaticksss';
+export const STARS_CURRENCY = 'XTR';
+export const STARS_SUBSCRIPTION_PERIOD_SECONDS = 2_592_000;
+export const MINI_APP_AUTH_MAX_AGE_SECONDS = 900;
+export const INTERNAL_REQUEST_MAX_SKEW_SECONDS = 60;

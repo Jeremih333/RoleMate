@@ -1,0 +1,27 @@
+name = "rolemate-data-api"
+main = "src/index.ts"
+compatibility_date = "2026-07-01"
+workers_dev = true
+preview_urls = false
+
+[vars]
+ENVIRONMENT = "production"
+ALLOWED_SERVICE_IDS = "rolemate-bot-api"
+
+[[d1_databases]]
+binding = "DB"
+database_name = "rolemate-production"
+database_id = "b43f7694-2383-43ed-9993-ea37af18ec71"
+migrations_dir = "../../migrations"
+migrations_table = "d1_migrations"
+
+[env.preview.vars]
+ENVIRONMENT = "preview"
+ALLOWED_SERVICE_IDS = "rolemate-bot-api"
+
+[[env.preview.d1_databases]]
+binding = "DB"
+database_name = "rolemate-preview"
+database_id = "f67fcb4e-16ee-4154-b5d9-0ee897972dbd"
+migrations_dir = "../../migrations"
+migrations_table = "d1_migrations"

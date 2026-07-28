@@ -1,0 +1,36 @@
+{
+  "name": "@rolemate/bot-api",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "dev": "tsx watch src/main.ts",
+    "start": "node dist/main.js",
+    "lint": "eslint src tests",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@fastify/cookie": "^11.0.2",
+    "@fastify/cors": "^11.0.1",
+    "@fastify/helmet": "^13.0.1",
+    "@fastify/rate-limit": "^10.3.0",
+    "@fastify/static": "^10.1.2",
+    "@fastify/swagger": "^9.5.1",
+    "@fastify/swagger-ui": "^6.1.0",
+    "@rolemate/database-contracts": "workspace:*",
+    "@rolemate/shared": "workspace:*",
+    "dotenv": "^17.2.0",
+    "fastify": "^5.4.0",
+    "grammy": "^1.36.3",
+    "pino": "^9.7.0",
+    "zod": "^3.25.76"
+  },
+  "devDependencies": {
+    "@types/node": "^22.16.5",
+    "tsx": "^4.20.3",
+    "typescript": "^5.8.3",
+    "vitest": "^3.2.4"
+  }
+}

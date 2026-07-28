@@ -1,0 +1,16 @@
+.git
+.github
+node_modules
+**/node_modules
+**/dist
+.turbo
+coverage
+playwright-report
+test-results
+.env
+.env.*
+!.env.example
+assets/source
+toolkit
+FINAL_VERIFICATION_REPORT.md
+

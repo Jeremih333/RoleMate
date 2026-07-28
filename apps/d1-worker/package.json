@@ -1,0 +1,28 @@
+{
+  "name": "@rolemate/d1-worker",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "wrangler deploy --dry-run --outdir dist",
+    "dev": "wrangler dev",
+    "lint": "eslint src",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run",
+    "deploy": "wrangler deploy",
+    "migrate:preview": "wrangler d1 migrations apply rolemate-preview --remote",
+    "migrate:production": "wrangler d1 migrations apply rolemate-production --remote"
+  },
+  "dependencies": {
+    "@rolemate/database-contracts": "workspace:*",
+    "@rolemate/shared": "workspace:*",
+    "hono": "^4.8.5",
+    "zod": "^3.25.76"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^5.20260722.1",
+    "typescript": "^5.8.3",
+    "vitest": "^3.2.4",
+    "wrangler": "^4.24.3"
+  }
+}

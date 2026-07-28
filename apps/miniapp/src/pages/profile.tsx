@@ -1,11 +1,23 @@
 import { zodResolver } from '@hookform/resolvers/zod';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { ArrowRight, Check, Edit3, ImagePlus, Trash2, UserRound } from 'lucide-react';
-import { useEffect } from 'react';
+import {
+  ArrowRight,
+  Check,
+  Edit3,
+  Eye,
+  EyeOff,
+  ImagePlus,
+  Trash2,
+  UserRound,
+  X,
+} from 'lucide-react';
+import { useEffect, useState } from 'react';
 import { useForm, type Resolver } from 'react-hook-form';
 import { Link, useLocation } from 'wouter';
 import { profileSchema, ru, type ProfileInput } from '@rolemate/shared';
 import { ApiError, api } from '../api.js';
+import type { ProfileMedia } from '../api.js';
+import { ProfileMarkdown } from '../components/markdown.js';
 import { Button, Card, EmptyState, SectionTitle, Skeleton } from '../components/ui.js';
 import { getTelegram } from '../telegram.js';
 
@@ -25,6 +37,7 @@ const defaults: ProfileInput = {
   languages: ['ru'],
   fandoms: [],
   genres: [],
+  tags: [],
   settings: '',
   plots: '',
   lookingFor: [ru.miniApp.profile.defaults.lookingFor],
@@ -65,11 +78,6 @@ function validationMessage(message: unknown): string {
   return message;
 }
 
-const timezoneOptions = Array.from({ length: 27 }, (_, index) => {
-  const offset = index - 12;
-  return offset === 0 ? 'UTC' : `UTC${offset > 0 ? '+' : ''}${offset}`;
-});
-
 function existingProfile(data: Record<string, unknown>): ProfileInput {
   return {
     displayName: stringValue(data.display_name),
@@ -96,6 +104,7 @@ function existingProfile(data: Record<string, unknown>): ProfileInput {
     languages: stringList(data.languages),
     fandoms: stringList(data.fandoms),
     genres: stringList(data.genres),
+    tags: stringList(data.tags),
     settings: stringValue(data.settings),
     plots: stringValue(data.plots),
     lookingFor: stringList(data.looking_for),
@@ -108,13 +117,51 @@ function existingProfile(data: Record<string, unknown>): ProfileInput {
   };
 }
 
+function ProfileMediaPreview({ item }: { item: ProfileMedia }) {
+  const source = `/api/profile-media/${item.id}`;
+  if (item.media_type === 'video') {
+    return <video className="aspect-square w-full bg-black object-contain" src={source} controls />;
+  }
+  if (item.media_type === 'audio' || item.media_type === 'voice') {
+    return (
+      <div className="flex aspect-square items-center justify-center p-4">
+        <audio className="w-full" src={source} controls />
+      </div>
+    );
+  }
+  if (item.media_type === 'document') {
+    return (
+      <a
+        className="flex aspect-square items-center justify-center p-4 text-lilac underline"
+        href={source}
+      >
+        {ru.miniApp.profile.openMedia}
+      </a>
+    );
+  }
+  return <img className="aspect-square w-full object-cover" src={source} alt="" loading="lazy" />;
+}
+
 export function ProfilePage() {
   const queryClient = useQueryClient();
+  const [stateMessage, setStateMessage] = useState('');
   const profile = useQuery({ queryKey: ['profile'], queryFn: api.profile, retry: false });
   const media = useQuery({ queryKey: ['profile-media'], queryFn: api.profileMedia, retry: false });
   const removeMedia = useMutation({
     mutationFn: api.deleteProfileMedia,
     onSuccess: () => void queryClient.invalidateQueries({ queryKey: ['profile-media'] }),
+  });
+  const setActive = useMutation({
+    mutationFn: api.setProfileActive,
+    onSuccess: ({ active }) => {
+      setStateMessage(
+        active
+          ? ru.miniApp.profile.profileEnabledSuccess
+          : ru.miniApp.profile.profileDisabledSuccess,
+      );
+      void queryClient.invalidateQueries({ queryKey: ['profile'] });
+      void queryClient.invalidateQueries({ queryKey: ['search'] });
+    },
   });
   if (profile.isLoading) return <Skeleton className="h-96" />;
   if (profile.isError) {
@@ -133,6 +180,7 @@ export function ProfilePage() {
   }
   const data = profile.data;
   if (!data) return null;
+  const isActive = Boolean(data.is_active);
   return (
     <div>
       <SectionTitle
@@ -155,9 +203,12 @@ export function ProfilePage() {
                 String(data.moderation_status))}
           </span>
           <h2 className="mt-3 font-display text-3xl">{String(data.short_headline)}</h2>
-          <p className="mt-4 whitespace-pre-wrap text-sm leading-relaxed text-soft">
+          <ProfileMarkdown
+            className="mt-4 text-sm leading-relaxed text-soft"
+            allowLinks={Boolean(data.has_premium)}
+          >
             {String(data.about)}
-          </p>
+          </ProfileMarkdown>
           <div className="mt-5 flex flex-wrap gap-2">
             {[...stringList(data.fandoms), ...stringList(data.genres)].map((tag) => (
               <span className="tag" key={tag}>
@@ -167,18 +218,44 @@ export function ProfilePage() {
           </div>
         </div>
       </Card>
+      <Card className="mt-5 p-5">
+        <div className="flex flex-wrap items-center justify-between gap-4">
+          <div className="min-w-0 flex-1">
+            <strong className="block">
+              {isActive ? ru.miniApp.profile.profileActive : ru.miniApp.profile.profileDisabled}
+            </strong>
+            {stateMessage ? <p className="mt-2 text-sm text-muted">{stateMessage}</p> : null}
+          </div>
+          <Button
+            type="button"
+            variant={isActive ? 'danger' : 'secondary'}
+            loading={setActive.isPending}
+            onClick={() => {
+              if (isActive && !window.confirm(ru.miniApp.profile.disableProfileConfirm)) return;
+              setStateMessage('');
+              setActive.mutate(!isActive);
+            }}
+          >
+            {isActive ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+            {isActive ? ru.miniApp.profile.disableProfile : ru.miniApp.profile.enableProfile}
+          </Button>
+        </div>
+        {setActive.isError ? (
+          <div className="error-box mt-3">
+            {setActive.error instanceof ApiError &&
+            setActive.error.code === 'PROFILE_REACTIVATION_BLOCKED'
+              ? ru.miniApp.profile.profileReactivationBlocked
+              : setActive.error.message}
+          </div>
+        ) : null}
+      </Card>
       {media.data?.length ? (
         <section className="mt-5">
           <h2 className="font-display text-2xl">{ru.miniApp.profile.mediaTitle}</h2>
           <div className="mt-3 grid grid-cols-2 gap-3">
             {media.data.map((item) => (
               <Card className="overflow-hidden" key={item.id}>
-                <img
-                  className="aspect-square w-full object-cover"
-                  src={`/api/profile-media/${item.id}`}
-                  alt=""
-                  loading="lazy"
-                />
+                <ProfileMediaPreview item={item} />
                 <div className="flex items-center justify-between gap-2 p-3 text-xs">
                   <span className="status-pill">
                     {item.moderation_status === 'approved'
@@ -206,6 +283,7 @@ export function ProfilePage() {
 
 export function ProfileEditorPage() {
   const [, navigate] = useLocation();
+  const [languageDraft, setLanguageDraft] = useState('');
   const profile = useQuery({ queryKey: ['profile'], queryFn: api.profile, retry: false });
   const form = useForm<ProfileInput>({
     resolver: zodResolver(profileSchema) as Resolver<ProfileInput>,
@@ -222,6 +300,29 @@ export function ProfileEditorPage() {
   const field = 'input-field';
   const selectedAgeGroup = form.watch('ageGroup');
   const isMinor = selectedAgeGroup === 'under_16' || selectedAgeGroup === '16_17';
+  const selectedLanguages = form.watch('languages');
+  const languageLabels = new Map<string, string>(ru.miniApp.profile.languageOptions);
+  const addLanguages = (rawValue: string) => {
+    const candidates = commaList(rawValue);
+    if (!candidates.length) return;
+    const next = [...selectedLanguages];
+    for (const candidate of candidates) {
+      const option = ru.miniApp.profile.languageOptions.find(
+        ([value, label]) =>
+          value.toLocaleLowerCase() === candidate.toLocaleLowerCase() ||
+          label.toLocaleLowerCase() === candidate.toLocaleLowerCase(),
+      );
+      const normalized = option?.[0] ?? candidate;
+      if (!next.some((item) => item.toLocaleLowerCase() === normalized.toLocaleLowerCase())) {
+        next.push(normalized);
+      }
+    }
+    form.setValue('languages', next.slice(0, 8), {
+      shouldDirty: true,
+      shouldValidate: true,
+    });
+    setLanguageDraft('');
+  };
   useEffect(() => {
     if (isMinor) form.setValue('adultTopicsAllowed', false);
   }, [form, isMinor]);
@@ -266,6 +367,16 @@ export function ProfileEditorPage() {
           />
           <small>{validationMessage(form.formState.errors.about?.message)}</small>
         </label>
+        <div>
+          <strong className="text-sm">{ru.miniApp.profile.markdownPreview}</strong>
+          <ProfileMarkdown
+            className="mt-2 rounded-xl border border-white/10 p-3 text-sm text-soft"
+            allowLinks={false}
+          >
+            {form.watch('about') || ru.miniApp.profile.markdownPreviewEmpty}
+          </ProfileMarkdown>
+          <p className="mt-2 text-xs text-muted">{ru.miniApp.profile.markdownHint}</p>
+        </div>
         <label>
           <span>{ru.miniApp.profile.ageGroup}</span>
           <select className={field} {...form.register('ageGroup')}>
@@ -344,33 +455,63 @@ export function ProfileEditorPage() {
         <h2 className="font-display text-2xl">{ru.miniApp.profile.worldsAndPlots}</h2>
         <label>
           <span>{ru.miniApp.profile.languages}</span>
-          <select
-            className={field}
-            multiple
-            size={4}
-            value={form.watch('languages')}
-            onChange={(event) =>
-              form.setValue(
-                'languages',
-                Array.from(event.currentTarget.selectedOptions, (option) => option.value),
-                { shouldValidate: true },
-              )
-            }
-          >
-            {ru.miniApp.profile.languageOptions.map(([value, label]) => (
-              <option key={value} value={value}>
-                {label}
-              </option>
-            ))}
-          </select>
+          <div className="tag-input">
+            <div className="tag-input-values">
+              {selectedLanguages.map((language) => (
+                <span className="tag tag-removable" key={language}>
+                  {languageLabels.get(language) ?? language}
+                  <button
+                    type="button"
+                    aria-label={ru.miniApp.profile.removeLanguage(
+                      languageLabels.get(language) ?? language,
+                    )}
+                    onClick={() =>
+                      form.setValue(
+                        'languages',
+                        selectedLanguages.filter((item) => item !== language),
+                        { shouldDirty: true, shouldValidate: true },
+                      )
+                    }
+                  >
+                    <X className="h-3 w-3" />
+                  </button>
+                </span>
+              ))}
+            </div>
+            <input
+              className="tag-input-control"
+              list="profile-language-options"
+              value={languageDraft}
+              placeholder={ru.miniApp.profile.languageInputPlaceholder}
+              onChange={(event) => {
+                const value = event.target.value;
+                if (value.includes(',')) addLanguages(value);
+                else setLanguageDraft(value);
+              }}
+              onBlur={() => addLanguages(languageDraft)}
+              onKeyDown={(event) => {
+                if (event.key !== 'Enter' && event.key !== ',') return;
+                event.preventDefault();
+                addLanguages(languageDraft);
+              }}
+            />
+            <datalist id="profile-language-options">
+              {ru.miniApp.profile.languageOptions
+                .filter(([value]) => !selectedLanguages.includes(value))
+                .map(([value, label]) => (
+                  <option key={value} value={label} />
+                ))}
+            </datalist>
+          </div>
+          <p className="mt-2 text-xs text-muted">{ru.miniApp.profile.languageInputHint}</p>
           <small>{validationMessage(form.formState.errors.languages?.message)}</small>
         </label>
         <label>
           <span>{ru.miniApp.profile.timezone}</span>
           <select className={field} {...form.register('timezone')}>
-            {timezoneOptions.map((timezone) => (
-              <option key={timezone} value={timezone}>
-                {timezone}
+            {ru.miniApp.profile.timezoneOptions.map(([value, label]) => (
+              <option key={value} value={value}>
+                {label}
               </option>
             ))}
           </select>
@@ -399,6 +540,22 @@ export function ProfileEditorPage() {
             onChange={(event) => form.setValue('genres', commaList(event.target.value))}
           />
           <small>{validationMessage(form.formState.errors.genres?.message)}</small>
+        </label>
+        <label>
+          <span>{ru.miniApp.profile.tags}</span>
+          <input
+            className={field}
+            placeholder={ru.miniApp.profile.tagsPlaceholder}
+            value={form.watch('tags').join(', ')}
+            onChange={(event) =>
+              form.setValue('tags', commaList(event.target.value), {
+                shouldDirty: true,
+                shouldValidate: true,
+              })
+            }
+          />
+          <small className="text-muted">{ru.miniApp.profile.tagsHint}</small>
+          <small>{validationMessage(form.formState.errors.tags?.message)}</small>
         </label>
         <label>
           <span>{ru.miniApp.profile.ideas}</span>

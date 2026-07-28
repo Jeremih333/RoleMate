@@ -38,6 +38,7 @@ describe('D1 migrations', () => {
       '0008_posts_ratings.sql',
       '0009_promotions_posting_requirements.sql',
       '0010_moderator_assignments.sql',
+      '0011_profile_discovery_and_media.sql',
     ]);
     expect(() => applyMigrations()).not.toThrow();
     const tables = database

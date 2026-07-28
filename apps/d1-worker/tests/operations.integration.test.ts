@@ -212,6 +212,71 @@ describe('D1 domain operations', () => {
     ).toEqual({ moderation_status: 'paused', is_active: 0, is_search_enabled: 0 });
   });
 
+  it('lets an owner disable and restore an approved profile but not bypass moderation', async () => {
+    const adminId = await upsert(1_040_929_628);
+    const userId = await onboard(2010);
+    await expect(
+      executeOperation(env, 'profiles.setActive', { userId, active: false }, crypto.randomUUID()),
+    ).resolves.toEqual({ active: false });
+    expect(
+      sqlite
+        .prepare(
+          `SELECT p.is_active, u.is_search_enabled
+           FROM profiles p JOIN users u ON u.id = p.user_id WHERE p.user_id = ?`,
+        )
+        .get(userId),
+    ).toEqual({ is_active: 0, is_search_enabled: 0 });
+    await expect(
+      executeOperation(env, 'profiles.setActive', { userId, active: true }, crypto.randomUUID()),
+    ).resolves.toEqual({ active: true });
+    const profileId = (
+      sqlite.prepare('SELECT id FROM profiles WHERE user_id = ?').get(userId) as { id: string }
+    ).id;
+    await executeOperation(
+      env,
+      'admin.profile.moderate',
+      {
+        adminUserId: adminId,
+        profileId,
+        status: 'paused',
+        reason: 'Regression test',
+      },
+      crypto.randomUUID(),
+    );
+    await expect(
+      executeOperation(env, 'profiles.setActive', { userId, active: true }, crypto.randomUUID()),
+    ).rejects.toMatchObject<ApiError>({ code: 'PROFILE_REACTIVATION_BLOCKED' });
+  });
+
+  it('finds profiles by user tags and keyword fields', async () => {
+    const viewerId = await onboard(2011);
+    const candidateId = await upsert(2012);
+    await executeOperation(
+      env,
+      'users.acceptRules',
+      { userId: candidateId, ageGroup: '21_25' },
+      crypto.randomUUID(),
+    );
+    await executeOperation(
+      env,
+      'profiles.upsert',
+      {
+        userId: candidateId,
+        profile: { ...profile, tags: ['медленные ответы', 'готический детектив'] },
+      },
+      crypto.randomUUID(),
+    );
+    const results = (await executeOperation(
+      env,
+      'search.list',
+      { userId: viewerId, limit: 20, query: 'готический детектив' },
+      crypto.randomUUID(),
+    )) as Array<{ user_id: string; tags: string }>;
+    expect(results).toHaveLength(1);
+    expect(results[0]).toMatchObject({ user_id: candidateId });
+    expect(results[0]?.tags).toContain('готический детектив');
+  });
+
   it('persists settings and rejects duplicate Telegram updates', async () => {
     const userId = await upsert(2002);
     await executeOperation(
@@ -339,6 +404,83 @@ describe('D1 domain operations', () => {
     ).rejects.toMatchObject<ApiError>({ code: 'MEDIA_NOT_FOUND' });
   });
 
+  it('enforces free and Premium profile-media limits immediately after entitlement expiry', async () => {
+    const userId = await onboard(2052);
+    const adminId = await upsert(1_040_929_628);
+    await executeOperation(
+      env,
+      'profiles.media.add',
+      {
+        userId,
+        telegramFileId: 'free-photo',
+        telegramFileUniqueId: 'free-photo-unique',
+        mediaType: 'photo',
+      },
+      crypto.randomUUID(),
+    );
+    await expect(
+      executeOperation(
+        env,
+        'profiles.media.add',
+        {
+          userId,
+          telegramFileId: 'free-video',
+          telegramFileUniqueId: 'free-video-unique',
+          mediaType: 'video',
+        },
+        crypto.randomUUID(),
+      ),
+    ).rejects.toMatchObject<ApiError>({ code: 'PREMIUM_MEDIA_REQUIRED' });
+    await executeOperation(
+      env,
+      'admin.premium.grant',
+      {
+        adminUserId: adminId,
+        targetUserId: userId,
+        durationDays: 7,
+        reason: 'Profile media regression test',
+        idempotencyKey: 'profile-media-premium-0001',
+      },
+      crypto.randomUUID(),
+    );
+    const video = (await executeOperation(
+      env,
+      'profiles.media.add',
+      {
+        userId,
+        telegramFileId: 'premium-video',
+        telegramFileUniqueId: 'premium-video-unique',
+        mediaType: 'video',
+      },
+      crypto.randomUUID(),
+    )) as { id: string };
+    expect(
+      await executeOperation(env, 'profiles.media.list', { userId }, crypto.randomUUID()),
+    ).toHaveLength(2);
+    sqlite
+      .prepare(
+        `UPDATE premium_entitlements SET ends_at = datetime('now', '-1 minute')
+         WHERE user_id = ?`,
+      )
+      .run(userId);
+    const afterExpiry = (await executeOperation(
+      env,
+      'profiles.media.list',
+      { userId },
+      crypto.randomUUID(),
+    )) as Array<{ media_type: string }>;
+    expect(afterExpiry).toHaveLength(1);
+    expect(afterExpiry[0]?.media_type).toBe('photo');
+    await expect(
+      executeOperation(
+        env,
+        'profiles.media.resolve',
+        { requesterUserId: userId, mediaId: video.id },
+        crypto.randomUUID(),
+      ),
+    ).rejects.toMatchObject<ApiError>({ code: 'MEDIA_NOT_FOUND' });
+  });
+
   it('deletes user content, pseudonymizes the tombstone, and permits a fresh registration', async () => {
     const userId = await onboard(2060);
     const otherUserId = await onboard(2061);
@@ -441,6 +583,23 @@ describe('D1 domain operations', () => {
     await expect(
       executeOperation(env, 'admin.dashboard', { adminUserId: adminId }, crypto.randomUUID()),
     ).resolves.toMatchObject({ users: 2 });
+    await executeOperation(
+      env,
+      'users.acceptRules',
+      { userId, ageGroup: '21_25' },
+      crypto.randomUUID(),
+    );
+    await executeOperation(env, 'profiles.upsert', { userId, profile }, crypto.randomUUID());
+    const adminUsers = (await executeOperation(
+      env,
+      'admin.users.list',
+      { adminUserId: adminId, query: '', limit: 50 },
+      crypto.randomUUID(),
+    )) as Array<Record<string, unknown>>;
+    expect(adminUsers.find((item) => item.id === userId)).toMatchObject({
+      telegram_first_name: 'User 2003',
+    });
+    expect(adminUsers.find((item) => item.id === userId)).not.toHaveProperty('display_name');
 
     await executeOperation(
       env,
@@ -1470,6 +1629,20 @@ describe('D1 domain operations', () => {
     const moderator = sqlite
       .prepare('SELECT id FROM users WHERE telegram_user_id = ?')
       .get(moderatorTelegramId) as { id: string };
+    const secondModeratorTelegramId = 7_002;
+    await executeOperation(
+      env,
+      'moderators.assign',
+      {
+        ownerTelegramUserId: 1_040_929_628,
+        targetTelegramUserId: secondModeratorTelegramId,
+      },
+      crypto.randomUUID(),
+    );
+    const secondModerator = sqlite
+      .prepare('SELECT id FROM users WHERE telegram_user_id = ?')
+      .get(secondModeratorTelegramId) as { id: string };
+    const regularUserId = await upsert(7_003);
 
     await expect(
       executeOperation(
@@ -1479,6 +1652,38 @@ describe('D1 domain operations', () => {
         crypto.randomUUID(),
       ),
     ).resolves.toEqual([]);
+    const visibleUsers = (await executeOperation(
+      env,
+      'admin.users.list',
+      { adminUserId: moderator.id, query: '', limit: 20 },
+      crypto.randomUUID(),
+    )) as Array<{ id: string }>;
+    expect(visibleUsers.map((user) => user.id)).toContain(regularUserId);
+    expect(visibleUsers.map((user) => user.id)).not.toContain(secondModerator.id);
+    expect(visibleUsers.map((user) => user.id)).not.toContain(moderator.id);
+    await expect(
+      executeOperation(
+        env,
+        'admin.user.moderate',
+        {
+          adminUserId: moderator.id,
+          targetUserId: secondModerator.id,
+          action: 'warn',
+          reason: 'Forbidden staff interaction',
+        },
+        crypto.randomUUID(),
+      ),
+    ).rejects.toMatchObject({ code: 'PROTECTED_STAFF_ACCOUNT' });
+    const owner = sqlite
+      .prepare('SELECT id FROM users WHERE telegram_user_id = 1040929628')
+      .get() as { id: string };
+    const ownerVisibleUsers = (await executeOperation(
+      env,
+      'admin.users.list',
+      { adminUserId: owner.id, query: '', limit: 20 },
+      crypto.randomUUID(),
+    )) as Array<{ id: string }>;
+    expect(ownerVisibleUsers.map((user) => user.id)).toContain(secondModerator.id);
     await expect(
       executeOperation(
         env,

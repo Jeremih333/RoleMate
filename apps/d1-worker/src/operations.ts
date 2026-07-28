@@ -393,6 +393,7 @@ const handlers: { [K in WorkerOperation]: Handler<K> } = {
       ...input.profile.preferredRole,
       ...input.profile.fandoms,
       ...input.profile.genres,
+      ...input.profile.tags,
       ...input.profile.lookingFor,
     ].join('\n');
     const linkPolicy = checkContentLinkPolicy(profileText, isPremium);
@@ -410,12 +411,12 @@ const handlers: { [K in WorkerOperation]: Handler<K> } = {
       `INSERT INTO profiles (
         id, user_id, display_name, age_group, short_headline, about,
         roleplay_experience, preferred_role, writing_style, average_post_length,
-        activity_frequency, timezone, active_hours, languages, fandoms, genres,
+        activity_frequency, timezone, active_hours, languages, fandoms, genres, tags,
         settings, plots, looking_for, boundaries, adult_topics_allowed,
         contact_reveal_policy, gender, moderation_status, profile_completion_percent
       ) VALUES (
         ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15,
-        ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, 'approved', ?24
+        ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, 'approved', ?25
       ) ON CONFLICT(user_id) DO UPDATE SET
         display_name = excluded.display_name, age_group = excluded.age_group,
         short_headline = excluded.short_headline, about = excluded.about,
@@ -424,7 +425,8 @@ const handlers: { [K in WorkerOperation]: Handler<K> } = {
         average_post_length = excluded.average_post_length,
         activity_frequency = excluded.activity_frequency, timezone = excluded.timezone,
         active_hours = excluded.active_hours, languages = excluded.languages,
-        fandoms = excluded.fandoms, genres = excluded.genres, settings = excluded.settings,
+        fandoms = excluded.fandoms, genres = excluded.genres, tags = excluded.tags,
+        settings = excluded.settings,
         plots = excluded.plots, looking_for = excluded.looking_for,
         boundaries = excluded.boundaries, adult_topics_allowed = excluded.adult_topics_allowed,
         contact_reveal_policy = excluded.contact_reveal_policy,
@@ -455,6 +457,7 @@ const handlers: { [K in WorkerOperation]: Handler<K> } = {
         json(input.profile.languages),
         json(input.profile.fandoms),
         json(input.profile.genres),
+        json(input.profile.tags),
         input.profile.settings,
         input.profile.plots,
         json(input.profile.lookingFor),
@@ -537,6 +540,11 @@ const handlers: { [K in WorkerOperation]: Handler<K> } = {
   'profiles.getOwn': async (env, input) => {
     const profile = await env.DB.prepare(
       `SELECT p.*, u.is_search_enabled, u.is_rules_accepted, u.is_age_confirmed,
+              EXISTS (
+                SELECT 1 FROM premium_entitlements pe
+                WHERE pe.user_id = p.user_id AND pe.status = 'active'
+                  AND pe.ends_at > CURRENT_TIMESTAMP
+              ) AS has_premium,
               CASE WHEN p.moderation_status = 'approved' AND p.is_active = 1
                 AND u.is_search_enabled = 1 AND u.is_banned = 0
               THEN 1 ELSE 0 END AS in_search_pool
@@ -548,20 +556,77 @@ const handlers: { [K in WorkerOperation]: Handler<K> } = {
     if (!profile) throw new ApiError(404, 'PROFILE_NOT_FOUND', 'Profile not found');
     return profile;
   },
+  'profiles.setActive': async (env, input) => {
+    const profile = await env.DB.prepare(
+      'SELECT moderation_status FROM profiles WHERE user_id = ?1',
+    )
+      .bind(input.userId)
+      .first<{ moderation_status: string }>();
+    if (!profile) throw new ApiError(404, 'PROFILE_NOT_FOUND', 'Profile not found');
+    if (input.active && profile.moderation_status !== 'approved') {
+      throw new ApiError(
+        409,
+        'PROFILE_REACTIVATION_BLOCKED',
+        'A profile hidden by moderation cannot be reactivated',
+      );
+    }
+    if (input.active) {
+      const user = await env.DB.prepare(
+        `SELECT is_banned, is_age_confirmed, is_rules_accepted
+         FROM users WHERE id = ?1`,
+      )
+        .bind(input.userId)
+        .first<{ is_banned: number; is_age_confirmed: number; is_rules_accepted: number }>();
+      if (!user || user.is_banned || !user.is_age_confirmed || !user.is_rules_accepted) {
+        throw new ApiError(
+          409,
+          'PROFILE_REACTIVATION_BLOCKED',
+          'Complete account setup before reactivating the profile',
+        );
+      }
+    }
+    await env.DB.batch([
+      env.DB.prepare(
+        `UPDATE profiles SET is_active = ?2, updated_at = CURRENT_TIMESTAMP
+         WHERE user_id = ?1`,
+      ).bind(input.userId, input.active ? 1 : 0),
+      env.DB.prepare(
+        `UPDATE users SET is_search_enabled = ?2, updated_at = CURRENT_TIMESTAMP
+         WHERE id = ?1`,
+      ).bind(input.userId, input.active ? 1 : 0),
+    ]);
+    return { active: input.active };
+  },
   'profiles.media.list': async (env, input) => {
+    const premium = Boolean(await premiumEnd(env, input.userId));
     return (
       await env.DB.prepare(
         `SELECT pm.id, pm.media_type, pm.sort_order, pm.moderation_status, pm.created_at
          FROM profile_media pm
          JOIN profiles p ON p.id = pm.profile_id
          WHERE p.user_id = ?1
+           AND (
+             ?2 = 1
+             OR (
+               pm.media_type = 'photo'
+               AND pm.id = (
+                 SELECT first_photo.id FROM profile_media first_photo
+                 WHERE first_photo.profile_id = p.id AND first_photo.media_type = 'photo'
+                 ORDER BY first_photo.sort_order, first_photo.created_at LIMIT 1
+               )
+             )
+           )
          ORDER BY pm.sort_order, pm.created_at`,
       )
-        .bind(input.userId)
+        .bind(input.userId, premium ? 1 : 0)
         .all()
     ).results;
   },
   'profiles.media.add': async (env, input) => {
+    const premium = Boolean(await premiumEnd(env, input.userId));
+    if (input.mediaType !== 'photo' && !premium) {
+      throw new ApiError(403, 'PREMIUM_MEDIA_REQUIRED', 'Premium is required for this media type');
+    }
     const profile = await env.DB.prepare('SELECT id FROM profiles WHERE user_id = ?1')
       .bind(input.userId)
       .first<{ id: string }>();
@@ -574,12 +639,23 @@ const handlers: { [K in WorkerOperation]: Handler<K> } = {
       .first<{ id: string }>();
     if (existing) throw new ApiError(409, 'MEDIA_DUPLICATE', 'This image is already attached');
     const count = await env.DB.prepare(
-      'SELECT COUNT(*) AS total FROM profile_media WHERE profile_id = ?1',
+      `SELECT COUNT(*) AS total,
+              SUM(CASE WHEN media_type = 'photo' THEN 1 ELSE 0 END) AS photos
+       FROM profile_media WHERE profile_id = ?1`,
     )
       .bind(profile.id)
-      .first<{ total: number }>();
-    if (Number(count?.total ?? 0) >= 4)
-      throw new ApiError(409, 'MEDIA_LIMIT', 'A profile can contain up to four images');
+      .first<{ total: number; photos: number | null }>();
+    const total = Number(count?.total ?? 0);
+    const photoCount = Number(count?.photos ?? 0);
+    if ((premium && total >= 8) || (!premium && photoCount >= 1)) {
+      throw new ApiError(
+        409,
+        'MEDIA_LIMIT',
+        premium
+          ? 'A Premium profile can contain up to eight media files'
+          : 'A free profile can contain one image',
+      );
+    }
     const id = crypto.randomUUID();
     await env.DB.prepare(
       `INSERT INTO profile_media
@@ -593,7 +669,7 @@ const handlers: { [K in WorkerOperation]: Handler<K> } = {
         input.telegramFileId,
         input.telegramFileUniqueId,
         input.mediaType,
-        Number(count?.total ?? 0),
+        total,
       )
       .run();
     return { id, moderationStatus: 'pending' };
@@ -614,22 +690,40 @@ const handlers: { [K in WorkerOperation]: Handler<K> } = {
        FROM profile_media pm
        JOIN profiles p ON p.id = pm.profile_id
        JOIN users u ON u.id = p.user_id
-       WHERE pm.id = ?1
-         AND (
-           p.user_id = ?2
-           OR EXISTS (
+       WHERE pm.id = ?1 AND (
+           EXISTS (
              SELECT 1 FROM users requester
              WHERE requester.id = ?2 AND requester.role = 'admin'
                AND requester.telegram_user_id = 1040929628
            )
            OR (
-             pm.moderation_status = 'approved'
-             AND p.moderation_status = 'approved' AND p.is_active = 1
-             AND u.is_banned = 0 AND u.deleted_at IS NULL
-             AND NOT EXISTS (
-               SELECT 1 FROM blocks b
-               WHERE (b.blocker_user_id = ?2 AND b.blocked_user_id = p.user_id)
-                  OR (b.blocker_user_id = p.user_id AND b.blocked_user_id = ?2)
+             (
+               p.user_id = ?2
+               OR (
+                 pm.moderation_status = 'approved'
+                 AND p.moderation_status = 'approved' AND p.is_active = 1
+                 AND u.is_banned = 0 AND u.deleted_at IS NULL
+                 AND NOT EXISTS (
+                   SELECT 1 FROM blocks b
+                   WHERE (b.blocker_user_id = ?2 AND b.blocked_user_id = p.user_id)
+                      OR (b.blocker_user_id = p.user_id AND b.blocked_user_id = ?2)
+                 )
+               )
+             )
+             AND (
+               EXISTS (
+                 SELECT 1 FROM premium_entitlements pe
+                 WHERE pe.user_id = p.user_id AND pe.status = 'active'
+                   AND pe.ends_at > CURRENT_TIMESTAMP
+               )
+               OR (
+                 pm.media_type = 'photo'
+                 AND pm.id = (
+                   SELECT first_photo.id FROM profile_media first_photo
+                   WHERE first_photo.profile_id = p.id AND first_photo.media_type = 'photo'
+                   ORDER BY first_photo.sort_order, first_photo.created_at LIMIT 1
+                 )
+               )
              )
            )
          )`,
@@ -830,6 +924,10 @@ const handlers: { [K in WorkerOperation]: Handler<K> } = {
     const fandoms = preferences?.fandoms ?? '[]';
     const writingStyles = preferences?.writing_styles ?? '[]';
     const activityLevels = preferences?.activity_levels ?? '[]';
+    const queryLike = `%${input.query
+      .replaceAll('~', '~~')
+      .replaceAll('%', '~%')
+      .replaceAll('_', '~_')}%`;
     const results = await env.DB.prepare(
       `SELECT p.id, p.user_id, p.display_name,
               CASE WHEN EXISTS (
@@ -847,11 +945,35 @@ const handlers: { [K in WorkerOperation]: Handler<K> } = {
                   AND hidden_settings.hide_demographics = 1
               ) THEN NULL ELSE p.gender END AS gender,
               p.short_headline,
-              p.about, p.fandoms, p.genres, p.writing_style, p.average_post_length,
+              p.about, p.fandoms, p.genres, p.tags, p.writing_style, p.average_post_length,
               p.activity_frequency, u.last_activity_at,
+              EXISTS (
+                SELECT 1 FROM premium_entitlements active_pe
+                WHERE active_pe.user_id = p.user_id AND active_pe.status = 'active'
+                  AND active_pe.ends_at > CURRENT_TIMESTAMP
+              ) AS has_premium,
               (SELECT pm.id FROM profile_media pm
                WHERE pm.profile_id = p.id AND pm.moderation_status = 'approved'
+                 AND (
+                   pm.media_type = 'photo'
+                   OR EXISTS (
+                     SELECT 1 FROM premium_entitlements media_pe
+                     WHERE media_pe.user_id = p.user_id AND media_pe.status = 'active'
+                       AND media_pe.ends_at > CURRENT_TIMESTAMP
+                   )
+                 )
                ORDER BY pm.sort_order, pm.created_at LIMIT 1) AS media_id,
+              (SELECT pm.media_type FROM profile_media pm
+               WHERE pm.profile_id = p.id AND pm.moderation_status = 'approved'
+                 AND (
+                   pm.media_type = 'photo'
+                   OR EXISTS (
+                     SELECT 1 FROM premium_entitlements media_pe
+                     WHERE media_pe.user_id = p.user_id AND media_pe.status = 'active'
+                       AND media_pe.ends_at > CURRENT_TIMESTAMP
+                   )
+                 )
+               ORDER BY pm.sort_order, pm.created_at LIMIT 1) AS media_type,
               CASE WHEN EXISTS (
                 SELECT 1 FROM premium_entitlements pe
                 JOIN user_settings settings ON settings.user_id = p.user_id
@@ -905,6 +1027,17 @@ const handlers: { [K in WorkerOperation]: Handler<K> } = {
              AND p.age_group IN ('18_20', '21_25', '26_plus')
            )
          )
+         AND (
+           ?12 = ''
+           OR p.display_name LIKE ?13 ESCAPE '~'
+           OR p.short_headline LIKE ?13 ESCAPE '~'
+           OR p.about LIKE ?13 ESCAPE '~'
+           OR p.fandoms LIKE ?13 ESCAPE '~'
+           OR p.genres LIKE ?13 ESCAPE '~'
+           OR p.tags LIKE ?13 ESCAPE '~'
+           OR p.settings LIKE ?13 ESCAPE '~'
+           OR p.plots LIKE ?13 ESCAPE '~'
+         )
        ORDER BY CASE WHEN p.last_boosted_at >= datetime('now', '-7 day') THEN 1 ELSE 0 END DESC,
                 rating_score DESC, is_premium DESC, u.last_activity_at DESC
        LIMIT min(
@@ -926,6 +1059,8 @@ const handlers: { [K in WorkerOperation]: Handler<K> } = {
         preferences?.only_online ?? 0,
         preferences?.only_with_photo ?? 0,
         viewer.age_group,
+        input.query,
+        queryLike,
       )
       .all<Record<string, unknown>>();
     const viewerFandoms = parseJsonArray(viewer.fandoms);
@@ -2598,19 +2733,31 @@ const handlers: { [K in WorkerOperation]: Handler<K> } = {
         `SELECT u.id, u.telegram_user_id, u.telegram_username, u.telegram_first_name,
                 u.status, u.role, u.is_banned, u.ban_reason, u.banned_until,
                 u.risk_score, u.last_activity_at, u.created_at,
-                p.display_name, p.moderation_status,
                 pe.ends_at AS premium_ends_at
          FROM users u
-         LEFT JOIN profiles p ON p.user_id = u.id
          LEFT JOIN premium_entitlements pe ON pe.id = (
            SELECT id FROM premium_entitlements
            WHERE user_id = u.id AND status = 'active' AND ends_at > CURRENT_TIMESTAMP
            ORDER BY ends_at DESC LIMIT 1
          )
          WHERE u.deleted_at IS NULL
+           AND (
+             EXISTS (
+               SELECT 1 FROM users actor
+               WHERE actor.id = ?1 AND actor.role = 'admin'
+                 AND actor.telegram_user_id = 1040929628
+             )
+             OR (
+               u.role <> 'admin'
+               AND NOT EXISTS (
+                 SELECT 1 FROM moderator_assignments target_moderator
+                 WHERE target_moderator.user_id = u.id AND target_moderator.is_active = 1
+               )
+             )
+           )
            AND (?2 = '' OR CAST(u.telegram_user_id AS TEXT) LIKE ?3 ESCAPE '\\'
              OR COALESCE(u.telegram_username, '') LIKE ?3 ESCAPE '\\'
-             OR COALESCE(p.display_name, '') LIKE ?3 ESCAPE '\\')
+             OR u.telegram_first_name LIKE ?3 ESCAPE '\\')
          ORDER BY u.created_at DESC LIMIT ?4`,
       )
         .bind(input.adminUserId, input.query, pattern, input.limit)
@@ -2625,6 +2772,20 @@ const handlers: { [K in WorkerOperation]: Handler<K> } = {
         `SELECT p.*, u.telegram_user_id, u.telegram_username, u.risk_score
          FROM profiles p JOIN users u ON u.id = p.user_id
          WHERE (?2 = 'all' OR p.moderation_status = ?2)
+           AND (
+             EXISTS (
+               SELECT 1 FROM users actor
+               WHERE actor.id = ?1 AND actor.role = 'admin'
+                 AND actor.telegram_user_id = 1040929628
+             )
+             OR (
+               u.role <> 'admin'
+               AND NOT EXISTS (
+                 SELECT 1 FROM moderator_assignments target_moderator
+                 WHERE target_moderator.user_id = u.id AND target_moderator.is_active = 1
+               )
+             )
+           )
            AND (?3 = '' OR CAST(u.telegram_user_id AS TEXT) LIKE ?4 ESCAPE '\\'
              OR COALESCE(u.telegram_username, '') LIKE ?4 ESCAPE '\\'
              OR p.display_name LIKE ?4 ESCAPE '\\'
@@ -2647,6 +2808,20 @@ const handlers: { [K in WorkerOperation]: Handler<K> } = {
          JOIN users u ON u.id = tp.author_user_id
          LEFT JOIN profiles p ON p.user_id = tp.author_user_id
          WHERE (?2 = 'all' OR tp.status = ?2)
+           AND (
+             EXISTS (
+               SELECT 1 FROM users actor
+               WHERE actor.id = ?1 AND actor.role = 'admin'
+                 AND actor.telegram_user_id = 1040929628
+             )
+             OR (
+               u.role <> 'admin'
+               AND NOT EXISTS (
+                 SELECT 1 FROM moderator_assignments target_moderator
+                 WHERE target_moderator.user_id = u.id AND target_moderator.is_active = 1
+               )
+             )
+           )
            AND (?3 = '' OR tp.id = ?3
              OR CAST(u.telegram_user_id AS TEXT) LIKE ?4 ESCAPE '\\'
              OR COALESCE(u.telegram_username, '') LIKE ?4 ESCAPE '\\'
@@ -2665,6 +2840,7 @@ const handlers: { [K in WorkerOperation]: Handler<K> } = {
       .bind(input.postId)
       .first<{ author_user_id: string; status: string }>();
     if (!post) throw new ApiError(404, 'POST_NOT_FOUND', 'Post not found');
+    await assertMayModerateTarget(env, input.adminUserId, post.author_user_id);
     await env.DB.batch([
       env.DB.prepare(
         `UPDATE telegram_posts SET status = ?2, moderation_reason = ?3,
@@ -2697,12 +2873,26 @@ const handlers: { [K in WorkerOperation]: Handler<K> } = {
          FROM profile_media pm
          JOIN profiles p ON p.id = pm.profile_id
          JOIN users u ON u.id = p.user_id
-         WHERE (?1 = 'all' OR pm.moderation_status = ?1)
+         WHERE (?2 = 'all' OR pm.moderation_status = ?2)
+           AND (
+             EXISTS (
+               SELECT 1 FROM users actor
+               WHERE actor.id = ?1 AND actor.role = 'admin'
+                 AND actor.telegram_user_id = 1040929628
+             )
+             OR (
+               u.role <> 'admin'
+               AND NOT EXISTS (
+                 SELECT 1 FROM moderator_assignments target_moderator
+                 WHERE target_moderator.user_id = u.id AND target_moderator.is_active = 1
+               )
+             )
+           )
          ORDER BY CASE pm.moderation_status WHEN 'pending' THEN 0 ELSE 1 END,
                   pm.created_at DESC
-         LIMIT ?2`,
+         LIMIT ?3`,
       )
-        .bind(input.status, input.limit)
+        .bind(input.adminUserId, input.status, input.limit)
         .all()
     ).results;
   },
@@ -2718,6 +2908,20 @@ const handlers: { [K in WorkerOperation]: Handler<K> } = {
          JOIN users reported ON reported.id = r.reported_user_id
          LEFT JOIN profiles p ON p.user_id = reported.id
          WHERE (?2 = 'all' OR r.status = ?2)
+           AND (
+             EXISTS (
+               SELECT 1 FROM users actor
+               WHERE actor.id = ?1 AND actor.role = 'admin'
+                 AND actor.telegram_user_id = 1040929628
+             )
+             OR (
+               reported.role <> 'admin'
+               AND NOT EXISTS (
+                 SELECT 1 FROM moderator_assignments target_moderator
+                 WHERE target_moderator.user_id = reported.id AND target_moderator.is_active = 1
+               )
+             )
+           )
          ORDER BY CASE r.status WHEN 'open' THEN 0 WHEN 'reviewing' THEN 1 ELSE 2 END,
                   r.created_at DESC LIMIT ?3`,
       )
@@ -3147,6 +3351,7 @@ const handlers: { [K in WorkerOperation]: Handler<K> } = {
       .bind(input.profileId)
       .first<{ user_id: string; moderation_status: string; is_active: number }>();
     if (!profile) throw new ApiError(404, 'PROFILE_NOT_FOUND', 'Profile not found');
+    await assertMayModerateTarget(env, input.adminUserId, profile.user_id);
     const isActive = input.status === 'approved' ? 1 : 0;
     await env.DB.batch([
       env.DB.prepare(
@@ -3186,6 +3391,7 @@ const handlers: { [K in WorkerOperation]: Handler<K> } = {
       .bind(input.mediaId)
       .first<{ moderation_status: string; user_id: string }>();
     if (!media) throw new ApiError(404, 'MEDIA_NOT_FOUND', 'Image not found');
+    await assertMayModerateTarget(env, input.adminUserId, media.user_id);
     await env.DB.batch([
       env.DB.prepare('UPDATE profile_media SET moderation_status = ?2 WHERE id = ?1').bind(
         input.mediaId,
@@ -3216,6 +3422,7 @@ const handlers: { [K in WorkerOperation]: Handler<K> } = {
       .bind(input.reportId)
       .first<{ reported_user_id: string; status: string; resolution: string | null }>();
     if (!report) throw new ApiError(404, 'REPORT_NOT_FOUND', 'Report not found');
+    await assertMayModerateTarget(env, input.adminUserId, report.reported_user_id);
     await env.DB.batch([
       env.DB.prepare(
         `UPDATE reports SET status = ?2, resolution = ?3, assigned_admin_id = ?4,

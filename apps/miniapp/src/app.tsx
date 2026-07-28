@@ -51,14 +51,14 @@ function AuthGate({ children }: { children: ReactNode }) {
   if (auth.isLoading)
     return (
       <div className="splash">
-        <span className="brand-mark large">R</span>
+        <img className="brand-mark large" src="/assets/telegram-bot-avatar.jpg" alt="" />
         <p>{ru.miniApp.auth.opening}</p>
       </div>
     );
   if (auth.isError)
     return (
       <div className="splash error">
-        <span className="brand-mark large">R</span>
+        <img className="brand-mark large" src="/assets/telegram-bot-avatar.jpg" alt="" />
         <h1>{ru.miniApp.auth.title}</h1>
         <p>{auth.error.message}</p>
         {auth.error instanceof ApiError ? (
@@ -74,7 +74,7 @@ function AuthGate({ children }: { children: ReactNode }) {
   if (!storedUser) {
     return (
       <div className="splash">
-        <span className="brand-mark large">R</span>
+        <img className="brand-mark large" src="/assets/telegram-bot-avatar.jpg" alt="" />
         <p>{ru.miniApp.auth.preparing}</p>
       </div>
     );

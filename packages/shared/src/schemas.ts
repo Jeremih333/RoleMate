@@ -55,7 +55,9 @@ export const profileSchema = z
     writingStyle: writingStyleSchema,
     averagePostLength: postLengthSchema,
     activityFrequency: activityFrequencySchema,
-    timezone: z.string().regex(/^UTC(?:[+-](?:0?\d|1[0-4])(?::[03]0)?)?$/, ru.validation.timezone),
+    timezone: z
+      .string()
+      .regex(/^UTC(?:[+-](?:0?\d|1[0-4])(?::(?:15|30|45))?)?$/, ru.validation.timezone),
     activeHours: z.string().max(64),
     languages: z
       .array(z.string().trim().min(2).max(24))
@@ -63,6 +65,7 @@ export const profileSchema = z
       .max(8),
     fandoms: z.array(z.string().trim().min(2).max(64)).min(1).max(20),
     genres: z.array(z.string().trim().min(2).max(48)).min(1).max(16),
+    tags: z.array(z.string().trim().min(2).max(40)).max(20).default([]),
     settings: z.string().trim().max(1_000),
     plots: z.string().trim().max(2_000),
     lookingFor: z.array(z.string().trim().min(2).max(64)).min(1).max(8),

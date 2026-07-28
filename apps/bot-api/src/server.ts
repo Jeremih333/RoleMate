@@ -335,7 +335,7 @@ export async function buildServer(
 
   app.post(
     '/api/auth/telegram',
-    { config: { rateLimit: { max: 10, timeWindow: '1 minute' } } },
+    { config: { rateLimit: { max: 30, timeWindow: '1 minute' } } },
     async (request, reply) => {
       const body = authBodySchema.parse(request.body);
       const validated = await validateTelegramInitData(body.initData, env.TELEGRAM_BOT_TOKEN);
@@ -390,6 +390,7 @@ export async function buildServer(
         ...profile.preferredRole,
         ...profile.fandoms,
         ...profile.genres,
+        ...profile.tags,
         ...profile.lookingFor,
       ].join('\n'),
       {
@@ -407,6 +408,11 @@ export async function buildServer(
     }
     return dataApi.execute('profiles.upsert', { userId: session.userId, profile });
   });
+  app.put('/api/profile/state', async (request) => {
+    const session = await mutateSafe(request);
+    const { active } = z.object({ active: z.boolean() }).parse(request.body);
+    return dataApi.execute('profiles.setActive', { userId: session.userId, active });
+  });
   app.get('/api/profile/media', async (request) => {
     const session = await authenticate(request);
     return dataApi.execute('profiles.media.list', { userId: session.userId });
@@ -421,7 +427,7 @@ export async function buildServer(
     const { mediaId } = z.object({ mediaId: z.string().uuid() }).parse(request.params);
     const media = await dataApi.execute<{
       telegram_file_id: string;
-      media_type: 'photo' | 'animation';
+      media_type: 'photo' | 'animation' | 'video' | 'audio' | 'voice' | 'document';
     }>('profiles.media.resolve', {
       requesterUserId: session.userId,
       mediaId,
@@ -435,7 +441,16 @@ export async function buildServer(
     if (!telegramResponse.ok) throw new DataApiError('MEDIA_UNAVAILABLE', 'Image unavailable', 502);
     const contentType =
       telegramResponse.headers.get('content-type') ??
-      (media.media_type === 'animation' ? 'image/gif' : 'image/jpeg');
+      (
+        {
+          photo: 'image/jpeg',
+          animation: 'image/gif',
+          video: 'video/mp4',
+          audio: 'audio/mpeg',
+          voice: 'audio/ogg',
+          document: 'application/octet-stream',
+        } satisfies Record<typeof media.media_type, string>
+      )[media.media_type];
     reply.header('Content-Type', contentType);
     reply.header('Cache-Control', 'private, max-age=300');
     return reply.send(Buffer.from(await telegramResponse.arrayBuffer()));
@@ -443,9 +458,16 @@ export async function buildServer(
   app.get('/api/search', async (request) => {
     const session = await authenticate(request);
     const query = z
-      .object({ limit: z.coerce.number().int().min(1).max(50).default(20) })
+      .object({
+        limit: z.coerce.number().int().min(1).max(50).default(20),
+        q: z.string().trim().max(80).default(''),
+      })
       .parse(request.query);
-    return dataApi.execute('search.list', { userId: session.userId, limit: query.limit });
+    return dataApi.execute('search.list', {
+      userId: session.userId,
+      limit: query.limit,
+      query: query.q,
+    });
   });
   app.get('/api/search/preferences', async (request) => {
     const session = await authenticate(request);
@@ -714,6 +736,32 @@ export async function buildServer(
   app.get('/api/admin/dashboard', async (request) => {
     const session = await requireAdmin(request);
     return dataApi.execute('admin.dashboard', { adminUserId: session.userId });
+  });
+  app.get('/api/admin/moderators', async (request) => {
+    const session = await requireAdmin(request);
+    return dataApi.execute('moderators.list', {
+      ownerTelegramUserId: session.telegramUserId,
+    });
+  });
+  app.post('/api/admin/moderators', async (request) => {
+    const session = await requireAdmin(request, true);
+    const { telegramUserId } = z
+      .object({ telegramUserId: z.number().int().positive() })
+      .parse(request.body);
+    return dataApi.execute('moderators.assign', {
+      ownerTelegramUserId: session.telegramUserId,
+      targetTelegramUserId: telegramUserId,
+    });
+  });
+  app.delete('/api/admin/moderators/:telegramUserId', async (request) => {
+    const session = await requireAdmin(request, true);
+    const { telegramUserId } = z
+      .object({ telegramUserId: z.coerce.number().int().positive() })
+      .parse(request.params);
+    return dataApi.execute('moderators.remove', {
+      ownerTelegramUserId: session.telegramUserId,
+      targetTelegramUserId: telegramUserId,
+    });
   });
   app.get('/api/admin/users', async (request) => {
     const session = await requireModerationAccess(request);

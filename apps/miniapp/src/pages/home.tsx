@@ -120,7 +120,7 @@ export function HomePage() {
       </section>
 
       <a href={PROMO_CHAT_URL} className="promo-strip">
-        <span className="brand-mark small">P</span>
+        <img className="brand-mark small" src="/assets/piarchat-avatar.webp" alt="" />
         <span>
           <strong>{ru.miniApp.home.promoTitle}</strong>
           <small>{ru.miniApp.home.promoDescription}</small>
@@ -128,7 +128,7 @@ export function HomePage() {
         <ArrowRight className="ml-auto h-4 w-4" />
       </a>
       <a href={NEWS_CHANNEL_URL} className="promo-strip">
-        <span className="brand-mark small">R</span>
+        <img className="brand-mark small" src="/assets/rolemate-news-avatar.webp" alt="" />
         <span>
           <strong>{ru.miniApp.home.newsTitle}</strong>
           <small>{ru.miniApp.home.newsDescription}</small>

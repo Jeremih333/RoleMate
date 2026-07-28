@@ -66,6 +66,7 @@ async function mockApi(page: Page, admin: boolean | 'moderator' = false): Promis
         languages: '["ru"]',
         fandoms: '["Arcane"]',
         genres: '["драма"]',
+        tags: '["медленные ответы"]',
         settings: '',
         plots: 'Долгая история',
         looking_for: '["долгосрочного партнёра"]',
@@ -73,7 +74,10 @@ async function mockApi(page: Page, admin: boolean | 'moderator' = false): Promis
         adult_topics_allowed: 0,
         contact_reveal_policy: 'mutual_only',
         moderation_status: 'approved',
+        is_active: 1,
+        has_premium: 0,
       },
+      '/api/profile/state': { active: false },
       '/api/profile/media': [],
       '/api/settings': {
         notifications_enabled: 1,
@@ -100,14 +104,16 @@ async function mockApi(page: Page, admin: boolean | 'moderator' = false): Promis
           display_name: 'Лис',
           age_group: '21_25',
           short_headline: 'Ищу соавтора для долгой истории',
-          about: 'Люблю сложные сюжеты, живых персонажей и спокойное обсуждение границ.',
+          about: 'Люблю **сложные сюжеты**, живых персонажей и спокойное обсуждение границ.',
           fandoms: '["Arcane","Cyberpunk 2077"]',
           genres: '["драма","приключения"]',
+          tags: '["готический детектив"]',
           writing_style: 'literary',
           average_post_length: 'paragraphs_3_5',
           activity_frequency: 'daily',
           compatibility: 91,
           is_premium: 1,
+          has_premium: 1,
         },
       ],
       '/api/premium/status': {
@@ -142,7 +148,18 @@ async function mockApi(page: Page, admin: boolean | 'moderator' = false): Promis
         premiumUsers: 14,
         starsPayments: 19,
       },
-      '/api/admin/users': [],
+      '/api/admin/users': [
+        {
+          id: '00000000-0000-4000-8000-000000000042',
+          telegram_user_id: 42,
+          telegram_username: 'telegram_test',
+          telegram_first_name: 'Telegram Test User',
+          display_name: 'Profile pseudonym must stay hidden',
+          status: 'active',
+          is_banned: 0,
+          risk_score: 0,
+        },
+      ],
       '/api/admin/profiles': [],
       '/api/admin/reports': [],
       '/api/admin/referrals': [],
@@ -195,6 +212,14 @@ async function mockApi(page: Page, admin: boolean | 'moderator' = false): Promis
       '/api/admin/media': [],
       '/api/admin/promotions': [],
       '/api/admin/posting-requirements': [],
+      '/api/admin/moderators': [
+        {
+          telegram_user_id: 7001,
+          telegram_username: 'moderator_test',
+          telegram_first_name: 'Moderator Test',
+          assigned_at: '2026-07-29 01:00:00',
+        },
+      ],
     };
     await route.fulfill({
       status: 200,
@@ -247,6 +272,46 @@ test('profile editor loads existing values without destructive defaults', async 
   );
   await expect(page.locator('textarea[name="about"]')).toHaveValue(/Люблю сложные сюжеты/);
   await expect(page.locator('select[name="ageGroup"]')).toHaveValue('21_25');
+  await expect(page.getByText('Русский', { exact: true })).toBeVisible();
+  await expect(page.locator('select[name="timezone"]')).toContainText('по Москве');
+  await expect(page.locator('select[name="timezone"]')).toContainText('по Екатеринбургу');
+});
+
+test('profile languages accept suggestions and custom comma-separated tags', async ({ page }) => {
+  await mockApi(page);
+  await page.goto('/profile/edit');
+  const languageInput = page.getByPlaceholder('Выбери из списка или напиши язык');
+  await languageInput.fill('Клингонский,');
+  await expect(page.getByText('Клингонский', { exact: true })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Удалить язык «Клингонский»' })).toBeVisible();
+});
+
+test('profile page can disable its own questionnaire and renders the bot avatar', async ({
+  page,
+}) => {
+  await mockApi(page);
+  await page.goto('/profile');
+  await expect(page.locator('img.brand-mark').first()).toHaveAttribute(
+    'src',
+    '/assets/telegram-bot-avatar.jpg',
+  );
+  page.once('dialog', (dialog) => void dialog.accept());
+  await page.getByRole('button', { name: 'Отключить свою анкету' }).click();
+  await expect(page.getByText('Анкета отключена и скрыта из поиска.')).toBeVisible();
+});
+
+test('keyword search sends the query and profile markdown is rendered safely', async ({ page }) => {
+  await mockApi(page);
+  await page.goto('/search');
+  const requestPromise = page.waitForRequest(
+    (request) => new URL(request.url()).searchParams.get('q') === 'готический детектив',
+  );
+  await page.getByLabel('Поиск анкет по ключевым словам и тегам').fill('готический детектив');
+  await page.getByRole('button', { name: 'Найти' }).click();
+  const request = await requestPromise;
+  expect(new URL(request.url()).searchParams.get('q')).toBe('готический детектив');
+  await expect(page.getByText('готический детектив', { exact: true })).toBeVisible();
+  await expect(page.locator('.profile-markdown strong')).toHaveText('сложные сюжеты');
 });
 
 test('account deletion requires the exact confirmation phrase', async ({ page }) => {
@@ -257,12 +322,62 @@ test('account deletion requires the exact confirmation phrase', async ({ page })
   await expect(page.getByText('Аккаунт и пользовательские данные удалены.')).toBeVisible();
 });
 
+test('a user can block anyone who wrote to them from the MiniApp chat list', async ({ page }) => {
+  await mockApi(page);
+  await page.route('**/api/conversations', (route) =>
+    route.fulfill({
+      contentType: 'application/json',
+      body: JSON.stringify([
+        {
+          id: '00000000-0000-4000-8000-000000000099',
+          status: 'active',
+          contact_reveal_status: 'hidden',
+          is_muted: 0,
+          anonymous_alias: 'Автор B',
+          other_user_id: '00000000-0000-4000-8000-000000000098',
+          short_headline: 'Написал вам',
+        },
+      ]),
+    }),
+  );
+  await page.route('**/api/blocks', (route) =>
+    route.fulfill({ contentType: 'application/json', body: JSON.stringify({ blocked: true }) }),
+  );
+  await page.goto('/chats');
+  const blockRequest = page.waitForRequest(
+    (request) => request.url().endsWith('/api/blocks') && request.method() === 'POST',
+  );
+  page.once('dialog', (dialog) => void dialog.accept());
+  await page.getByRole('button', { name: 'Блокировать' }).click();
+  await expect(blockRequest).resolves.toBeTruthy();
+});
+
 test('owner sees the protected dashboard', async ({ page }) => {
   await mockApi(page, true);
   await page.goto('/admin');
   await expect(page.getByRole('heading', { name: 'Управление RoleMate' })).toBeVisible();
   await expect(page.getByText('Защищённая панель')).toBeVisible();
   await expect(page.getByText('120')).toBeVisible();
+});
+
+test('users section does not substitute profile questionnaires for Telegram accounts', async ({
+  page,
+}) => {
+  await mockApi(page, true);
+  await page.goto('/admin');
+  await page.getByTestId('admin-section-users').click();
+  await expect(page.getByText('Telegram Test User')).toBeVisible();
+  await expect(page.getByText('Profile pseudonym must stay hidden')).toHaveCount(0);
+});
+
+test('owner can open moderator management in the admin panel', async ({ page }) => {
+  await mockApi(page, true);
+  await page.goto('/admin');
+  await page.getByTestId('admin-section-moderators').click();
+  await expect(page.getByText('Moderator Test')).toBeVisible();
+  await expect(page.locator('input[inputmode="numeric"]')).toBeVisible();
+  await expect(page.getByTestId('moderator-assign')).toBeDisabled();
+  await expect(page.getByTestId('moderator-remove-7001')).toBeVisible();
 });
 
 test('moderator sees only moderation sections', async ({ page }) => {

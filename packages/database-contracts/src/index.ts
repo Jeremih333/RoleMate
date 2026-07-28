@@ -86,12 +86,13 @@ export const workerOperations = {
   'users.delete': z.object({ userId: z.string().uuid() }),
   'profiles.upsert': z.object({ userId: z.string().uuid(), profile: profileSchema }),
   'profiles.getOwn': z.object({ userId: z.string().uuid() }),
+  'profiles.setActive': z.object({ userId: z.string().uuid(), active: z.boolean() }),
   'profiles.media.list': z.object({ userId: z.string().uuid() }),
   'profiles.media.add': z.object({
     userId: z.string().uuid(),
     telegramFileId: z.string().min(1).max(512),
     telegramFileUniqueId: z.string().min(1).max(256),
-    mediaType: z.enum(['photo', 'animation']),
+    mediaType: z.enum(['photo', 'animation', 'video', 'audio', 'voice', 'document']),
   }),
   'profiles.media.delete': z.object({
     userId: z.string().uuid(),
@@ -101,7 +102,9 @@ export const workerOperations = {
     requesterUserId: z.string().uuid(),
     mediaId: z.string().uuid(),
   }),
-  'search.list': z.object({ userId: z.string().uuid() }).merge(paginationSchema),
+  'search.list': z
+    .object({ userId: z.string().uuid(), query: z.string().trim().max(80).default('') })
+    .merge(paginationSchema),
   'search.preferences.get': z.object({ userId: z.string().uuid() }),
   'search.preferences.update': z.object({
     userId: z.string().uuid(),

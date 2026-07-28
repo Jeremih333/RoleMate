@@ -1251,25 +1251,85 @@ export function createBot(
     async (context) => {
       if (!context.from) return;
       if (
-        'photo' in context.message &&
         context.message.reply_to_message &&
         context.message.reply_to_message.from?.id === context.me.id &&
         'text' in context.message.reply_to_message &&
         context.message.reply_to_message.text === ru.bot.profilePhotoPrompt
       ) {
-        const photo = context.message.photo.at(-1);
-        if (!photo) return;
-        if ((photo.file_size ?? 0) > 5 * 1024 * 1024) {
+        const documentMime =
+          'document' in context.message ? (context.message.document.mime_type ?? '') : '';
+        type ProfileMediaUpload = {
+          file: { file_id: string; file_unique_id: string; file_size?: number };
+          mediaType: 'photo' | 'animation' | 'video' | 'audio' | 'voice' | 'document';
+        };
+        let profileMedia: ProfileMediaUpload | undefined;
+        if ('photo' in context.message) {
+          const file = context.message.photo.at(-1);
+          if (file)
+            profileMedia = {
+              file,
+              mediaType: 'photo',
+            };
+        } else if ('animation' in context.message) {
+          profileMedia = {
+            file: context.message.animation,
+            mediaType: 'animation',
+          };
+        } else if ('video' in context.message) {
+          profileMedia = {
+            file: context.message.video,
+            mediaType: 'video',
+          };
+        } else if ('audio' in context.message) {
+          profileMedia = {
+            file: context.message.audio,
+            mediaType: 'audio',
+          };
+        } else if ('voice' in context.message) {
+          profileMedia = {
+            file: context.message.voice,
+            mediaType: 'voice',
+          };
+        } else if (
+          'document' in context.message &&
+          (documentMime === 'image/gif' ||
+            documentMime.startsWith('video/') ||
+            documentMime.startsWith('audio/'))
+        ) {
+          profileMedia = {
+            file: context.message.document,
+            mediaType: documentMime === 'image/gif' ? 'animation' : 'document',
+          };
+        }
+        if (!profileMedia?.file) {
+          await context.reply(ru.bot.profileMediaUnsupported);
+          return;
+        }
+        const maxBytes = profileMedia.mediaType === 'photo' ? 5 * 1024 * 1024 : 20 * 1024 * 1024;
+        if ((profileMedia.file.file_size ?? 0) > maxBytes) {
           await context.reply(ru.bot.profilePhotoTooLarge);
           return;
         }
         const user = await upsertUser(context, dataApi);
-        await dataApi.execute('profiles.media.add', {
-          userId: user.userId,
-          telegramFileId: photo.file_id,
-          telegramFileUniqueId: photo.file_unique_id,
-          mediaType: 'photo',
-        });
+        try {
+          await dataApi.execute('profiles.media.add', {
+            userId: user.userId,
+            telegramFileId: profileMedia.file.file_id,
+            telegramFileUniqueId: profileMedia.file.file_unique_id,
+            mediaType: profileMedia.mediaType,
+          });
+        } catch (error) {
+          if (
+            error instanceof DataApiError &&
+            ['PREMIUM_REQUIRED', 'PREMIUM_MEDIA_REQUIRED'].includes(error.code)
+          ) {
+            await context.reply(ru.bot.postPremiumMedia, {
+              reply_markup: new InlineKeyboard().text(ru.bot.buttons.buyPremium, 'premium:open'),
+            });
+            return;
+          }
+          throw error;
+        }
         await context.reply(ru.bot.profilePhotoPending);
         return;
       }

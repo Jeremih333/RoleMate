@@ -65,10 +65,16 @@ export const api = {
       method: 'PUT',
       body: JSON.stringify(profile),
     }),
+  setProfileActive: (active: boolean) =>
+    request<{ active: boolean }>('/profile/state', {
+      method: 'PUT',
+      body: JSON.stringify({ active }),
+    }),
   profileMedia: () => request<ProfileMedia[]>('/profile/media'),
   deleteProfileMedia: (mediaId: string) =>
     request<{ deleted: true }>(`/profile/media/${mediaId}`, { method: 'DELETE' }),
-  search: () => request<SearchProfile[]>('/search?limit=20'),
+  search: (query = '') =>
+    request<SearchProfile[]>(`/search?limit=20&q=${encodeURIComponent(query)}`),
   searchPreferences: () => request<SearchPreferences>('/search/preferences'),
   saveSearchPreferences: (preferences: SearchPreferencesInput) =>
     request<{ updated: true }>('/search/preferences', {
@@ -183,6 +189,17 @@ export const api = {
     }),
   referrals: () => request<ReferralSummary>('/referrals'),
   adminDashboard: () => request<AdminStats>('/admin/dashboard'),
+  adminModerators: () => request<AdminModerator[]>('/admin/moderators'),
+  adminAssignModerator: (telegramUserId: number) =>
+    request<{ assigned: true }>('/admin/moderators', {
+      method: 'POST',
+      body: JSON.stringify({ telegramUserId }),
+    }),
+  adminRemoveModerator: (telegramUserId: number) =>
+    request<{ removed: true }>(`/admin/moderators/${telegramUserId}`, {
+      method: 'DELETE',
+      body: '{}',
+    }),
   adminUsers: (query = '') =>
     request<AdminUser[]>(`/admin/users?q=${encodeURIComponent(query)}&limit=50`),
   adminProfiles: (status = 'all', query = '') =>
@@ -341,12 +358,15 @@ export interface SearchProfile {
   about: string;
   fandoms: string;
   genres: string;
+  tags: string;
   writing_style: string;
   average_post_length: string;
   activity_frequency: string;
   compatibility: number;
   is_premium: number;
+  has_premium: number;
   media_id?: string | null;
+  media_type?: ProfileMedia['media_type'] | null;
   rating_likes: number;
   rating_dislikes: number;
   rating_score: number;
@@ -354,7 +374,7 @@ export interface SearchProfile {
 
 export interface ProfileMedia {
   id: string;
-  media_type: 'photo' | 'animation';
+  media_type: 'photo' | 'animation' | 'video' | 'audio' | 'voice' | 'document';
   sort_order: number;
   moderation_status: 'pending' | 'approved' | 'rejected';
   created_at: string;
@@ -582,11 +602,17 @@ export interface AdminUser {
   telegram_user_id: number;
   telegram_username?: string;
   telegram_first_name: string;
-  display_name?: string;
   status: string;
   is_banned: number;
   risk_score: number;
   premium_ends_at?: string;
+}
+
+export interface AdminModerator {
+  telegram_user_id: number;
+  telegram_username?: string;
+  telegram_first_name: string;
+  assigned_at: string;
 }
 
 export interface AdminProfile {
@@ -602,7 +628,7 @@ export interface AdminProfile {
 
 export interface AdminMedia {
   id: string;
-  media_type: 'photo' | 'animation';
+  media_type: 'photo' | 'animation' | 'video' | 'audio' | 'voice' | 'document';
   moderation_status: 'pending' | 'approved' | 'rejected';
   profile_id: string;
   user_id: string;

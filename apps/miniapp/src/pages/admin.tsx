@@ -43,7 +43,8 @@ type AdminSection =
   | 'system'
   | 'audit'
   | 'promotions'
-  | 'postingRequirements';
+  | 'postingRequirements'
+  | 'moderators';
 
 export function AdminPage() {
   const isAdmin = useUserStore((state) => state.user?.isAdmin);
@@ -60,6 +61,7 @@ export function AdminPage() {
     ['audit', ru.miniApp.admin.sections[9]],
     ['promotions', ru.miniApp.admin.sections[10]],
     ['postingRequirements', ru.miniApp.admin.sections[11]],
+    ['moderators', ru.miniApp.admin.sections[12]],
   ] as const;
   const moderationSections = [
     ['users', ru.miniApp.admin.sections[1]],
@@ -84,6 +86,7 @@ export function AdminPage() {
         ].map(([key, label]) => (
           <Button
             key={key}
+            data-testid={`admin-section-${key}`}
             variant={section === key ? 'primary' : 'secondary'}
             onClick={() => setSection(key)}
           >
@@ -105,6 +108,7 @@ export function AdminPage() {
           {section === 'audit' ? <AuditLog /> : null}
           {section === 'promotions' ? <Promotions /> : null}
           {section === 'postingRequirements' ? <PostingRequirements /> : null}
+          {section === 'moderators' ? <Moderators /> : null}
         </AdminSectionBoundary>
       </div>
     </div>
@@ -224,7 +228,7 @@ function UsersQueue({ isOwner }: { isOwner: boolean }) {
           <Card key={user.id} className="p-4">
             <div className="flex flex-wrap items-center justify-between gap-2">
               <div>
-                <strong>{user.display_name ?? user.telegram_first_name}</strong>
+                <strong>{user.telegram_first_name}</strong>
                 <p className="text-sm text-muted">
                   {user.telegram_user_id}{' '}
                   {user.telegram_username ? `@${user.telegram_username}` : ''} ·{' '}
@@ -323,18 +327,6 @@ function UsersQueue({ isOwner }: { isOwner: boolean }) {
                   {ru.miniApp.admin.temporaryBan}
                 </Button>
               ) : null}
-              <Button
-                variant="secondary"
-                onClick={() =>
-                  moderate.mutate({
-                    userId: user.id,
-                    action: 'disable_profile',
-                    reason: ru.miniApp.admin.ownerDisableProfileReason,
-                  })
-                }
-              >
-                {ru.miniApp.admin.disableProfile}
-              </Button>
             </div>
             <MutationFeedback
               states={[moderate, premium, revokePremium]}
@@ -466,12 +458,31 @@ function MediaQueue() {
       <div className="mt-3 grid gap-3 sm:grid-cols-2">
         {media.data?.map((item) => (
           <Card className="overflow-hidden" key={item.id}>
-            <img
-              className="aspect-square w-full object-cover"
-              src={`/api/profile-media/${item.id}`}
-              alt=""
-              loading="lazy"
-            />
+            {item.media_type === 'video' ? (
+              <video
+                className="aspect-square w-full bg-black object-contain"
+                src={`/api/profile-media/${item.id}`}
+                controls
+              />
+            ) : item.media_type === 'audio' || item.media_type === 'voice' ? (
+              <div className="flex aspect-square items-center p-4">
+                <audio className="w-full" src={`/api/profile-media/${item.id}`} controls />
+              </div>
+            ) : item.media_type === 'document' ? (
+              <a
+                className="flex aspect-square items-center justify-center p-4 text-lilac underline"
+                href={`/api/profile-media/${item.id}`}
+              >
+                {ru.miniApp.profile.openMedia}
+              </a>
+            ) : (
+              <img
+                className="aspect-square w-full object-cover"
+                src={`/api/profile-media/${item.id}`}
+                alt=""
+                loading="lazy"
+              />
+            )}
             <div className="p-4">
               <strong>{item.display_name}</strong>
               <p className="text-xs text-muted">
@@ -1336,6 +1347,91 @@ function Promotions() {
           </div>
         </Card>
       ))}
+    </div>
+  );
+}
+
+function Moderators() {
+  const queryClient = useQueryClient();
+  const [telegramId, setTelegramId] = useState('');
+  const moderators = useQuery({
+    queryKey: ['admin-moderators'],
+    queryFn: api.adminModerators,
+  });
+  const assign = useMutation({
+    mutationFn: api.adminAssignModerator,
+    onSuccess: () => {
+      setTelegramId('');
+      void queryClient.invalidateQueries({ queryKey: ['admin-moderators'] });
+    },
+  });
+  const remove = useMutation({
+    mutationFn: api.adminRemoveModerator,
+    onSuccess: () => void queryClient.invalidateQueries({ queryKey: ['admin-moderators'] }),
+  });
+  const parsedTelegramId = Number(telegramId);
+  const canAssign = Number.isSafeInteger(parsedTelegramId) && parsedTelegramId > 0;
+  if (moderators.isLoading) return <Skeleton className="h-72" />;
+  if (moderators.isError) {
+    return <AdminRequestError error={moderators.error} retry={() => moderators.refetch()} />;
+  }
+  return (
+    <div className="space-y-4">
+      <Card className="space-y-3 p-4">
+        <h2 className="font-display text-2xl">{ru.miniApp.admin.moderatorsTitle}</h2>
+        <p className="text-sm text-muted">{ru.miniApp.admin.moderatorsDescription}</p>
+        <input
+          className="input-field"
+          inputMode="numeric"
+          value={telegramId}
+          onChange={(event) => setTelegramId(event.target.value.replace(/\D/g, ''))}
+          placeholder={ru.miniApp.admin.moderatorTelegramId}
+          aria-label={ru.miniApp.admin.moderatorTelegramId}
+        />
+        <Button
+          data-testid="moderator-assign"
+          disabled={!canAssign}
+          loading={assign.isPending}
+          onClick={() => assign.mutate(parsedTelegramId)}
+        >
+          {ru.miniApp.admin.assignModerator}
+        </Button>
+        <MutationFeedback states={[assign]} success={ru.miniApp.admin.moderatorAssigned} />
+      </Card>
+      {moderators.data?.length ? (
+        moderators.data.map((moderator) => (
+          <Card className="p-4" key={moderator.telegram_user_id}>
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <div>
+                <strong>{moderator.telegram_first_name}</strong>
+                <p className="text-sm text-muted">
+                  {moderator.telegram_user_id}{' '}
+                  {moderator.telegram_username ? `@${moderator.telegram_username}` : ''}
+                </p>
+              </div>
+              <Button
+                data-testid={`moderator-remove-${moderator.telegram_user_id}`}
+                variant="secondary"
+                loading={remove.isPending && remove.variables === moderator.telegram_user_id}
+                onClick={() => {
+                  if (
+                    window.confirm(
+                      ru.miniApp.admin.removeModeratorConfirm(moderator.telegram_user_id),
+                    )
+                  ) {
+                    remove.mutate(moderator.telegram_user_id);
+                  }
+                }}
+              >
+                {ru.miniApp.admin.removeModerator}
+              </Button>
+            </div>
+          </Card>
+        ))
+      ) : (
+        <Card className="p-4 text-sm text-muted">{ru.miniApp.admin.noModerators}</Card>
+      )}
+      <MutationFeedback states={[remove]} success={ru.miniApp.admin.moderatorRemoved} />
     </div>
   );
 }

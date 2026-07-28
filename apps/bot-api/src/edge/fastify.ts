@@ -57,6 +57,7 @@ interface Route {
   method: string;
   parameterNames: string[];
   pattern: RegExp;
+  rateLimitKey: string;
 }
 
 interface ReplyState {
@@ -272,7 +273,12 @@ export class EdgeFastify {
     };
 
     try {
-      if (!this.consumeRateLimit(ip, match.route.maxRequests ?? this.defaultRateLimit)) {
+      if (
+        !this.consumeRateLimit(
+          `${ip}:${match.route.rateLimitKey}`,
+          match.route.maxRequests ?? this.defaultRateLimit,
+        )
+      ) {
         state.status = 429;
         state.body = {
           statusCode: 429,
@@ -318,6 +324,7 @@ export class EdgeFastify {
     this.routes.push({
       method,
       handler: actualHandler,
+      rateLimitKey: `${method}:${path}`,
       ...(maxRequests === undefined ? {} : { maxRequests }),
       ...compiled,
     });

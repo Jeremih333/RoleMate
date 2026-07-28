@@ -20,7 +20,7 @@ export function Layout({ children }: { children: ReactNode }) {
     <div className="app-shell">
       <header className="topbar">
         <Link href="/" className="brand" aria-label={ru.brand.name}>
-          <span className="brand-mark">R</span>
+          <img className="brand-mark" src="/assets/telegram-bot-avatar.jpg" alt="" />
           <span>
             <strong>{ru.brand.name}</strong>
             <small>{ru.miniApp.navigation.tagline}</small>

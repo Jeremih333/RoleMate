@@ -1,6 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { motion, AnimatePresence } from 'framer-motion';
-import { Ban, Flag, Heart, RotateCcw, SlidersHorizontal, Star, X } from 'lucide-react';
+import { Ban, Flag, Heart, RotateCcw, Search, SlidersHorizontal, Star, X } from 'lucide-react';
 import { useState } from 'react';
 import { ru } from '@rolemate/shared';
 import {
@@ -10,6 +10,7 @@ import {
   type SearchProfile,
 } from '../api.js';
 import { Button, Card, EmptyState, Skeleton } from '../components/ui.js';
+import { ProfileMarkdown } from '../components/markdown.js';
 import { haptic } from '../telegram.js';
 
 function list(value: string): string[] {
@@ -55,16 +56,36 @@ const genderLabels: Record<string, string> = {
 function ProfileCard({ profile }: { profile: SearchProfile }) {
   const fandoms = list(profile.fandoms);
   const genres = list(profile.genres);
+  const tags = list(profile.tags);
   return (
     <Card className="profile-card overflow-hidden">
       <div className="profile-cover">
         {profile.media_id ? (
-          <img
-            className="absolute inset-0 h-full w-full object-cover"
-            src={`/api/profile-media/${profile.media_id}`}
-            alt=""
-            loading="eager"
-          />
+          profile.media_type === 'video' ? (
+            <video
+              className="absolute inset-0 h-full w-full bg-black object-contain"
+              src={`/api/profile-media/${profile.media_id}`}
+              controls
+            />
+          ) : profile.media_type === 'audio' || profile.media_type === 'voice' ? (
+            <div className="absolute inset-0 flex items-center p-5">
+              <audio className="w-full" src={`/api/profile-media/${profile.media_id}`} controls />
+            </div>
+          ) : profile.media_type === 'document' ? (
+            <a
+              className="absolute inset-0 flex items-center justify-center text-lilac underline"
+              href={`/api/profile-media/${profile.media_id}`}
+            >
+              {ru.miniApp.profile.openMedia}
+            </a>
+          ) : (
+            <img
+              className="absolute inset-0 h-full w-full object-cover"
+              src={`/api/profile-media/${profile.media_id}`}
+              alt=""
+              loading="eager"
+            />
+          )
         ) : null}
         <div className="compatibility">
           {profile.compatibility}%<span>{ru.miniApp.search.matchPercent}</span>
@@ -84,13 +105,18 @@ function ProfileCard({ profile }: { profile: SearchProfile }) {
           <span className="activity-dot" title={ru.miniApp.search.recentlyActive} />
         </div>
         <div className="mt-4 flex flex-wrap gap-2">
-          {[...fandoms.slice(0, 3), ...genres.slice(0, 2)].map((tag) => (
+          {[...fandoms.slice(0, 2), ...genres.slice(0, 2), ...tags.slice(0, 3)].map((tag) => (
             <span className="tag" key={tag}>
               {tag}
             </span>
           ))}
         </div>
-        <p className="mt-4 line-clamp-4 text-sm leading-relaxed text-soft">{profile.about}</p>
+        <ProfileMarkdown
+          className="mt-4 line-clamp-4 text-sm leading-relaxed text-soft"
+          allowLinks={Boolean(profile.has_premium)}
+        >
+          {profile.about}
+        </ProfileMarkdown>
         <div className="mt-4 flex items-center gap-3 text-xs text-muted">
           <strong className="text-soft">{ru.miniApp.search.rating}:</strong>
           <span>
@@ -133,7 +159,12 @@ function ProfileCard({ profile }: { profile: SearchProfile }) {
 
 export function SearchPage() {
   const queryClient = useQueryClient();
-  const profiles = useQuery({ queryKey: ['search'], queryFn: api.search });
+  const [query, setQuery] = useState('');
+  const [queryDraft, setQueryDraft] = useState('');
+  const profiles = useQuery({
+    queryKey: ['search', query],
+    queryFn: () => api.search(query),
+  });
   const premium = useQuery({ queryKey: ['premium-status'], queryFn: api.premiumStatus });
   const preferences = useQuery({
     queryKey: ['search-preferences'],
@@ -142,6 +173,26 @@ export function SearchPage() {
   const [index, setIndex] = useState(0);
   const [filtersOpen, setFiltersOpen] = useState(false);
   const current = profiles.data?.[index];
+  const searchForm = (
+    <form
+      className="search-box"
+      onSubmit={(event) => {
+        event.preventDefault();
+        setIndex(0);
+        setQuery(queryDraft.trim());
+      }}
+    >
+      <Search className="h-4 w-4" aria-hidden />
+      <input
+        value={queryDraft}
+        maxLength={80}
+        placeholder={ru.miniApp.search.keywordPlaceholder}
+        aria-label={ru.miniApp.search.keywordLabel}
+        onChange={(event) => setQueryDraft(event.target.value)}
+      />
+      <Button type="submit">{ru.miniApp.search.keywordSubmit}</Button>
+    </form>
+  );
   const swipe = useMutation({
     mutationFn: ({
       action,
@@ -184,7 +235,12 @@ export function SearchPage() {
         icon={<Star className="h-7 w-7" />}
         title={ru.miniApp.search.emptyTitle}
         description={ru.miniApp.search.emptyDescription}
-        action={<Button onClick={() => void profiles.refetch()}>{ru.miniApp.search.retry}</Button>}
+        action={
+          <div className="space-y-3">
+            {searchForm}
+            <Button onClick={() => void profiles.refetch()}>{ru.miniApp.search.retry}</Button>
+          </div>
+        }
       />
     );
   }
@@ -204,6 +260,7 @@ export function SearchPage() {
           <SlidersHorizontal className="h-5 w-5" />
         </Button>
       </div>
+      <div className="mb-4">{searchForm}</div>
       {premium.data ? (
         <p className="mb-3 text-center text-xs text-muted">
           {ru.miniApp.search.dailyUsage(

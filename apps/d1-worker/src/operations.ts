@@ -910,6 +910,109 @@ const handlers: { [K in WorkerOperation]: Handler<K> } = {
       .run();
     return { revoked: true };
   },
+  'broadcasts.claimBatch': async (env, input) => {
+    const broadcast = await env.DB.prepare(
+      `SELECT b.id, b.message, b.rate_limit_per_second,
+              (SELECT j.id FROM background_jobs j
+               WHERE j.type = 'broadcast.dispatch'
+                 AND json_extract(j.payload, '$.broadcastId') = b.id
+                 AND j.status IN ('pending', 'running')
+               ORDER BY j.created_at DESC LIMIT 1) AS job_id
+       FROM broadcasts b
+       WHERE b.status IN ('queued', 'running')
+       ORDER BY COALESCE(b.queued_at, b.created_at) ASC LIMIT 1`,
+    ).first<{
+      id: string;
+      message: string;
+      rate_limit_per_second: number;
+      job_id: string | null;
+    }>();
+    if (!broadcast?.job_id) return null;
+    const limit = Math.min(input.limit, broadcast.rate_limit_per_second);
+    const deliveries = (
+      await env.DB.prepare(
+        `SELECT d.id, u.telegram_user_id
+         FROM broadcast_deliveries d JOIN users u ON u.id = d.user_id
+         WHERE d.broadcast_id = ?1 AND d.status = 'pending'
+         ORDER BY d.created_at ASC LIMIT ?2`,
+      )
+        .bind(broadcast.id, limit)
+        .all<{ id: string; telegram_user_id: number }>()
+    ).results;
+    if (!deliveries.length) return null;
+    await env.DB.batch([
+      env.DB.prepare(
+        `UPDATE broadcasts SET status = 'running',
+           started_at = COALESCE(started_at, CURRENT_TIMESTAMP),
+           updated_at = CURRENT_TIMESTAMP WHERE id = ?1 AND status = 'queued'`,
+      ).bind(broadcast.id),
+      env.DB.prepare(
+        `UPDATE background_jobs SET status = 'running',
+           locked_at = COALESCE(locked_at, CURRENT_TIMESTAMP), attempts = attempts + 1
+         WHERE id = ?1 AND status = 'pending'`,
+      ).bind(broadcast.job_id),
+      ...deliveries.map((delivery) =>
+        env.DB.prepare(
+          `UPDATE broadcast_deliveries SET status = 'sending', attempts = attempts + 1
+           WHERE id = ?1 AND status = 'pending'`,
+        ).bind(delivery.id),
+      ),
+    ]);
+    return {
+      broadcastId: broadcast.id,
+      jobId: broadcast.job_id,
+      message: broadcast.message,
+      deliveries: deliveries.map((delivery) => ({
+        deliveryId: delivery.id,
+        telegramUserId: delivery.telegram_user_id,
+      })),
+    };
+  },
+  'broadcasts.recordBatch': async (env, input) => {
+    await env.DB.batch(
+      input.results.map((result) =>
+        env.DB.prepare(
+          `UPDATE broadcast_deliveries SET status = ?2, error_code = ?3,
+             safe_message = ?4,
+             sent_at = CASE WHEN ?2 = 'sent' THEN CURRENT_TIMESTAMP ELSE sent_at END
+           WHERE id = ?1 AND broadcast_id = ?5 AND status = 'sending'`,
+        ).bind(
+          result.deliveryId,
+          result.status,
+          result.errorCode ?? null,
+          result.safeMessage ?? null,
+          input.broadcastId,
+        ),
+      ),
+    );
+    const counts = await env.DB.prepare(
+      `SELECT
+         SUM(CASE WHEN status = 'sent' THEN 1 ELSE 0 END) AS sent,
+         SUM(CASE WHEN status = 'failed' THEN 1 ELSE 0 END) AS failed,
+         SUM(CASE WHEN status IN ('pending', 'sending') THEN 1 ELSE 0 END) AS remaining
+       FROM broadcast_deliveries WHERE broadcast_id = ?1`,
+    )
+      .bind(input.broadcastId)
+      .first<{ sent: number; failed: number; remaining: number }>();
+    const remaining = Number(counts?.remaining ?? 0);
+    await env.DB.batch([
+      env.DB.prepare(
+        `UPDATE broadcasts SET sent_count = ?2, failed_count = ?3,
+           status = CASE WHEN ?4 = 0 AND status IN ('queued', 'running')
+                         THEN 'completed' ELSE status END,
+           completed_at = CASE WHEN ?4 = 0 AND status IN ('queued', 'running')
+                               THEN CURRENT_TIMESTAMP ELSE completed_at END,
+           updated_at = CURRENT_TIMESTAMP WHERE id = ?1`,
+      ).bind(input.broadcastId, Number(counts?.sent ?? 0), Number(counts?.failed ?? 0), remaining),
+      env.DB.prepare(
+        `UPDATE background_jobs SET
+           status = CASE WHEN ?2 = 0 THEN 'completed' ELSE status END,
+           completed_at = CASE WHEN ?2 = 0 THEN CURRENT_TIMESTAMP ELSE completed_at END
+         WHERE id = ?1`,
+      ).bind(input.jobId, remaining),
+    ]);
+    return { recorded: input.results.length, remaining };
+  },
   'admin.dashboard': async (env, input) => {
     await assertAdmin(env, input.adminUserId);
     const [
@@ -1028,6 +1131,323 @@ const handlers: { [K in WorkerOperation]: Handler<K> } = {
         .bind(input.adminUserId, input.status, input.limit)
         .all()
     ).results;
+  },
+  'admin.payments.list': async (env, input) => {
+    await assertAdmin(env, input.adminUserId);
+    return (
+      await env.DB.prepare(
+        `SELECT po.id, po.provider, po.currency, po.amount, po.status, po.paid_at,
+                po.refunded_at, po.created_at, p.name AS product_name,
+                u.telegram_user_id, u.telegram_username
+         FROM payment_orders po
+         JOIN users u ON u.id = po.user_id
+         JOIN products p ON p.id = po.product_id
+         WHERE (?1 = 'all' OR po.status = ?1)
+         ORDER BY po.created_at DESC LIMIT ?2`,
+      )
+        .bind(input.status, input.limit)
+        .all()
+    ).results;
+  },
+  'admin.referrals.list': async (env, input) => {
+    await assertAdmin(env, input.adminUserId);
+    return (
+      await env.DB.prepare(
+        `SELECT r.id, r.status, r.qualification_reason, r.qualified_at, r.created_at,
+                referrer.telegram_user_id AS referrer_telegram_id,
+                referred.telegram_user_id AS referred_telegram_id,
+                referrer_profile.display_name AS referrer_display_name,
+                referred_profile.display_name AS referred_display_name,
+                COALESCE((
+                  SELECT SUM(score_delta) FROM risk_events
+                  WHERE user_id = r.referred_user_id
+                ), 0) AS referred_risk_events_score
+         FROM referrals r
+         JOIN users referrer ON referrer.id = r.referrer_user_id
+         JOIN users referred ON referred.id = r.referred_user_id
+         LEFT JOIN profiles referrer_profile ON referrer_profile.user_id = referrer.id
+         LEFT JOIN profiles referred_profile ON referred_profile.user_id = referred.id
+         WHERE (?1 = 'all' OR r.status = ?1)
+         ORDER BY CASE r.status WHEN 'pending' THEN 0 WHEN 'qualified' THEN 1 ELSE 2 END,
+                  r.created_at DESC LIMIT ?2`,
+      )
+        .bind(input.status, input.limit)
+        .all()
+    ).results;
+  },
+  'admin.referral.review': async (env, input, requestId) => {
+    await assertAdmin(env, input.adminUserId);
+    const referral = await env.DB.prepare('SELECT * FROM referrals WHERE id = ?1')
+      .bind(input.referralId)
+      .first<{
+        id: string;
+        status: string;
+        referrer_user_id: string;
+        referred_user_id: string;
+      }>();
+    if (!referral) throw new ApiError(404, 'REFERRAL_NOT_FOUND', 'Referral not found');
+
+    const statements: D1PreparedStatement[] = [];
+    if (input.action === 'confirm') {
+      if (referral.status === 'rejected')
+        throw new ApiError(409, 'REFERRAL_REJECTED', 'Rejected referral cannot be confirmed');
+      statements.push(
+        env.DB.prepare(
+          `INSERT OR IGNORE INTO premium_grants
+             (id, user_id, source, duration_seconds, reference_id, granted_by_user_id)
+           VALUES (?1, ?2, 'referral', 86400, ?3, ?4)`,
+        ).bind(
+          referral.id,
+          referral.referrer_user_id,
+          `referral:${referral.id}`,
+          input.adminUserId,
+        ),
+        env.DB.prepare(
+          `INSERT OR IGNORE INTO premium_entitlements
+             (id, user_id, source, status, starts_at, ends_at)
+           VALUES (?1, ?2, 'referral', 'active', CURRENT_TIMESTAMP,
+             datetime(
+               max(
+                 unixepoch('now'),
+                 coalesce((SELECT max(unixepoch(ends_at)) FROM premium_entitlements
+                           WHERE user_id = ?2 AND status = 'active'
+                             AND ends_at > CURRENT_TIMESTAMP), 0)
+               ) + 86400, 'unixepoch'
+             ))`,
+        ).bind(referral.id, referral.referrer_user_id),
+        env.DB.prepare(
+          `UPDATE referrals SET status = 'qualified', qualification_reason = ?2,
+             qualified_at = COALESCE(qualified_at, CURRENT_TIMESTAMP), reward_grant_id = ?1
+           WHERE id = ?1`,
+        ).bind(referral.id, input.reason),
+      );
+    } else {
+      if (input.action === 'revoke' && referral.status !== 'qualified')
+        throw new ApiError(409, 'REFERRAL_NOT_QUALIFIED', 'Only qualified referral can be revoked');
+      statements.push(
+        env.DB.prepare(
+          `UPDATE referrals SET status = 'rejected', qualification_reason = ?2,
+             qualified_at = NULL WHERE id = ?1`,
+        ).bind(referral.id, input.reason),
+      );
+      if (input.action === 'revoke') {
+        statements.push(
+          env.DB.prepare(
+            `UPDATE premium_entitlements SET status = 'revoked', updated_at = CURRENT_TIMESTAMP
+             WHERE id = ?1 AND source = 'referral' AND status = 'active'`,
+          ).bind(referral.id),
+        );
+      }
+    }
+    statements.push(
+      env.DB.prepare(
+        `INSERT INTO admin_audit_logs
+           (id, admin_user_id, target_user_id, action, reason, old_state, new_state,
+            request_id, result)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, 'success')`,
+      ).bind(
+        crypto.randomUUID(),
+        input.adminUserId,
+        referral.referred_user_id,
+        `referral.${input.action}`,
+        input.reason,
+        json(referral),
+        json({ status: input.action === 'confirm' ? 'qualified' : 'rejected' }),
+        requestId,
+      ),
+    );
+    await env.DB.batch(statements);
+    return { updated: true };
+  },
+  'admin.broadcasts.list': async (env, input) => {
+    await assertAdmin(env, input.adminUserId);
+    return (
+      await env.DB.prepare(
+        `SELECT b.*,
+                (SELECT COUNT(*) FROM broadcast_deliveries d
+                 WHERE d.broadcast_id = b.id AND d.status = 'failed') AS delivery_errors
+         FROM broadcasts b ORDER BY b.created_at DESC LIMIT ?1`,
+      )
+        .bind(input.limit)
+        .all()
+    ).results;
+  },
+  'admin.broadcasts.create': async (env, input, requestId) => {
+    await assertAdmin(env, input.adminUserId);
+    const id = crypto.randomUUID();
+    await env.DB.batch([
+      env.DB.prepare(
+        `INSERT INTO broadcasts
+           (id, created_by_user_id, title, message, segment, rate_limit_per_second)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6)`,
+      ).bind(
+        id,
+        input.adminUserId,
+        input.title,
+        input.message,
+        input.segment,
+        input.rateLimitPerSecond,
+      ),
+      env.DB.prepare(
+        `INSERT INTO admin_audit_logs
+           (id, admin_user_id, action, reason, new_state, request_id, result)
+         VALUES (?1, ?2, 'broadcast.create', 'draft_created', ?3, ?4, 'success')`,
+      ).bind(crypto.randomUUID(), input.adminUserId, json({ id, ...input }), requestId),
+    ]);
+    return { id, status: 'draft' };
+  },
+  'admin.broadcasts.dryRun': async (env, input) => {
+    await assertAdmin(env, input.adminUserId);
+    const broadcast = await env.DB.prepare('SELECT segment, status FROM broadcasts WHERE id = ?1')
+      .bind(input.broadcastId)
+      .first<{ segment: string; status: string }>();
+    if (!broadcast) throw new ApiError(404, 'BROADCAST_NOT_FOUND', 'Broadcast not found');
+    if (!['draft', 'paused'].includes(broadcast.status))
+      throw new ApiError(409, 'BROADCAST_LOCKED', 'Broadcast can no longer be changed');
+    const result = await env.DB.prepare(
+      `SELECT COUNT(*) AS total FROM users u
+       WHERE u.deleted_at IS NULL AND u.is_banned = 0 AND u.is_bot = 0
+         AND (
+           ?1 = 'all'
+           OR (?1 = 'active' AND u.last_activity_at >= datetime('now', '-30 day'))
+           OR (?1 = 'premium' AND EXISTS (
+             SELECT 1 FROM premium_entitlements pe WHERE pe.user_id = u.id
+               AND pe.status = 'active' AND pe.ends_at > CURRENT_TIMESTAMP
+           ))
+           OR (?1 = 'nonpremium' AND NOT EXISTS (
+             SELECT 1 FROM premium_entitlements pe WHERE pe.user_id = u.id
+               AND pe.status = 'active' AND pe.ends_at > CURRENT_TIMESTAMP
+           ))
+         )`,
+    )
+      .bind(broadcast.segment)
+      .first<{ total: number }>();
+    const estimatedRecipients = Number(result?.total ?? 0);
+    await env.DB.prepare(
+      `UPDATE broadcasts SET estimated_recipients = ?2, dry_run_at = CURRENT_TIMESTAMP,
+         updated_at = CURRENT_TIMESTAMP WHERE id = ?1`,
+    )
+      .bind(input.broadcastId, estimatedRecipients)
+      .run();
+    return {
+      estimatedRecipients,
+      confirmationPhrase: `ОТПРАВИТЬ ${input.broadcastId.slice(0, 8)}`,
+    };
+  },
+  'admin.broadcasts.control': async (env, input, requestId) => {
+    await assertAdmin(env, input.adminUserId);
+    const broadcast = await env.DB.prepare('SELECT * FROM broadcasts WHERE id = ?1')
+      .bind(input.broadcastId)
+      .first<{ id: string; status: string; segment: string; dry_run_at: string | null }>();
+    if (!broadcast) throw new ApiError(404, 'BROADCAST_NOT_FOUND', 'Broadcast not found');
+    const statements: D1PreparedStatement[] = [];
+    if (input.action === 'queue') {
+      const expectedPhrase = `ОТПРАВИТЬ ${input.broadcastId.slice(0, 8)}`;
+      if (input.confirmationPhrase !== expectedPhrase)
+        throw new ApiError(400, 'CONFIRMATION_REQUIRED', 'Confirmation phrase is invalid');
+      if (!broadcast.dry_run_at)
+        throw new ApiError(409, 'DRY_RUN_REQUIRED', 'Dry run is required before queueing');
+      if (!['draft', 'paused'].includes(broadcast.status))
+        throw new ApiError(409, 'BROADCAST_LOCKED', 'Broadcast is already queued');
+      statements.push(
+        env.DB.prepare(
+          `INSERT OR IGNORE INTO broadcast_deliveries (id, broadcast_id, user_id)
+           SELECT lower(hex(randomblob(4))) || '-' || lower(hex(randomblob(2))) || '-4' ||
+                  substr(lower(hex(randomblob(2))), 2) || '-' ||
+                  substr('89ab', abs(random()) % 4 + 1, 1) ||
+                  substr(lower(hex(randomblob(2))), 2) || '-' || lower(hex(randomblob(6))),
+                  ?1, u.id
+           FROM users u
+           WHERE u.deleted_at IS NULL AND u.is_banned = 0 AND u.is_bot = 0
+             AND (
+               ?2 = 'all'
+               OR (?2 = 'active' AND u.last_activity_at >= datetime('now', '-30 day'))
+               OR (?2 = 'premium' AND EXISTS (
+                 SELECT 1 FROM premium_entitlements pe WHERE pe.user_id = u.id
+                   AND pe.status = 'active' AND pe.ends_at > CURRENT_TIMESTAMP
+               ))
+               OR (?2 = 'nonpremium' AND NOT EXISTS (
+                 SELECT 1 FROM premium_entitlements pe WHERE pe.user_id = u.id
+                   AND pe.status = 'active' AND pe.ends_at > CURRENT_TIMESTAMP
+               ))
+             )`,
+        ).bind(input.broadcastId, broadcast.segment),
+        env.DB.prepare(
+          `UPDATE broadcasts SET status = 'queued', queued_at = CURRENT_TIMESTAMP,
+             paused_at = NULL, updated_at = CURRENT_TIMESTAMP WHERE id = ?1`,
+        ).bind(input.broadcastId),
+        env.DB.prepare(
+          `INSERT INTO background_jobs (id, type, payload)
+           VALUES (?1, 'broadcast.dispatch', ?2)`,
+        ).bind(crypto.randomUUID(), json({ broadcastId: input.broadcastId })),
+      );
+    } else {
+      if (['completed', 'cancelled'].includes(broadcast.status))
+        throw new ApiError(409, 'BROADCAST_FINISHED', 'Broadcast is already finished');
+      statements.push(
+        env.DB.prepare(
+          `UPDATE broadcasts SET status = ?2,
+             paused_at = CASE WHEN ?2 = 'paused' THEN CURRENT_TIMESTAMP ELSE paused_at END,
+             updated_at = CURRENT_TIMESTAMP WHERE id = ?1`,
+        ).bind(input.broadcastId, input.action === 'pause' ? 'paused' : 'cancelled'),
+        env.DB.prepare(
+          `UPDATE background_jobs SET status = ?2
+           WHERE type = 'broadcast.dispatch'
+             AND json_extract(payload, '$.broadcastId') = ?1
+             AND status IN ('pending', 'running')`,
+        ).bind(input.broadcastId, input.action === 'pause' ? 'paused' : 'cancelled'),
+      );
+    }
+    statements.push(
+      env.DB.prepare(
+        `INSERT INTO admin_audit_logs
+           (id, admin_user_id, action, reason, old_state, new_state, request_id, result)
+         VALUES (?1, ?2, ?3, 'owner_control', ?4, ?5, ?6, 'success')`,
+      ).bind(
+        crypto.randomUUID(),
+        input.adminUserId,
+        `broadcast.${input.action}`,
+        json(broadcast),
+        json({ status: input.action === 'queue' ? 'queued' : input.action }),
+        requestId,
+      ),
+    );
+    await env.DB.batch(statements);
+    return { updated: true };
+  },
+  'admin.system.status': async (env, input) => {
+    await assertAdmin(env, input.adminUserId);
+    const [pending, running, failed, deadLetters, lastFailures, maintenance] = await Promise.all([
+      env.DB.prepare(
+        "SELECT COUNT(*) AS total FROM background_jobs WHERE status = 'pending'",
+      ).first<{ total: number }>(),
+      env.DB.prepare(
+        "SELECT COUNT(*) AS total FROM background_jobs WHERE status = 'running'",
+      ).first<{ total: number }>(),
+      env.DB.prepare(
+        "SELECT COUNT(*) AS total FROM background_jobs WHERE status = 'failed'",
+      ).first<{ total: number }>(),
+      env.DB.prepare('SELECT COUNT(*) AS total FROM job_failures').first<{ total: number }>(),
+      env.DB.prepare(
+        `SELECT error_code, safe_message, created_at FROM job_failures
+           ORDER BY created_at DESC LIMIT 10`,
+      ).all(),
+      env.DB.prepare("SELECT enabled FROM feature_flags WHERE key = 'maintenance_mode'").first<{
+        enabled: number;
+      }>(),
+    ]);
+    return {
+      d1: 'ok',
+      jobs: {
+        pending: Number(pending?.total ?? 0),
+        running: Number(running?.total ?? 0),
+        failed: Number(failed?.total ?? 0),
+        deadLetters: Number(deadLetters?.total ?? 0),
+      },
+      lastFailures: lastFailures.results,
+      maintenanceMode: Boolean(maintenance?.enabled),
+      checkedAt: new Date().toISOString(),
+    };
   },
   'admin.user.moderate': async (env, input, requestId) => {
     await assertAdmin(env, input.adminUserId);

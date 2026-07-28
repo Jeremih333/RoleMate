@@ -108,10 +108,64 @@ export async function buildServer(env: AppEnv): Promise<FastifyInstance> {
   });
   const bot = createBot(env, dataApi);
   const stars = new TelegramStarsProvider(bot);
+  let broadcastTimer: NodeJS.Timeout | undefined;
+  let broadcastDispatching = false;
 
   await app.register(cookie, {
     secret: env.SESSION_SECRET,
     hook: 'onRequest',
+  });
+
+  app.addHook('onReady', () => {
+    if (!env.TELEGRAM_BOT_TOKEN || !env.D1_WORKER_URL) return;
+    broadcastTimer = setInterval(() => {
+      if (broadcastDispatching) return;
+      broadcastDispatching = true;
+      void (async () => {
+        try {
+          const batch = await dataApi.execute<{
+            broadcastId: string;
+            jobId: string;
+            message: string;
+            deliveries: Array<{ deliveryId: string; telegramUserId: number }>;
+          } | null>('broadcasts.claimBatch', { limit: 30 });
+          if (!batch) return;
+          const results = [];
+          for (const delivery of batch.deliveries) {
+            try {
+              await bot.api.sendMessage(delivery.telegramUserId, batch.message, {
+                protect_content: true,
+              });
+              results.push({ deliveryId: delivery.deliveryId, status: 'sent' as const });
+            } catch (error) {
+              const message = error instanceof Error ? error.message : 'Telegram delivery failed';
+              results.push({
+                deliveryId: delivery.deliveryId,
+                status: 'failed' as const,
+                errorCode: error instanceof Error ? error.name.slice(0, 64) : 'DELIVERY_FAILED',
+                safeMessage: message.slice(0, 500),
+              });
+            }
+          }
+          await dataApi.execute('broadcasts.recordBatch', {
+            broadcastId: batch.broadcastId,
+            jobId: batch.jobId,
+            results,
+          });
+        } catch (error) {
+          app.log.error(
+            { error: error instanceof Error ? error.message : 'unknown' },
+            'broadcast dispatcher failed',
+          );
+        } finally {
+          broadcastDispatching = false;
+        }
+      })();
+    }, 1_000);
+    broadcastTimer.unref();
+  });
+  app.addHook('onClose', () => {
+    if (broadcastTimer) clearInterval(broadcastTimer);
   });
   await app.register(cors, {
     origin: env.ALLOWED_ORIGINS.split(',').map((value) => value.trim()),
@@ -468,6 +522,115 @@ export async function buildServer(env: AppEnv): Promise<FastifyInstance> {
       status: query.status,
       limit: query.limit,
     });
+  });
+  app.get('/api/admin/payments', async (request) => {
+    const session = await requireAdmin(request);
+    const query = z
+      .object({
+        status: z
+          .enum(['pending', 'precheckout_approved', 'paid', 'refunded', 'failed', 'expired', 'all'])
+          .default('all'),
+        limit: z.coerce.number().int().min(1).max(100).default(50),
+      })
+      .parse(request.query);
+    return dataApi.execute('admin.payments.list', {
+      adminUserId: session.userId,
+      ...query,
+    });
+  });
+  app.get('/api/admin/referrals', async (request) => {
+    const session = await requireAdmin(request);
+    const query = z
+      .object({
+        status: z.enum(['pending', 'qualified', 'rejected', 'all']).default('all'),
+        limit: z.coerce.number().int().min(1).max(100).default(50),
+      })
+      .parse(request.query);
+    return dataApi.execute('admin.referrals.list', {
+      adminUserId: session.userId,
+      ...query,
+    });
+  });
+  app.post('/api/admin/referrals/:referralId/review', async (request) => {
+    const session = await requireAdmin(request, true);
+    const params = z.object({ referralId: z.string().uuid() }).parse(request.params);
+    const body = z
+      .object({
+        action: z.enum(['confirm', 'reject', 'revoke']),
+        reason: z.string().min(3).max(1_000),
+      })
+      .parse(request.body);
+    return dataApi.execute('admin.referral.review', {
+      adminUserId: session.userId,
+      referralId: params.referralId,
+      ...body,
+    });
+  });
+  app.get('/api/admin/broadcasts', async (request) => {
+    const session = await requireAdmin(request);
+    const query = z
+      .object({ limit: z.coerce.number().int().min(1).max(100).default(50) })
+      .parse(request.query);
+    return dataApi.execute('admin.broadcasts.list', {
+      adminUserId: session.userId,
+      limit: query.limit,
+    });
+  });
+  app.post('/api/admin/broadcasts', async (request) => {
+    const session = await requireAdmin(request, true);
+    const body = z
+      .object({
+        title: z.string().min(3).max(120),
+        message: z.string().min(3).max(4_000),
+        segment: z.enum(['all', 'active', 'premium', 'nonpremium']),
+        rateLimitPerSecond: z.number().int().min(1).max(30),
+      })
+      .parse(request.body);
+    return dataApi.execute('admin.broadcasts.create', {
+      adminUserId: session.userId,
+      ...body,
+    });
+  });
+  app.post('/api/admin/broadcasts/:broadcastId/dry-run', async (request) => {
+    const session = await requireAdmin(request, true);
+    const params = z.object({ broadcastId: z.string().uuid() }).parse(request.params);
+    return dataApi.execute('admin.broadcasts.dryRun', {
+      adminUserId: session.userId,
+      broadcastId: params.broadcastId,
+    });
+  });
+  app.post('/api/admin/broadcasts/:broadcastId/control', async (request) => {
+    const session = await requireAdmin(request, true);
+    const params = z.object({ broadcastId: z.string().uuid() }).parse(request.params);
+    const body = z
+      .object({
+        action: z.enum(['queue', 'pause', 'cancel']),
+        confirmationPhrase: z.string().max(128).default(''),
+      })
+      .parse(request.body);
+    return dataApi.execute('admin.broadcasts.control', {
+      adminUserId: session.userId,
+      broadcastId: params.broadcastId,
+      ...body,
+    });
+  });
+  app.get('/api/admin/system', async (request) => {
+    const session = await requireAdmin(request);
+    const system = await dataApi.execute<Record<string, unknown>>('admin.system.status', {
+      adminUserId: session.userId,
+    });
+    return {
+      ...system,
+      api: 'ok',
+      version: '0.1.0',
+      commitSha: env.COMMIT_SHA,
+      environment: env.DEPLOYMENT_ENV,
+      uptimeSeconds: Math.floor(process.uptime()),
+      northflank: {
+        service: process.env.NORTHFLANK_SERVICE_NAME ?? null,
+        project: process.env.NORTHFLANK_PROJECT_NAME ?? null,
+      },
+    };
   });
   app.post('/api/admin/users/:userId/moderate', async (request) => {
     const session = await requireAdmin(request, true);

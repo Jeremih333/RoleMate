@@ -35,27 +35,27 @@ $results = [ordered]@{}
 try {
     $results.name = Invoke-TelegramJson 'setMyName' @{ name = 'RoleMate' }
     $results.description = Invoke-TelegramJson 'setMyDescription' @{
-        description = 'RoleMate — пространство для анонимного поиска со-ролевиков. Создавай анкету, находи авторов по фандомам, жанрам и стилю письма, получай взаимные симпатии и общайся без раскрытия Telegram-профиля. Контакты открываются только по взаимному согласию. Поддержка: @odinnadsat. Создано при поддержке пиар-чата @piarchaticksss.'
+        description = '🖤 RoleMate — пространство для анонимного поиска со-ролевиков. ✨ Создавай анкету, находи авторов по фандомам, жанрам и стилю письма. 💞 Получай взаимные симпатии и общайся без раскрытия Telegram-профиля. 🕊 Контакты открываются только по взаимному согласию. 🆘 @odinnadsat · При поддержке @piarchaticksss'
     }
     $results.shortDescription = Invoke-TelegramJson 'setMyShortDescription' @{
-        short_description = 'Анонимный поиск со-ролевиков по фандомам, жанрам и стилю письма. Поддержка: @odinnadsat'
+        short_description = '🖤 Анонимный поиск со-ролевиков · 💞 мэтчи · 🕊 безопасные чаты · 🆘 @odinnadsat'
     }
     $results.commands = Invoke-TelegramJson 'setMyCommands' @{
         commands = @(
-            @{ command = 'start'; description = 'Запустить бота' },
-            @{ command = 'menu'; description = 'Главное меню' },
-            @{ command = 'profile'; description = 'Моя анкета' },
-            @{ command = 'search'; description = 'Найти со-ролевика' },
-            @{ command = 'matches'; description = 'Взаимные симпатии' },
-            @{ command = 'chats'; description = 'Анонимные чаты' },
-            @{ command = 'premium'; description = 'Premium' },
-            @{ command = 'referral'; description = 'Пригласить друзей' },
-            @{ command = 'settings'; description = 'Настройки' },
-            @{ command = 'rules'; description = 'Правила' },
-            @{ command = 'help'; description = 'Помощь' },
-            @{ command = 'support'; description = 'Поддержка' },
-            @{ command = 'paysupport'; description = 'Поддержка по оплате' },
-            @{ command = 'delete_me'; description = 'Удалить аккаунт' }
+            @{ command = 'start'; description = '🖤 Запустить бота' },
+            @{ command = 'menu'; description = '✨ Главное меню' },
+            @{ command = 'profile'; description = '👤 Моя анкета' },
+            @{ command = 'search'; description = '🔎 Найти со-ролевика' },
+            @{ command = 'matches'; description = '💞 Взаимные симпатии' },
+            @{ command = 'chats'; description = '🕊 Анонимные чаты' },
+            @{ command = 'premium'; description = '⭐ Premium' },
+            @{ command = 'referral'; description = '🎁 Пригласить друзей' },
+            @{ command = 'settings'; description = '⚙️ Настройки' },
+            @{ command = 'rules'; description = '📜 Правила' },
+            @{ command = 'help'; description = '📖 Помощь' },
+            @{ command = 'support'; description = '🆘 Поддержка' },
+            @{ command = 'paysupport'; description = '⭐ Поддержка по оплате' },
+            @{ command = 'delete_me'; description = '⚠️ Удалить аккаунт' }
         )
     }
 

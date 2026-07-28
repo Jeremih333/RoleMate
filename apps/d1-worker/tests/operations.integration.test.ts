@@ -234,6 +234,100 @@ describe('D1 domain operations', () => {
     ).resolves.toMatchObject({ users: 2 });
   });
 
+  it('protects broadcasts with dry run and an exact confirmation phrase', async () => {
+    const adminId = await upsert(1_040_929_628);
+    await upsert(2010);
+    const broadcast = (await executeOperation(
+      env,
+      'admin.broadcasts.create',
+      {
+        adminUserId: adminId,
+        title: 'Service announcement',
+        message: 'A sufficiently long test announcement.',
+        segment: 'all',
+        rateLimitPerSecond: 20,
+      },
+      crypto.randomUUID(),
+    )) as { id: string };
+
+    await expect(
+      executeOperation(
+        env,
+        'admin.broadcasts.control',
+        {
+          adminUserId: adminId,
+          broadcastId: broadcast.id,
+          action: 'queue',
+          confirmationPhrase: 'wrong',
+        },
+        crypto.randomUUID(),
+      ),
+    ).rejects.toMatchObject<ApiError>({ code: 'CONFIRMATION_REQUIRED' });
+
+    const dryRun = (await executeOperation(
+      env,
+      'admin.broadcasts.dryRun',
+      { adminUserId: adminId, broadcastId: broadcast.id },
+      crypto.randomUUID(),
+    )) as { estimatedRecipients: number; confirmationPhrase: string };
+    expect(dryRun.estimatedRecipients).toBe(2);
+
+    await executeOperation(
+      env,
+      'admin.broadcasts.control',
+      {
+        adminUserId: adminId,
+        broadcastId: broadcast.id,
+        action: 'queue',
+        confirmationPhrase: dryRun.confirmationPhrase,
+      },
+      crypto.randomUUID(),
+    );
+    expect(
+      sqlite
+        .prepare('SELECT status, estimated_recipients FROM broadcasts WHERE id = ?')
+        .get(broadcast.id),
+    ).toEqual({ status: 'queued', estimated_recipients: 2 });
+    expect(
+      sqlite
+        .prepare('SELECT COUNT(*) AS total FROM broadcast_deliveries WHERE broadcast_id = ?')
+        .get(broadcast.id),
+    ).toEqual({ total: 2 });
+    expect(
+      sqlite
+        .prepare("SELECT COUNT(*) AS total FROM background_jobs WHERE type = 'broadcast.dispatch'")
+        .get(),
+    ).toEqual({ total: 1 });
+
+    const claimed = (await executeOperation(
+      env,
+      'broadcasts.claimBatch',
+      { limit: 30 },
+      crypto.randomUUID(),
+    )) as {
+      broadcastId: string;
+      jobId: string;
+      deliveries: Array<{ deliveryId: string }>;
+    };
+    expect(claimed.deliveries).toHaveLength(2);
+    await executeOperation(
+      env,
+      'broadcasts.recordBatch',
+      {
+        broadcastId: claimed.broadcastId,
+        jobId: claimed.jobId,
+        results: claimed.deliveries.map((delivery) => ({
+          deliveryId: delivery.deliveryId,
+          status: 'sent',
+        })),
+      },
+      crypto.randomUUID(),
+    );
+    expect(
+      sqlite.prepare('SELECT status, sent_count FROM broadcasts WHERE id = ?').get(broadcast.id),
+    ).toEqual({ status: 'completed', sent_count: 2 });
+  });
+
   it('creates a match, mutual contact reveal, report queue, and closes chat on block', async () => {
     const first = await onboard(3001);
     const second = await onboard(3002);

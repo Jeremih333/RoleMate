@@ -117,6 +117,50 @@ export const api = {
     request<AdminProfile[]>(`/admin/profiles?status=${encodeURIComponent(status)}&limit=50`),
   adminReports: (status = 'open') =>
     request<AdminReport[]>(`/admin/reports?status=${encodeURIComponent(status)}&limit=50`),
+  adminPayments: (status = 'all') =>
+    request<AdminPayment[]>(`/admin/payments?status=${encodeURIComponent(status)}&limit=50`),
+  adminRefundPayment: (orderId: string) =>
+    request<{ refunded: true }>(`/admin/payments/${orderId}/refund`, {
+      method: 'POST',
+      body: '{}',
+    }),
+  adminReferrals: (status = 'all') =>
+    request<AdminReferral[]>(`/admin/referrals?status=${encodeURIComponent(status)}&limit=50`),
+  adminReviewReferral: (
+    referralId: string,
+    action: 'confirm' | 'reject' | 'revoke',
+    reason: string,
+  ) =>
+    request<{ updated: true }>(`/admin/referrals/${referralId}/review`, {
+      method: 'POST',
+      body: JSON.stringify({ action, reason }),
+    }),
+  adminBroadcasts: () => request<AdminBroadcast[]>('/admin/broadcasts?limit=50'),
+  adminCreateBroadcast: (input: {
+    title: string;
+    message: string;
+    segment: 'all' | 'active' | 'premium' | 'nonpremium';
+    rateLimitPerSecond: number;
+  }) =>
+    request<{ id: string; status: string }>('/admin/broadcasts', {
+      method: 'POST',
+      body: JSON.stringify(input),
+    }),
+  adminBroadcastDryRun: (broadcastId: string) =>
+    request<{ estimatedRecipients: number; confirmationPhrase: string }>(
+      `/admin/broadcasts/${broadcastId}/dry-run`,
+      { method: 'POST', body: '{}' },
+    ),
+  adminControlBroadcast: (
+    broadcastId: string,
+    action: 'queue' | 'pause' | 'cancel',
+    confirmationPhrase = '',
+  ) =>
+    request<{ updated: true }>(`/admin/broadcasts/${broadcastId}/control`, {
+      method: 'POST',
+      body: JSON.stringify({ action, confirmationPhrase }),
+    }),
+  adminSystem: () => request<AdminSystemStatus>('/admin/system'),
   adminModerateUser: (
     userId: string,
     input: {
@@ -312,6 +356,62 @@ export interface AdminReport {
   reported_telegram_id: number;
   reported_display_name?: string;
   created_at: string;
+}
+
+export interface AdminPayment {
+  id: string;
+  provider: string;
+  currency: string;
+  amount: number;
+  status: string;
+  product_name: string;
+  telegram_user_id: number;
+  telegram_username?: string;
+  paid_at?: string;
+  refunded_at?: string;
+  created_at: string;
+}
+
+export interface AdminReferral {
+  id: string;
+  status: string;
+  qualification_reason?: string;
+  qualified_at?: string;
+  created_at: string;
+  referrer_telegram_id: number;
+  referred_telegram_id: number;
+  referrer_display_name?: string;
+  referred_display_name?: string;
+  referred_risk_events_score: number;
+}
+
+export interface AdminBroadcast {
+  id: string;
+  title: string;
+  message: string;
+  segment: 'all' | 'active' | 'premium' | 'nonpremium';
+  status: string;
+  rate_limit_per_second: number;
+  estimated_recipients: number;
+  sent_count: number;
+  failed_count: number;
+  delivery_errors: number;
+  dry_run_at?: string;
+  created_at: string;
+}
+
+export interface AdminSystemStatus {
+  d1: string;
+  api: string;
+  version: string;
+  commitSha: string;
+  environment: string;
+  uptimeSeconds: number;
+  checkedAt: string;
+  maintenanceMode: boolean;
+  jobs: { pending: number; running: number; failed: number; deadLetters: number };
+  lastFailures: Array<{ error_code: string; safe_message: string; created_at: string }>;
+  northflank: { service?: string; project?: string };
 }
 
 export interface FeatureFlag {

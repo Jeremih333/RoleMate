@@ -33,6 +33,7 @@ describe('D1 migrations', () => {
       '0003_matching_chat_moderation.sql',
       '0004_risk_premium_payments.sql',
       '0005_referrals.sql',
+      '0006_admin_operations.sql',
     ]);
     expect(() => applyMigrations()).not.toThrow();
     const tables = database
@@ -48,6 +49,8 @@ describe('D1 migrations', () => {
         'payment_orders',
         'premium_entitlements',
         'referrals',
+        'broadcasts',
+        'broadcast_deliveries',
         'api_nonces',
       ]),
     );

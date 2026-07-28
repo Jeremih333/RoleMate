@@ -1,4 +1,6 @@
-import { Bot, InlineKeyboard, Keyboard, type Context } from 'grammy';
+import { existsSync } from 'node:fs';
+import path from 'node:path';
+import { Bot, InlineKeyboard, InputFile, Keyboard, type Context } from 'grammy';
 import {
   OWNER_TELEGRAM_ID,
   PROMO_CHAT_URL,
@@ -65,6 +67,67 @@ export function createBot(env: AppEnv, dataApi: DataApiClient): Bot {
   const bot = new Bot(env.TELEGRAM_BOT_TOKEN || '0:development');
   const relayWindows = new Map<number, { startedAt: number; count: number }>();
   const selectedChats = new Map<number, string>();
+
+  function styledEntities(text: string) {
+    const entities: Array<{
+      type: 'bold' | 'italic' | 'custom_emoji';
+      offset: number;
+      length: number;
+      custom_emoji_id?: string;
+    }> = [];
+    const firstLineEnd = text.indexOf('\n');
+    const headingLength = firstLineEnd === -1 ? text.length : firstLineEnd;
+    if (headingLength > 0) entities.push({ type: 'bold', offset: 0, length: headingLength });
+    for (const footer of ru.bot.styling.footerPrefixes) {
+      const offset = text.lastIndexOf(footer);
+      if (offset >= 0) {
+        const end = text.indexOf('\n', offset);
+        entities.push({
+          type: 'italic',
+          offset,
+          length: (end === -1 ? text.length : end) - offset,
+        });
+      }
+    }
+    try {
+      const customEmoji = JSON.parse(env.TELEGRAM_CUSTOM_EMOJI_IDS) as Record<string, unknown>;
+      for (const [emoji, id] of Object.entries(customEmoji)) {
+        if (!emoji || typeof id !== 'string' || !/^\d+$/.test(id)) continue;
+        let offset = text.indexOf(emoji);
+        while (offset >= 0) {
+          entities.push({
+            type: 'custom_emoji',
+            offset,
+            length: emoji.length,
+            custom_emoji_id: id,
+          });
+          offset = text.indexOf(emoji, offset + emoji.length);
+        }
+      }
+    } catch {
+      // Invalid optional configuration safely falls back to Unicode emoji.
+    }
+    return entities;
+  }
+
+  bot.api.config.use(async (previous, method, payload, signal) => {
+    const mutable = payload as Record<string, unknown>;
+    if (
+      (method === 'sendMessage' || method === 'editMessageText') &&
+      typeof mutable.text === 'string' &&
+      mutable.entities === undefined
+    ) {
+      mutable.entities = styledEntities(mutable.text);
+    }
+    if (
+      method === 'sendPhoto' &&
+      typeof mutable.caption === 'string' &&
+      mutable.caption_entities === undefined
+    ) {
+      mutable.caption_entities = styledEntities(mutable.caption);
+    }
+    return previous(method, payload, signal);
+  });
 
   function relayAllowed(telegramUserId: number): boolean {
     const now = Date.now();
@@ -140,9 +203,6 @@ export function createBot(env: AppEnv, dataApi: DataApiClient): Bot {
   }
 
   bot.catch(({ error, ctx }) => {
-    ctx.api.config.use(async (previous, method, payload, signal) =>
-      previous(method, payload, signal),
-    );
     console.error({
       updateId: ctx.update.update_id,
       error: error instanceof Error ? error.message : 'unknown',
@@ -168,7 +228,16 @@ export function createBot(env: AppEnv, dataApi: DataApiClient): Bot {
       .text(ru.bot.buttons.rules, 'rules')
       .row()
       .url(ru.bot.buttons.support, env.SUPPORT_URL);
-    await context.reply(ru.welcome, { reply_markup: buttons });
+    const welcomeImage = path.resolve(env.WELCOME_IMAGE_PATH);
+    if (existsSync(welcomeImage)) {
+      await context.replyWithPhoto(new InputFile(welcomeImage), {
+        caption: ru.welcome,
+        show_caption_above_media: true,
+        reply_markup: buttons,
+      });
+    } else {
+      await context.reply(ru.welcome, { reply_markup: buttons });
+    }
   });
 
   bot.command('menu', async (context) => {
@@ -512,6 +581,7 @@ export function createBot(env: AppEnv, dataApi: DataApiClient): Bot {
       );
       const delivered = await bot.api.sendMessage(target.destination_chat_id, text, {
         protect_content: true,
+        entities: [],
         ...(replyMessageId
           ? {
               reply_parameters: {

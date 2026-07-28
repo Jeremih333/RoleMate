@@ -44,6 +44,7 @@ COPY --from=production-dependencies --chown=rolemate:rolemate /workspace/package
 COPY --from=build --chown=rolemate:rolemate /workspace/apps/bot-api/dist ./apps/bot-api/dist
 COPY --from=build --chown=rolemate:rolemate /workspace/apps/bot-api/package.json ./apps/bot-api/package.json
 COPY --from=build --chown=rolemate:rolemate /workspace/apps/miniapp/dist ./apps/miniapp/dist
+COPY --from=build --chown=rolemate:rolemate /workspace/assets/generated/telegram-bot-avatar.jpg ./assets/generated/telegram-bot-avatar.jpg
 COPY --from=build --chown=rolemate:rolemate /workspace/packages/shared/dist ./packages/shared/dist
 COPY --from=build --chown=rolemate:rolemate /workspace/packages/shared/package.json ./packages/shared/package.json
 COPY --from=build --chown=rolemate:rolemate /workspace/packages/database-contracts/dist ./packages/database-contracts/dist

@@ -202,6 +202,63 @@ export const workerOperations = {
       status: z.enum(['open', 'reviewing', 'resolved', 'dismissed', 'all']).default('open'),
     })
     .merge(paginationSchema),
+  'admin.payments.list': z
+    .object({
+      adminUserId: z.string().uuid(),
+      status: z
+        .enum(['pending', 'precheckout_approved', 'paid', 'refunded', 'failed', 'expired', 'all'])
+        .default('all'),
+    })
+    .merge(paginationSchema),
+  'admin.referrals.list': z
+    .object({
+      adminUserId: z.string().uuid(),
+      status: z.enum(['pending', 'qualified', 'rejected', 'all']).default('all'),
+    })
+    .merge(paginationSchema),
+  'admin.referral.review': z.object({
+    adminUserId: z.string().uuid(),
+    referralId: z.string().uuid(),
+    action: z.enum(['confirm', 'reject', 'revoke']),
+    reason: z.string().min(3).max(1_000),
+  }),
+  'admin.broadcasts.list': z.object({ adminUserId: z.string().uuid() }).merge(paginationSchema),
+  'admin.broadcasts.create': z.object({
+    adminUserId: z.string().uuid(),
+    title: z.string().min(3).max(120),
+    message: z.string().min(3).max(4_000),
+    segment: z.enum(['all', 'active', 'premium', 'nonpremium']),
+    rateLimitPerSecond: z.number().int().min(1).max(30),
+  }),
+  'admin.broadcasts.dryRun': z.object({
+    adminUserId: z.string().uuid(),
+    broadcastId: z.string().uuid(),
+  }),
+  'admin.broadcasts.control': z.object({
+    adminUserId: z.string().uuid(),
+    broadcastId: z.string().uuid(),
+    action: z.enum(['queue', 'pause', 'cancel']),
+    confirmationPhrase: z.string().max(128).default(''),
+  }),
+  'admin.system.status': z.object({ adminUserId: z.string().uuid() }),
+  'broadcasts.claimBatch': z.object({
+    limit: z.number().int().min(1).max(30),
+  }),
+  'broadcasts.recordBatch': z.object({
+    broadcastId: z.string().uuid(),
+    jobId: z.string().uuid(),
+    results: z
+      .array(
+        z.object({
+          deliveryId: z.string().uuid(),
+          status: z.enum(['sent', 'failed', 'skipped']),
+          errorCode: z.string().max(64).optional(),
+          safeMessage: z.string().max(500).optional(),
+        }),
+      )
+      .min(1)
+      .max(30),
+  }),
   'admin.user.moderate': z.object({
     adminUserId: z.string().uuid(),
     targetUserId: z.string().uuid(),

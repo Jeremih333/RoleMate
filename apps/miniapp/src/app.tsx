@@ -25,18 +25,20 @@ function AuthGate({ children }: { children: ReactNode }) {
   const auth = useQuery({
     queryKey: ['auth'],
     queryFn: async () => {
+      try {
+        const me = await api.me();
+        return {
+          id: me.userId,
+          telegramUserId: me.telegramUserId,
+          role: me.role,
+          isAdmin: me.isAdmin,
+          isOwner: me.isOwner,
+        };
+      } catch (error) {
+        if (!(error instanceof ApiError) || error.status !== 401) throw error;
+      }
       const initData = await waitForTelegramInitData();
       if (!initData) {
-        if (window.location.hostname === 'localhost') {
-          const me = await api.me();
-          return {
-            id: me.userId,
-            telegramUserId: me.telegramUserId,
-            role: me.role,
-            isAdmin: me.isAdmin,
-            isOwner: me.isOwner,
-          };
-        }
         throw new Error(ru.miniApp.auth.telegramOnly);
       }
       const user = await api.authenticate(initData);

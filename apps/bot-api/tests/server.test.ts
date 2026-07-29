@@ -148,7 +148,17 @@ function telegramAndDataFetch(options: FetchOptions = {}) {
                           }
                         : operation === 'admin.audit'
                           ? { written: true }
-                          : null;
+                          : operation === 'premium.status'
+                            ? { premium: false }
+                            : operation === 'conversations.resolveMiniAppRelay'
+                              ? {
+                                  destination_chat_id: 777,
+                                  recipient_muted: 0,
+                                  notify_message: 0,
+                                }
+                              : operation === 'conversations.recordMiniAppMessage'
+                                ? { recorded: true }
+                                : null;
       return Promise.resolve(
         new Response(JSON.stringify({ ok: true, data, requestId: 'request' }), {
           status: 200,
@@ -378,6 +388,42 @@ describe('Mini App authentication errors', () => {
           request.body.text === ru.bot.premiumGranted(14),
       ),
     ).toBeDefined();
+    await app.close();
+  });
+
+  it('relays a direct MiniApp text message without persisting its contents in D1 calls', async () => {
+    const csrfToken = 'direct-message-csrf-token';
+    const { fetchMock, requests } = telegramAndDataFetch({
+      adminSession: { csrfHash: await sha256(csrfToken) },
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    const app = await buildServer(testEnv());
+    const text = 'Привет! Давай обсудим сюжет.';
+
+    const response = await app.inject({
+      method: 'POST',
+      url: '/api/conversations/00000000-0000-4000-8000-000000000601/messages',
+      headers: {
+        cookie: 'rm_session=direct-message-session-token',
+        'x-csrf-token': csrfToken,
+      },
+      payload: { text },
+    });
+
+    expect(response.statusCode, response.body).toBe(200);
+    expect(
+      requests.find(
+        (request) =>
+          request.url.endsWith('/sendMessage') &&
+          request.body.chat_id === 777 &&
+          request.body.text === text,
+      ),
+    ).toBeDefined();
+    expect(
+      requests
+        .filter((request) => request.url === 'https://data.example.test/v1/execute')
+        .some((request) => JSON.stringify(request.body).includes(text)),
+    ).toBe(false);
     await app.close();
   });
 });

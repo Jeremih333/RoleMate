@@ -6,6 +6,9 @@ import {
   ChevronRight,
   Flag,
   Heart,
+  Maximize2,
+  MessageCircle,
+  Music,
   RotateCcw,
   Search,
   SlidersHorizontal,
@@ -14,6 +17,7 @@ import {
 } from 'lucide-react';
 import { useEffect, useState } from 'react';
 import { ru } from '@rolemate/shared';
+import { useLocation } from 'wouter';
 import {
   api,
   type SearchPreferences,
@@ -22,11 +26,12 @@ import {
 } from '../api.js';
 import { Button, Card, EmptyState, Skeleton } from '../components/ui.js';
 import { ProfileMarkdown } from '../components/markdown.js';
+import { ProfileAvatar } from '../components/profile-avatar.js';
 import { haptic } from '../telegram.js';
 
-function list(value: string): string[] {
+function list(value: string | undefined): string[] {
   try {
-    const parsed: unknown = JSON.parse(value);
+    const parsed: unknown = JSON.parse(value ?? '[]');
     return Array.isArray(parsed)
       ? parsed.filter((item): item is string => typeof item === 'string')
       : [];
@@ -51,6 +56,11 @@ const activityLabels = Object.fromEntries(
     ru.miniApp.profile.frequencyOptions[index],
   ]),
 );
+const experienceLabels = Object.fromEntries(
+  ['beginner', 'under_1_year', '1_3_years', '3_5_years', 'over_5_years', 'not_specified'].map(
+    (value, index) => [value, ru.miniApp.profile.experienceOptions[index]],
+  ),
+);
 const ageLabels = Object.fromEntries(
   ['under_16', '16_17', '18_20', '21_25', '26_plus'].map((value, index) => [
     value,
@@ -67,9 +77,17 @@ const genderLabels: Record<string, string> = {
 export function ProfileCard({
   profile,
   preview = false,
+  expanded = false,
+  onOpen,
+  onMessage,
+  messagePending = false,
 }: {
   profile: SearchProfile;
   preview?: boolean;
+  expanded?: boolean;
+  onOpen?: () => void;
+  onMessage?: () => void;
+  messagePending?: boolean;
 }) {
   const fandoms = list(profile.fandoms);
   const genres = list(profile.genres);
@@ -77,6 +95,9 @@ export function ProfileCard({
   type MediaItem = {
     id: string;
     media_type: 'photo' | 'animation' | 'video' | 'audio' | 'voice' | 'document';
+    track_title?: string | null;
+    track_performer?: string | null;
+    has_thumbnail?: number;
   };
   let media: MediaItem[] = [];
   try {
@@ -103,8 +124,13 @@ export function ProfileCard({
   const documents = media.filter((item) => item.media_type === 'document');
   const [mediaIndex, setMediaIndex] = useState(0);
   const currentMedia = visualMedia[mediaIndex % Math.max(visualMedia.length, 1)];
+  const autoPlayCover =
+    !expanded &&
+    Boolean(profile.has_premium) &&
+    mediaIndex === 0 &&
+    currentMedia?.media_type === 'video';
   return (
-    <Card className="profile-card overflow-hidden">
+    <Card className={`profile-card overflow-hidden ${expanded ? 'profile-card-expanded' : ''}`}>
       <div className="profile-cover">
         {currentMedia ? (
           currentMedia.media_type === 'video' ? (
@@ -112,6 +138,9 @@ export function ProfileCard({
               className="absolute inset-0 h-full w-full bg-black object-contain"
               src={`/api/profile-media/${currentMedia.id}`}
               controls
+              autoPlay={autoPlayCover}
+              loop={autoPlayCover}
+              muted={autoPlayCover}
               playsInline
               preload="metadata"
             />
@@ -168,21 +197,34 @@ export function ProfileCard({
       </div>
       <div className="p-5">
         <div className="flex items-start justify-between gap-3">
-          <div>
-            <h2 className="font-display text-3xl font-semibold">{profile.display_name}</h2>
-            <p className="mt-1 text-sm text-muted">{profile.short_headline}</p>
+          <div className="flex min-w-0 items-center gap-3">
+            <ProfileAvatar
+              mediaId={profile.avatar_media_id}
+              renderMode={profile.avatar_render_mode}
+              name={profile.display_name}
+            />
+            <div className="min-w-0">
+              <h2 className="truncate font-display text-3xl font-semibold">
+                {profile.display_name}
+              </h2>
+              <p className="mt-1 truncate text-sm text-muted">{profile.short_headline}</p>
+            </div>
           </div>
           <span className="activity-dot" title={ru.miniApp.search.recentlyActive} />
         </div>
         <div className="mt-4 flex flex-wrap gap-2">
-          {[...fandoms.slice(0, 2), ...genres.slice(0, 2), ...tags.slice(0, 3)].map((tag) => (
+          {[
+            ...(expanded ? fandoms : fandoms.slice(0, 2)),
+            ...(expanded ? genres : genres.slice(0, 2)),
+            ...(expanded ? tags : tags.slice(0, 3)),
+          ].map((tag) => (
             <span className="tag" key={tag}>
               {tag}
             </span>
           ))}
         </div>
         <ProfileMarkdown
-          className="mt-4 line-clamp-4 text-sm leading-relaxed text-soft"
+          className={`mt-4 text-sm leading-relaxed text-soft ${expanded ? '' : 'line-clamp-4'}`}
           allowLinks={Boolean(profile.has_premium)}
         >
           {profile.about}
@@ -190,14 +232,26 @@ export function ProfileCard({
         {audioMedia.length ? (
           <div className="profile-audio-list">
             {audioMedia.map((item, index) => (
-              <audio
-                key={item.id}
-                className="w-full"
-                src={`/api/profile-media/${item.id}`}
-                controls
-                preload="none"
-                aria-label={ru.miniApp.search.profileAudio(index + 1)}
-              />
+              <div className="profile-track" key={item.id}>
+                <div className="profile-track-cover">
+                  {item.has_thumbnail ? (
+                    <img src={`/api/profile-media/${item.id}/thumbnail`} alt="" loading="lazy" />
+                  ) : (
+                    <Music aria-hidden />
+                  )}
+                </div>
+                <div className="profile-track-content">
+                  <strong>{item.track_title || ru.miniApp.search.trackUnknown}</strong>
+                  <span>{item.track_performer || ru.miniApp.search.performerUnknown}</span>
+                  <audio
+                    className="w-full"
+                    src={`/api/profile-media/${item.id}`}
+                    controls
+                    preload="none"
+                    aria-label={ru.miniApp.search.profileAudio(index + 1)}
+                  />
+                </div>
+              </div>
             ))}
           </div>
         ) : null}
@@ -245,16 +299,65 @@ export function ProfileCard({
               : ru.miniApp.search.demographicsHidden}
           </span>
         </div>
+        {expanded ? <ProfileDetails profile={profile} /> : null}
+        {!preview ? (
+          <div className="profile-card-primary-actions">
+            {!expanded && onOpen ? (
+              <Button type="button" variant="secondary" onClick={onOpen}>
+                <Maximize2 className="h-4 w-4" />
+                {ru.miniApp.search.openProfile}
+              </Button>
+            ) : null}
+            {expanded && onMessage ? (
+              <Button type="button" loading={messagePending} onClick={onMessage}>
+                <MessageCircle className="h-4 w-4" />
+                {messagePending ? ru.miniApp.search.startingChat : ru.miniApp.search.writeMessage}
+              </Button>
+            ) : null}
+          </div>
+        ) : null}
       </div>
     </Card>
   );
 }
 
+function ProfileDetails({ profile }: { profile: SearchProfile }) {
+  const details = [
+    [
+      ru.miniApp.search.experience,
+      profile.roleplay_experience
+        ? (experienceLabels[profile.roleplay_experience] ?? profile.roleplay_experience)
+        : undefined,
+    ],
+    [ru.miniApp.search.preferredRoles, list(profile.preferred_role).join(', ')],
+    [ru.miniApp.search.timezone, profile.timezone],
+    [ru.miniApp.search.activeHours, profile.active_hours],
+    [ru.miniApp.search.languages, list(profile.languages).join(', ')],
+    [ru.miniApp.search.settings, profile.settings],
+    [ru.miniApp.search.plots, profile.plots],
+    [ru.miniApp.search.lookingFor, list(profile.looking_for).join(', ')],
+    [ru.miniApp.search.boundaries, profile.boundaries],
+  ].filter((item): item is [string, string] => Boolean(item[1]));
+  if (!details.length) return null;
+  return (
+    <dl className="profile-full-details">
+      {details.map(([label, value]) => (
+        <div key={label}>
+          <dt>{label}</dt>
+          <dd>{value}</dd>
+        </div>
+      ))}
+    </dl>
+  );
+}
+
 export function SearchPage() {
+  const [, navigate] = useLocation();
   const queryClient = useQueryClient();
   const [query, setQuery] = useState('');
   const [queryDraft, setQueryDraft] = useState('');
   const [staffNotice, setStaffNotice] = useState('');
+  const [fullProfileOpen, setFullProfileOpen] = useState(false);
   const me = useQuery({ queryKey: ['me'], queryFn: api.me });
   const profiles = useQuery({
     queryKey: ['search', query],
@@ -275,6 +378,22 @@ export function SearchPage() {
   useEffect(() => {
     setIndex(0);
   }, [profiles.dataUpdatedAt, query]);
+  useEffect(() => {
+    setFullProfileOpen(false);
+  }, [current?.id]);
+  useEffect(() => {
+    if (!fullProfileOpen) return;
+    const previousOverflow = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') setFullProfileOpen(false);
+    };
+    window.addEventListener('keydown', closeOnEscape);
+    return () => {
+      document.body.style.overflow = previousOverflow;
+      window.removeEventListener('keydown', closeOnEscape);
+    };
+  }, [fullProfileOpen]);
   const searchForm = (
     <form
       className="search-box"
@@ -322,6 +441,13 @@ export function SearchPage() {
     onSuccess: () => setIndex((value) => value + 1),
   });
   const report = useMutation({ mutationFn: api.report });
+  const directChat = useMutation({
+    mutationFn: (targetUserId: string) => api.startDirectConversation(targetUserId),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ['conversations'] });
+      navigate('/chats');
+    },
+  });
   const staffModeration = useMutation({
     mutationFn: ({
       userId,
@@ -435,9 +561,40 @@ export function SearchPage() {
           animate={{ opacity: 1, x: 0 }}
           exit={{ opacity: 0, x: -80, rotate: -4 }}
         >
-          <ProfileCard profile={current} />
+          <ProfileCard profile={current} onOpen={() => setFullProfileOpen(true)} />
         </motion.div>
       </AnimatePresence>
+      {fullProfileOpen ? (
+        <div
+          className="profile-full-overlay"
+          role="dialog"
+          aria-modal="true"
+          aria-label={ru.miniApp.search.fullProfile}
+          onMouseDown={(event) => {
+            if (event.target === event.currentTarget) setFullProfileOpen(false);
+          }}
+        >
+          <div className="profile-full-dialog">
+            <button
+              type="button"
+              className="profile-full-close"
+              aria-label={ru.miniApp.search.closeProfile}
+              onClick={() => setFullProfileOpen(false)}
+            >
+              <X />
+            </button>
+            <ProfileCard
+              profile={current}
+              expanded
+              messagePending={directChat.isPending}
+              onMessage={() => directChat.mutate(current.user_id)}
+            />
+            {directChat.isError ? (
+              <div className="error-box mt-3">{ru.miniApp.search.directChatError}</div>
+            ) : null}
+          </div>
+        </div>
+      ) : null}
       {me.data?.isAdmin ? (
         <Card className="mt-3 p-4" data-testid="search-moderation-panel">
           <strong className="text-sm">{ru.miniApp.search.quickModeration}</strong>

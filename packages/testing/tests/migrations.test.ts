@@ -46,6 +46,9 @@ describe('D1 migrations', () => {
       '0016_auto_publish_profile_media.sql',
       '0017_daily_profile_boost.sql',
       '0018_referral_abuse_protection.sql',
+      '0019_profile_music_metadata.sql',
+      '0020_direct_conversation_source.sql',
+      '0021_profile_avatars.sql',
     ]);
     expect(() => applyMigrations()).not.toThrow();
     const tables = database
@@ -79,6 +82,26 @@ describe('D1 migrations', () => {
       ]),
     );
     expect(tables.length).toBeGreaterThanOrEqual(35);
+    const profileMediaColumns = database
+      .prepare('PRAGMA table_info(profile_media)')
+      .all() as Array<{ name: string }>;
+    expect(profileMediaColumns.map((column) => column.name)).toEqual(
+      expect.arrayContaining([
+        'track_title',
+        'track_performer',
+        'thumbnail_telegram_file_id',
+        'file_size_bytes',
+        'duration_seconds',
+        'width',
+        'height',
+      ]),
+    );
+    const profileColumns = database.prepare('PRAGMA table_info(profiles)').all() as Array<{
+      name: string;
+    }>;
+    expect(profileColumns.map((column) => column.name)).toEqual(
+      expect.arrayContaining(['avatar_media_id', 'avatar_render_mode']),
+    );
   });
 
   it('enforces unique Telegram identities and canonical matches', () => {

@@ -676,6 +676,7 @@ const handlers: { [K in WorkerOperation]: Handler<K> } = {
               ) THEN NULL ELSE p.gender END AS gender,
               p.short_headline, p.about, p.fandoms, p.genres, p.tags,
               p.writing_style, p.average_post_length, p.activity_frequency,
+              p.avatar_media_id, p.avatar_render_mode,
               EXISTS (
                 SELECT 1 FROM premium_entitlements active_pe
                 WHERE active_pe.user_id = p.user_id AND active_pe.status = 'active'
@@ -684,14 +685,27 @@ const handlers: { [K in WorkerOperation]: Handler<K> } = {
               COALESCE((
                 SELECT json_group_array(json_object(
                   'id', visible_media.id,
-                  'media_type', visible_media.media_type
+                  'media_type', visible_media.media_type,
+                  'track_title', visible_media.track_title,
+                  'track_performer', visible_media.track_performer,
+                  'has_thumbnail', visible_media.has_thumbnail
                 ))
                 FROM (
-                  SELECT pm.id, pm.media_type
+                  SELECT pm.id, pm.media_type, pm.track_title, pm.track_performer,
+                         CASE WHEN pm.thumbnail_telegram_file_id IS NULL
+                           THEN 0 ELSE 1 END AS has_thumbnail
                   FROM profile_media pm
                   WHERE pm.profile_id = p.id AND pm.moderation_status = 'approved'
                     AND (
-                      pm.media_type = 'photo'
+                      (
+                        pm.media_type IN ('photo', 'video')
+                        AND pm.id IN (
+                          SELECT free_media.id FROM profile_media free_media
+                          WHERE free_media.profile_id = p.id
+                            AND free_media.media_type IN ('photo', 'video')
+                          ORDER BY free_media.sort_order, free_media.created_at LIMIT 2
+                        )
+                      )
                       OR EXISTS (
                         SELECT 1 FROM premium_entitlements media_pe
                         WHERE media_pe.user_id = p.user_id AND media_pe.status = 'active'
@@ -769,18 +783,23 @@ const handlers: { [K in WorkerOperation]: Handler<K> } = {
     const premium = Boolean(await premiumEnd(env, input.userId));
     return (
       await env.DB.prepare(
-        `SELECT pm.id, pm.media_type, pm.sort_order, pm.moderation_status, pm.created_at
+        `SELECT pm.id, pm.media_type, pm.sort_order, pm.moderation_status, pm.created_at,
+                pm.track_title, pm.track_performer,
+                pm.file_size_bytes, pm.duration_seconds, pm.width, pm.height,
+                CASE WHEN pm.thumbnail_telegram_file_id IS NULL THEN 0 ELSE 1 END AS has_thumbnail,
+                CASE WHEN p.avatar_media_id = pm.id THEN 1 ELSE 0 END AS is_avatar
          FROM profile_media pm
          JOIN profiles p ON p.id = pm.profile_id
          WHERE p.user_id = ?1
            AND (
              ?2 = 1
              OR (
-               pm.media_type = 'photo'
-               AND pm.id = (
-                 SELECT first_photo.id FROM profile_media first_photo
-                 WHERE first_photo.profile_id = p.id AND first_photo.media_type = 'photo'
-                 ORDER BY first_photo.sort_order, first_photo.created_at LIMIT 1
+               pm.media_type IN ('photo', 'video')
+               AND pm.id IN (
+                 SELECT free_media.id FROM profile_media free_media
+                 WHERE free_media.profile_id = p.id
+                   AND free_media.media_type IN ('photo', 'video')
+                 ORDER BY free_media.sort_order, free_media.created_at LIMIT 2
                )
              )
            )
@@ -792,7 +811,7 @@ const handlers: { [K in WorkerOperation]: Handler<K> } = {
   },
   'profiles.media.add': async (env, input) => {
     const premium = Boolean(await premiumEnd(env, input.userId));
-    if (input.mediaType !== 'photo' && !premium) {
+    if (!['photo', 'video'].includes(input.mediaType) && !premium) {
       throw new ApiError(403, 'PREMIUM_MEDIA_REQUIRED', 'Premium is required for this media type');
     }
     const profile = await env.DB.prepare('SELECT id FROM profiles WHERE user_id = ?1')
@@ -807,29 +826,27 @@ const handlers: { [K in WorkerOperation]: Handler<K> } = {
       .first<{ id: string }>();
     if (existing) throw new ApiError(409, 'MEDIA_DUPLICATE', 'This image is already attached');
     const count = await env.DB.prepare(
-      `SELECT COUNT(*) AS total,
-              SUM(CASE WHEN media_type = 'photo' THEN 1 ELSE 0 END) AS photos
-       FROM profile_media WHERE profile_id = ?1`,
+      'SELECT COUNT(*) AS total FROM profile_media WHERE profile_id = ?1',
     )
       .bind(profile.id)
-      .first<{ total: number; photos: number | null }>();
+      .first<{ total: number }>();
     const total = Number(count?.total ?? 0);
-    const photoCount = Number(count?.photos ?? 0);
-    if ((premium && total >= 8) || (!premium && photoCount >= 1)) {
+    if ((premium && total >= 8) || (!premium && total >= 2)) {
       throw new ApiError(
         409,
         'MEDIA_LIMIT',
         premium
           ? 'A Premium profile can contain up to eight media files'
-          : 'A free profile can contain one image',
+          : 'A free profile can contain up to two photos or videos',
       );
     }
     const id = crypto.randomUUID();
     await env.DB.prepare(
       `INSERT INTO profile_media
          (id, profile_id, telegram_file_id, telegram_file_unique_id, media_type,
-          sort_order, moderation_status)
-       VALUES (?1, ?2, ?3, ?4, ?5, ?6, 'approved')`,
+          sort_order, moderation_status, track_title, track_performer,
+          thumbnail_telegram_file_id, file_size_bytes, duration_seconds, width, height)
+       VALUES (?1, ?2, ?3, ?4, ?5, ?6, 'approved', ?7, ?8, ?9, ?10, ?11, ?12, ?13)`,
     )
       .bind(
         id,
@@ -838,11 +855,24 @@ const handlers: { [K in WorkerOperation]: Handler<K> } = {
         input.telegramFileUniqueId,
         input.mediaType,
         total,
+        input.trackTitle ?? null,
+        input.trackPerformer ?? null,
+        input.thumbnailTelegramFileId ?? null,
+        input.fileSizeBytes ?? null,
+        input.durationSeconds ?? null,
+        input.width ?? null,
+        input.height ?? null,
       )
       .run();
     return { id, moderationStatus: 'approved' };
   },
   'profiles.media.delete': async (env, input) => {
+    await env.DB.prepare(
+      `UPDATE profiles SET avatar_media_id = NULL, avatar_render_mode = NULL
+       WHERE user_id = ?2 AND avatar_media_id = ?1`,
+    )
+      .bind(input.mediaId, input.userId)
+      .run();
     const result = await env.DB.prepare(
       `DELETE FROM profile_media
        WHERE id = ?1 AND profile_id IN (SELECT id FROM profiles WHERE user_id = ?2)`,
@@ -851,6 +881,95 @@ const handlers: { [K in WorkerOperation]: Handler<K> } = {
       .run();
     if (result.meta.changes !== 1) throw new ApiError(404, 'MEDIA_NOT_FOUND', 'Image not found');
     return { deleted: true };
+  },
+  'profiles.media.reorder': async (env, input) => {
+    if (new Set(input.mediaIds).size !== input.mediaIds.length) {
+      throw new ApiError(400, 'INVALID_MEDIA_ORDER', 'Media order contains duplicates');
+    }
+    const owned = await env.DB.prepare(
+      `SELECT pm.id
+       FROM profile_media pm
+       JOIN profiles p ON p.id = pm.profile_id
+       WHERE p.user_id = ?1
+       ORDER BY pm.sort_order, pm.created_at`,
+    )
+      .bind(input.userId)
+      .all<{ id: string }>();
+    const ownedIds = owned.results.map((item) => item.id);
+    if (
+      ownedIds.length !== input.mediaIds.length ||
+      ownedIds.some((id) => !input.mediaIds.includes(id))
+    ) {
+      throw new ApiError(400, 'INVALID_MEDIA_ORDER', 'Complete owned media list is required');
+    }
+    if (ownedIds.length > 2) await requirePremium(env, input.userId);
+    await env.DB.batch(
+      input.mediaIds.map((mediaId, sortOrder) =>
+        env.DB.prepare(
+          `UPDATE profile_media SET sort_order = ?3
+             WHERE id = ?2 AND profile_id IN (
+               SELECT id FROM profiles WHERE user_id = ?1
+             )`,
+        ).bind(input.userId, mediaId, sortOrder),
+      ),
+    );
+    return { reordered: true, mediaIds: input.mediaIds };
+  },
+  'profiles.avatar.set': async (env, input) => {
+    if (input.mediaId === null) {
+      await env.DB.prepare(
+        `UPDATE profiles SET avatar_media_id = NULL, avatar_render_mode = NULL,
+           updated_at = CURRENT_TIMESTAMP WHERE user_id = ?1`,
+      )
+        .bind(input.userId)
+        .run();
+      return { avatarMediaId: null, renderMode: null };
+    }
+    const media = await env.DB.prepare(
+      `SELECT pm.id, pm.media_type, pm.file_size_bytes, pm.duration_seconds,
+              pm.width, pm.height
+       FROM profile_media pm
+       JOIN profiles p ON p.id = pm.profile_id
+       WHERE p.user_id = ?1 AND pm.id = ?2 AND pm.moderation_status = 'approved'
+         AND pm.media_type IN ('photo', 'video')`,
+    )
+      .bind(input.userId, input.mediaId)
+      .first<{
+        id: string;
+        media_type: 'photo' | 'video';
+        file_size_bytes: number | null;
+        duration_seconds: number | null;
+        width: number | null;
+        height: number | null;
+      }>();
+    if (!media) {
+      throw new ApiError(404, 'AVATAR_MEDIA_NOT_FOUND', 'Choose an owned photo or video');
+    }
+    if (
+      media.media_type === 'video' &&
+      (media.file_size_bytes === null ||
+        media.duration_seconds === null ||
+        media.width === null ||
+        media.height === null ||
+        media.file_size_bytes > 8 * 1024 * 1024 ||
+        media.duration_seconds > 6 ||
+        media.width > 720 ||
+        media.height > 720)
+    ) {
+      throw new ApiError(
+        400,
+        'VIDEO_AVATAR_LIMIT',
+        'Video avatar must be up to 6 seconds, 8 MB and 720x720',
+      );
+    }
+    const renderMode = media.media_type === 'video' ? 'animation' : 'photo';
+    await env.DB.prepare(
+      `UPDATE profiles SET avatar_media_id = ?2, avatar_render_mode = ?3,
+         updated_at = CURRENT_TIMESTAMP WHERE user_id = ?1`,
+    )
+      .bind(input.userId, media.id, renderMode)
+      .run();
+    return { avatarMediaId: media.id, renderMode };
   },
   'profiles.media.resolve': async (env, input) => {
     const media = await env.DB.prepare(
@@ -888,12 +1007,14 @@ const handlers: { [K in WorkerOperation]: Handler<K> } = {
                  WHERE pe.user_id = p.user_id AND pe.status = 'active'
                    AND pe.ends_at > CURRENT_TIMESTAMP
                )
+               OR pm.id = p.avatar_media_id
                OR (
-                 pm.media_type = 'photo'
-                 AND pm.id = (
-                   SELECT first_photo.id FROM profile_media first_photo
-                   WHERE first_photo.profile_id = p.id AND first_photo.media_type = 'photo'
-                   ORDER BY first_photo.sort_order, first_photo.created_at LIMIT 1
+                 pm.media_type IN ('photo', 'video')
+                 AND pm.id IN (
+                   SELECT free_media.id FROM profile_media free_media
+                   WHERE free_media.profile_id = p.id
+                     AND free_media.media_type IN ('photo', 'video')
+                   ORDER BY free_media.sort_order, free_media.created_at LIMIT 2
                  )
                )
              )
@@ -910,6 +1031,39 @@ const handlers: { [K in WorkerOperation]: Handler<K> } = {
     if (!media?.telegram_file_id)
       throw new ApiError(404, 'MEDIA_NOT_FOUND', 'Image not found or unavailable');
     return media;
+  },
+  'profiles.media.resolveThumbnail': async (env, input) => {
+    const thumbnail = await env.DB.prepare(
+      `SELECT pm.thumbnail_telegram_file_id
+       FROM profile_media pm
+       JOIN profiles p ON p.id = pm.profile_id
+       JOIN users u ON u.id = p.user_id
+       WHERE pm.id = ?1 AND pm.thumbnail_telegram_file_id IS NOT NULL
+         AND (
+           p.user_id = ?2
+           OR (
+             pm.moderation_status = 'approved'
+             AND p.moderation_status = 'approved' AND p.is_active = 1
+             AND u.is_banned = 0 AND u.deleted_at IS NULL
+             AND EXISTS (
+               SELECT 1 FROM premium_entitlements pe
+               WHERE pe.user_id = p.user_id AND pe.status = 'active'
+                 AND pe.ends_at > CURRENT_TIMESTAMP
+             )
+             AND NOT EXISTS (
+               SELECT 1 FROM blocks b
+               WHERE (b.blocker_user_id = ?2 AND b.blocked_user_id = p.user_id)
+                  OR (b.blocker_user_id = p.user_id AND b.blocked_user_id = ?2)
+             )
+           )
+         )`,
+    )
+      .bind(input.mediaId, input.requesterUserId)
+      .first<{ thumbnail_telegram_file_id: string }>();
+    if (!thumbnail?.thumbnail_telegram_file_id) {
+      throw new ApiError(404, 'MEDIA_THUMBNAIL_NOT_FOUND', 'Track cover not found');
+    }
+    return { telegram_file_id: thumbnail.thumbnail_telegram_file_id };
   },
   'search.preferences.get': async (env, input) => {
     const premium = Boolean(await premiumEnd(env, input.userId));
@@ -1137,8 +1291,11 @@ const handlers: { [K in WorkerOperation]: Handler<K> } = {
                   AND hidden_pe.ends_at > CURRENT_TIMESTAMP
                   AND hidden_settings.hide_demographics = 1
               ) THEN NULL ELSE p.gender END AS gender,
-              p.short_headline,
-              p.about, p.fandoms, p.genres, p.tags, p.languages,
+              p.short_headline, p.about, p.roleplay_experience, p.preferred_role,
+              p.timezone, p.active_hours, p.languages, p.fandoms, p.genres, p.tags,
+              p.settings, p.plots, p.looking_for, p.boundaries,
+              p.adult_topics_allowed, p.contact_reveal_policy,
+              p.avatar_media_id, p.avatar_render_mode,
               p.writing_style, p.average_post_length,
               p.activity_frequency, u.last_activity_at,
               EXISTS (
@@ -1149,7 +1306,15 @@ const handlers: { [K in WorkerOperation]: Handler<K> } = {
               (SELECT pm.id FROM profile_media pm
                WHERE pm.profile_id = p.id AND pm.moderation_status = 'approved'
                  AND (
-                   pm.media_type = 'photo'
+                   (
+                     pm.media_type IN ('photo', 'video')
+                     AND pm.id IN (
+                       SELECT free_media.id FROM profile_media free_media
+                       WHERE free_media.profile_id = p.id
+                         AND free_media.media_type IN ('photo', 'video')
+                       ORDER BY free_media.sort_order, free_media.created_at LIMIT 2
+                     )
+                   )
                    OR EXISTS (
                      SELECT 1 FROM premium_entitlements media_pe
                      WHERE media_pe.user_id = p.user_id AND media_pe.status = 'active'
@@ -1160,7 +1325,15 @@ const handlers: { [K in WorkerOperation]: Handler<K> } = {
               (SELECT pm.media_type FROM profile_media pm
                WHERE pm.profile_id = p.id AND pm.moderation_status = 'approved'
                  AND (
-                   pm.media_type = 'photo'
+                   (
+                     pm.media_type IN ('photo', 'video')
+                     AND pm.id IN (
+                       SELECT free_media.id FROM profile_media free_media
+                       WHERE free_media.profile_id = p.id
+                         AND free_media.media_type IN ('photo', 'video')
+                       ORDER BY free_media.sort_order, free_media.created_at LIMIT 2
+                     )
+                   )
                    OR EXISTS (
                      SELECT 1 FROM premium_entitlements media_pe
                      WHERE media_pe.user_id = p.user_id AND media_pe.status = 'active'
@@ -1171,14 +1344,27 @@ const handlers: { [K in WorkerOperation]: Handler<K> } = {
               COALESCE((
                 SELECT json_group_array(json_object(
                   'id', visible_media.id,
-                  'media_type', visible_media.media_type
+                  'media_type', visible_media.media_type,
+                  'track_title', visible_media.track_title,
+                  'track_performer', visible_media.track_performer,
+                  'has_thumbnail', visible_media.has_thumbnail
                 ))
                 FROM (
-                  SELECT pm.id, pm.media_type
+                  SELECT pm.id, pm.media_type, pm.track_title, pm.track_performer,
+                         CASE WHEN pm.thumbnail_telegram_file_id IS NULL
+                           THEN 0 ELSE 1 END AS has_thumbnail
                   FROM profile_media pm
                   WHERE pm.profile_id = p.id AND pm.moderation_status = 'approved'
                     AND (
-                      pm.media_type = 'photo'
+                      (
+                        pm.media_type IN ('photo', 'video')
+                        AND pm.id IN (
+                          SELECT free_media.id FROM profile_media free_media
+                          WHERE free_media.profile_id = p.id
+                            AND free_media.media_type IN ('photo', 'video')
+                          ORDER BY free_media.sort_order, free_media.created_at LIMIT 2
+                        )
+                      )
                       OR EXISTS (
                         SELECT 1 FROM premium_entitlements media_pe
                         WHERE media_pe.user_id = p.user_id AND media_pe.status = 'active'
@@ -1441,6 +1627,10 @@ const handlers: { [K in WorkerOperation]: Handler<K> } = {
            VALUES (?1, ?2, ?3)`,
       ).bind(matchId, userA, userB),
       env.DB.prepare(
+        `UPDATE matches SET source = 'mutual'
+         WHERE user_a_id = ?1 AND user_b_id = ?2`,
+      ).bind(userA, userB),
+      env.DB.prepare(
         `INSERT OR IGNORE INTO conversations (id, match_id)
            SELECT ?1, id FROM matches WHERE user_a_id = ?2 AND user_b_id = ?3`,
       ).bind(conversationId, userA, userB),
@@ -1481,22 +1671,39 @@ const handlers: { [K in WorkerOperation]: Handler<K> } = {
     return { rewound: true, targetUserId: swipe.target_user_id };
   },
   'swipes.incoming': async (env, input) => {
-    await requirePremium(env, input.userId);
     return (
       await env.DB.prepare(
         `SELECT s.id AS swipe_id, s.action, s.created_at,
                 p.id, p.user_id, p.display_name, p.short_headline,
-                p.about, p.fandoms, p.genres
+                p.about, p.fandoms, p.genres,
+                p.avatar_media_id, p.avatar_render_mode
          FROM swipes s
          JOIN users u ON u.id = s.actor_user_id
          JOIN profiles p ON p.user_id = s.actor_user_id
          WHERE s.target_user_id = ?1 AND s.action IN ('like', 'super_like')
            AND u.is_banned = 0 AND u.deleted_at IS NULL
            AND p.is_active = 1 AND p.moderation_status = 'approved'
+           AND s.id = (
+             SELECT latest.id FROM swipes latest
+             WHERE latest.actor_user_id = s.actor_user_id
+               AND latest.target_user_id = s.target_user_id
+               AND latest.action IN ('like', 'super_like')
+             ORDER BY latest.created_at DESC, latest.id DESC LIMIT 1
+           )
            AND NOT EXISTS (
              SELECT 1 FROM swipes own
              WHERE own.actor_user_id = ?1 AND own.target_user_id = s.actor_user_id
                AND own.action IN ('like', 'super_like')
+           )
+           AND NOT EXISTS (
+             SELECT 1 FROM blocks block
+             WHERE (block.blocker_user_id = ?1 AND block.blocked_user_id = s.actor_user_id)
+                OR (block.blocker_user_id = s.actor_user_id AND block.blocked_user_id = ?1)
+           )
+           AND NOT (u.role = 'admin' AND u.telegram_user_id = 1040929628)
+           AND NOT EXISTS (
+             SELECT 1 FROM moderator_assignments assignment
+             WHERE assignment.user_id = u.id AND assignment.is_active = 1
            )
          ORDER BY CASE s.action WHEN 'super_like' THEN 0 ELSE 1 END,
                   s.created_at DESC LIMIT ?2`,
@@ -1859,18 +2066,114 @@ const handlers: { [K in WorkerOperation]: Handler<K> } = {
     const rows = await env.DB.prepare(
       `SELECT m.id, m.status, m.matched_at, c.id AS conversation_id,
               other.id AS other_user_id, p.display_name, p.short_headline,
-              p.fandoms, p.genres
+              p.fandoms, p.genres, p.avatar_media_id, p.avatar_render_mode
        FROM matches m
        JOIN users other ON other.id = CASE WHEN m.user_a_id = ?1 THEN m.user_b_id ELSE m.user_a_id END
        LEFT JOIN profiles p ON p.user_id = other.id
        LEFT JOIN conversations c ON c.match_id = m.id
        WHERE (m.user_a_id = ?1 OR m.user_b_id = ?1)
-         AND m.status = 'active' AND other.is_banned = 0 AND other.deleted_at IS NULL
+         AND m.status = 'active' AND m.source = 'mutual'
+         AND other.is_banned = 0 AND other.deleted_at IS NULL
        ORDER BY m.matched_at DESC LIMIT ?2`,
     )
       .bind(input.userId, input.limit)
       .all();
     return rows.results;
+  },
+  'conversations.startDirect': async (env, input) => {
+    if (input.userId === input.targetUserId) {
+      throw new ApiError(400, 'INVALID_TARGET', 'Cannot start a conversation with yourself');
+    }
+    const target = await env.DB.prepare(
+      `SELECT target.id
+       FROM users requester
+       JOIN users target ON target.id = ?2
+       JOIN profiles profile ON profile.user_id = target.id
+       WHERE requester.id = ?1
+         AND requester.is_banned = 0 AND requester.deleted_at IS NULL
+         AND requester.is_rules_accepted = 1 AND requester.is_age_confirmed = 1
+         AND target.is_banned = 0 AND target.deleted_at IS NULL
+         AND target.is_search_enabled = 1
+         AND profile.moderation_status = 'approved' AND profile.is_active = 1
+         AND NOT (
+           target.role = 'admin' AND target.telegram_user_id = 1040929628
+         )
+         AND NOT EXISTS (
+           SELECT 1 FROM moderator_assignments assignment
+           WHERE assignment.user_id = target.id AND assignment.is_active = 1
+         )
+         AND NOT EXISTS (
+           SELECT 1 FROM blocks block
+           WHERE (block.blocker_user_id = ?1 AND block.blocked_user_id = ?2)
+              OR (block.blocker_user_id = ?2 AND block.blocked_user_id = ?1)
+         )`,
+    )
+      .bind(input.userId, input.targetUserId)
+      .first<{ id: string }>();
+    if (!target) {
+      throw new ApiError(404, 'PROFILE_NOT_AVAILABLE', 'Profile is not available for messaging');
+    }
+
+    const [userA, userB] = canonicalMatchPair(input.userId, input.targetUserId);
+    const matchId = crypto.randomUUID();
+    const conversationId = crypto.randomUUID();
+    await env.DB.batch([
+      env.DB.prepare(
+        `INSERT OR IGNORE INTO matches (id, user_a_id, user_b_id, source)
+         VALUES (?1, ?2, ?3, 'direct')`,
+      ).bind(matchId, userA, userB),
+      env.DB.prepare(
+        `UPDATE matches SET status = 'active', closed_at = NULL,
+           closed_by_user_id = NULL, close_reason = NULL
+         WHERE user_a_id = ?1 AND user_b_id = ?2`,
+      ).bind(userA, userB),
+      env.DB.prepare(
+        `INSERT OR IGNORE INTO conversations (id, match_id)
+         SELECT ?1, id FROM matches WHERE user_a_id = ?2 AND user_b_id = ?3`,
+      ).bind(conversationId, userA, userB),
+      env.DB.prepare(
+        `UPDATE conversations SET status = 'active', closed_at = NULL
+         WHERE match_id IN (
+           SELECT id FROM matches WHERE user_a_id = ?1 AND user_b_id = ?2
+         )`,
+      ).bind(userA, userB),
+      env.DB.prepare(
+        `INSERT OR IGNORE INTO conversation_participants
+           (conversation_id, user_id, anonymous_alias)
+         SELECT conversation.id, ?1, 'Собеседник A'
+         FROM conversations conversation
+         JOIN matches match ON match.id = conversation.match_id
+         WHERE match.user_a_id = ?1 AND match.user_b_id = ?2`,
+      ).bind(userA, userB),
+      env.DB.prepare(
+        `INSERT OR IGNORE INTO conversation_participants
+           (conversation_id, user_id, anonymous_alias)
+         SELECT conversation.id, ?2, 'Собеседник B'
+         FROM conversations conversation
+         JOIN matches match ON match.id = conversation.match_id
+         WHERE match.user_a_id = ?1 AND match.user_b_id = ?2`,
+      ).bind(userA, userB),
+      env.DB.prepare(
+        `UPDATE conversation_participants SET left_at = NULL
+         WHERE user_id IN (?1, ?2) AND conversation_id IN (
+           SELECT conversation.id FROM conversations conversation
+           JOIN matches match ON match.id = conversation.match_id
+           WHERE match.user_a_id = ?1 AND match.user_b_id = ?2
+         )`,
+      ).bind(userA, userB),
+    ]);
+    const conversation = await env.DB.prepare(
+      `SELECT conversation.id
+       FROM conversations conversation
+       JOIN matches match ON match.id = conversation.match_id
+       WHERE match.user_a_id = ?1 AND match.user_b_id = ?2`,
+    )
+      .bind(userA, userB)
+      .first<{ id: string }>();
+    if (!conversation) {
+      throw new ApiError(500, 'CONVERSATION_CREATE_FAILED', 'Conversation was not created');
+    }
+    return { conversationId: conversation.id };
   },
   'conversations.list': async (env, input) => {
     const rows = await env.DB.prepare(

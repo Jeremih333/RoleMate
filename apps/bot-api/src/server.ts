@@ -434,6 +434,24 @@ export async function buildServer(
     const { mediaId } = z.object({ mediaId: z.string().uuid() }).parse(request.params);
     return dataApi.execute('profiles.media.delete', { userId: session.userId, mediaId });
   });
+  app.put('/api/profile/media/order', async (request) => {
+    const session = await mutateSafe(request);
+    const { mediaIds } = z
+      .object({ mediaIds: z.array(z.string().uuid()).min(1).max(8) })
+      .parse(request.body);
+    return dataApi.execute('profiles.media.reorder', {
+      userId: session.userId,
+      mediaIds,
+    });
+  });
+  app.put('/api/profile/avatar', async (request) => {
+    const session = await mutateSafe(request);
+    const { mediaId } = z.object({ mediaId: z.string().uuid().nullable() }).parse(request.body);
+    return dataApi.execute('profiles.avatar.set', {
+      userId: session.userId,
+      mediaId,
+    });
+  });
   app.get('/api/profile-media/:mediaId', async (request, reply) => {
     const session = await authenticate(request);
     const { mediaId } = z.object({ mediaId: z.string().uuid() }).parse(request.params);
@@ -465,6 +483,31 @@ export async function buildServer(
         } satisfies Record<typeof media.media_type, string>
       )[media.media_type];
     reply.header('Content-Type', contentType);
+    reply.header('Cache-Control', 'private, max-age=300');
+    return reply.send(Buffer.from(await telegramResponse.arrayBuffer()));
+  });
+  app.get('/api/profile-media/:mediaId/thumbnail', async (request, reply) => {
+    const session = await authenticate(request);
+    const { mediaId } = z.object({ mediaId: z.string().uuid() }).parse(request.params);
+    const media = await dataApi.execute<{ telegram_file_id: string }>(
+      'profiles.media.resolveThumbnail',
+      {
+        requesterUserId: session.userId,
+        mediaId,
+      },
+    );
+    const file = await bot.api.getFile(media.telegram_file_id);
+    if (!file.file_path) {
+      throw new DataApiError('MEDIA_UNAVAILABLE', ru.api.mediaUnavailable, 404);
+    }
+    const telegramResponse = await fetch(
+      `https://api.telegram.org/file/bot${env.TELEGRAM_BOT_TOKEN}/${file.file_path}`,
+      { signal: AbortSignal.timeout(20_000) },
+    );
+    if (!telegramResponse.ok) {
+      throw new DataApiError('MEDIA_UNAVAILABLE', ru.api.mediaUnavailable, 502);
+    }
+    reply.header('Content-Type', telegramResponse.headers.get('content-type') ?? 'image/jpeg');
     reply.header('Cache-Control', 'private, max-age=300');
     return reply.send(Buffer.from(await telegramResponse.arrayBuffer()));
   });
@@ -632,6 +675,68 @@ export async function buildServer(
     const session = await authenticate(request);
     return dataApi.execute('conversations.list', { userId: session.userId, limit: 50 });
   });
+  app.post('/api/conversations/direct', async (request) => {
+    const session = await mutateSafe(request);
+    const { targetUserId } = z.object({ targetUserId: z.string().uuid() }).parse(request.body);
+    return dataApi.execute('conversations.startDirect', {
+      userId: session.userId,
+      targetUserId,
+    });
+  });
+  app.post(
+    '/api/conversations/:conversationId/messages',
+    { config: { rateLimit: { max: 20, timeWindow: '1 minute' } } },
+    async (request) => {
+      const session = await mutateSafe(request);
+      const { conversationId } = z
+        .object({ conversationId: z.string().uuid() })
+        .parse(request.params);
+      const { text } = z.object({ text: z.string().trim().min(1).max(4_000) }).parse(request.body);
+      const premium = await dataApi.execute<{ premium: boolean }>('premium.status', {
+        userId: session.userId,
+      });
+      const policy = await validateUserContentLinks(text, {
+        premium: premium.premium,
+        dataApi,
+        getChat: async (chatId) => bot.api.getChat(chatId),
+      });
+      if (!policy.allowed) {
+        throw new DataApiError(
+          policy.reason === 'premium_required' ? 'PREMIUM_REQUIRED' : 'LINK_POLICY_VIOLATION',
+          ru.api.linkPolicyViolation,
+          403,
+        );
+      }
+      const relay = await dataApi.execute<{
+        destination_chat_id: number;
+        recipient_muted: number;
+        notify_message: number;
+      }>('conversations.resolveMiniAppRelay', {
+        userId: session.userId,
+        conversationId,
+      });
+      if (relay.notify_message) {
+        await bot.api.sendMessage(relay.destination_chat_id, ru.bot.newMessageNotification, {
+          protect_content: true,
+          reply_markup: new InlineKeyboard().webApp(
+            ru.bot.menu.chats,
+            `${env.MINI_APP_URL}/chats?conversation=${encodeURIComponent(conversationId)}`,
+          ),
+        });
+      }
+      const delivered = await bot.api.sendMessage(relay.destination_chat_id, text, {
+        protect_content: true,
+        disable_notification: Boolean(relay.recipient_muted),
+      });
+      await dataApi.execute('conversations.recordMiniAppMessage', {
+        userId: session.userId,
+        conversationId,
+        destinationMessageId: delivered.message_id,
+        messageType: 'text',
+      });
+      return { sent: true };
+    },
+  );
   app.post(
     '/api/conversations/:conversationId/media',
     {

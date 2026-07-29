@@ -41,7 +41,7 @@ export function getTelegramInitData(): string {
   return getTelegram()?.initData || telegramInitDataFromUrl(window.location.href);
 }
 
-export async function waitForTelegramInitData(timeoutMs = 2_000): Promise<string> {
+export async function waitForTelegramInitData(timeoutMs = 10_000): Promise<string> {
   const startedAt = Date.now();
   do {
     const initData = getTelegramInitData();

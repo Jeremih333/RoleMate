@@ -267,7 +267,6 @@ describe('D1 domain operations', () => {
       },
       crypto.randomUUID(),
     )) as { id: string };
-
     const premiumPreview = (await executeOperation(
       env,
       'profiles.previewOwn',
@@ -281,8 +280,8 @@ describe('D1 domain operations', () => {
     };
     expect(premiumPreview).toMatchObject({ age_group: null, gender: null, is_premium: 1 });
     expect(JSON.parse(premiumPreview.media_items)).toEqual([
-      { id: photo.id, media_type: 'photo' },
-      { id: video.id, media_type: 'video' },
+      expect.objectContaining({ id: photo.id, media_type: 'photo' }),
+      expect.objectContaining({ id: video.id, media_type: 'video' }),
     ]);
 
     sqlite
@@ -303,7 +302,10 @@ describe('D1 domain operations', () => {
     };
     expect(freePreview.age_group).toBe('21_25');
     expect(freePreview.is_premium).toBe(0);
-    expect(JSON.parse(freePreview.media_items)).toEqual([{ id: photo.id, media_type: 'photo' }]);
+    expect(JSON.parse(freePreview.media_items)).toEqual([
+      expect.objectContaining({ id: photo.id, media_type: 'photo' }),
+      expect.objectContaining({ id: video.id, media_type: 'video' }),
+    ]);
   });
 
   it('shows a searchable profile to an age-confirmed viewer without their own profile', async () => {
@@ -363,6 +365,101 @@ describe('D1 domain operations', () => {
     )) as Array<{ user_id: string; relevance_score: number }>;
     expect(results.map((item) => item.user_id)).toEqual([relevantId, lessRelevantId]);
     expect(results[0]?.relevance_score).toBeGreaterThan(results[1]?.relevance_score ?? 0);
+  });
+
+  it('starts an anonymous chat from a searchable profile without reciprocal approval', async () => {
+    const senderId = await onboard(2_024);
+    const recipientId = await onboard(2_025);
+    const first = (await executeOperation(
+      env,
+      'conversations.startDirect',
+      { userId: senderId, targetUserId: recipientId },
+      crypto.randomUUID(),
+    )) as { conversationId: string };
+    const second = (await executeOperation(
+      env,
+      'conversations.startDirect',
+      { userId: senderId, targetUserId: recipientId },
+      crypto.randomUUID(),
+    )) as { conversationId: string };
+    expect(second.conversationId).toBe(first.conversationId);
+    expect(
+      sqlite
+        .prepare(
+          'SELECT COUNT(*) AS total FROM conversation_participants WHERE conversation_id = ?',
+        )
+        .get(first.conversationId),
+    ).toEqual({ total: 2 });
+    expect(
+      await executeOperation(
+        env,
+        'conversations.list',
+        { userId: recipientId, limit: 20 },
+        crypto.randomUUID(),
+      ),
+    ).toEqual([
+      expect.objectContaining({
+        id: first.conversationId,
+        other_user_id: senderId,
+        status: 'active',
+      }),
+    ]);
+    await expect(
+      executeOperation(env, 'matches.list', { userId: senderId, limit: 20 }, crypto.randomUUID()),
+    ).resolves.toEqual([]);
+
+    await executeOperation(
+      env,
+      'swipes.create',
+      {
+        userId: senderId,
+        targetUserId: recipientId,
+        action: 'like',
+        source: 'miniapp',
+        idempotencyKey: 'direct-to-mutual-first',
+      },
+      crypto.randomUUID(),
+    );
+    await executeOperation(
+      env,
+      'swipes.create',
+      {
+        userId: recipientId,
+        targetUserId: senderId,
+        action: 'like',
+        source: 'miniapp',
+        idempotencyKey: 'direct-to-mutual-second',
+      },
+      crypto.randomUUID(),
+    );
+    await expect(
+      executeOperation(env, 'matches.list', { userId: senderId, limit: 20 }, crypto.randomUUID()),
+    ).resolves.toEqual([
+      expect.objectContaining({
+        conversation_id: first.conversationId,
+        other_user_id: recipientId,
+      }),
+    ]);
+    expect(
+      sqlite
+        .prepare('SELECT source FROM matches WHERE user_a_id = ? OR user_b_id = ?')
+        .get(senderId, senderId),
+    ).toEqual({ source: 'mutual' });
+
+    await executeOperation(
+      env,
+      'blocks.create',
+      { blockerUserId: recipientId, blockedUserId: senderId, reason: 'direct chat test' },
+      crypto.randomUUID(),
+    );
+    await expect(
+      executeOperation(
+        env,
+        'conversations.startDirect',
+        { userId: senderId, targetUserId: recipientId },
+        crypto.randomUUID(),
+      ),
+    ).rejects.toMatchObject<ApiError>({ code: 'PROFILE_NOT_AVAILABLE' });
   });
 
   it('requires Premium for calls and removes transient signaling after the call', async () => {
@@ -753,7 +850,15 @@ describe('D1 domain operations', () => {
     )) as Array<{ user_id: string; media_items: string }>;
     expect(
       JSON.parse(immediateSearchResult.find((item) => item.user_id === owner)?.media_items ?? '[]'),
-    ).toEqual([{ id: added.id, media_type: 'photo' }]);
+    ).toEqual([
+      {
+        id: added.id,
+        media_type: 'photo',
+        track_title: null,
+        track_performer: null,
+        has_thumbnail: 0,
+      },
+    ]);
     await executeOperation(
       env,
       'admin.media.moderate',
@@ -800,10 +905,119 @@ describe('D1 domain operations', () => {
     ).rejects.toMatchObject<ApiError>({ code: 'MEDIA_NOT_FOUND' });
   });
 
+  it('binds photo and bounded GIF-like video avatars to the normalized profile identity', async () => {
+    const owner = await onboard(2053);
+    const viewer = await onboard(2054);
+    const photo = (await executeOperation(
+      env,
+      'profiles.media.add',
+      {
+        userId: owner,
+        telegramFileId: 'avatar-photo',
+        telegramFileUniqueId: 'avatar-photo-unique',
+        mediaType: 'photo',
+        fileSizeBytes: 512_000,
+        width: 640,
+        height: 640,
+      },
+      crypto.randomUUID(),
+    )) as { id: string };
+    await expect(
+      executeOperation(
+        env,
+        'profiles.avatar.set',
+        { userId: owner, mediaId: photo.id },
+        crypto.randomUUID(),
+      ),
+    ).resolves.toEqual({ avatarMediaId: photo.id, renderMode: 'photo' });
+    const search = (await executeOperation(
+      env,
+      'search.list',
+      { userId: viewer, query: '', limit: 20 },
+      crypto.randomUUID(),
+    )) as Array<{ user_id: string; avatar_media_id: string; avatar_render_mode: string }>;
+    expect(search.find((item) => item.user_id === owner)).toMatchObject({
+      avatar_media_id: photo.id,
+      avatar_render_mode: 'photo',
+    });
+    await executeOperation(
+      env,
+      'profiles.media.delete',
+      { userId: owner, mediaId: photo.id },
+      crypto.randomUUID(),
+    );
+    expect(
+      sqlite
+        .prepare('SELECT avatar_media_id, avatar_render_mode FROM profiles WHERE user_id = ?')
+        .get(owner),
+    ).toEqual({ avatar_media_id: null, avatar_render_mode: null });
+
+    const oversizedVideo = (await executeOperation(
+      env,
+      'profiles.media.add',
+      {
+        userId: owner,
+        telegramFileId: 'avatar-video-long',
+        telegramFileUniqueId: 'avatar-video-long-unique',
+        mediaType: 'video',
+        fileSizeBytes: 7_000_000,
+        durationSeconds: 7,
+        width: 720,
+        height: 720,
+      },
+      crypto.randomUUID(),
+    )) as { id: string };
+    await expect(
+      executeOperation(
+        env,
+        'profiles.avatar.set',
+        { userId: owner, mediaId: oversizedVideo.id },
+        crypto.randomUUID(),
+      ),
+    ).rejects.toMatchObject<ApiError>({ code: 'VIDEO_AVATAR_LIMIT' });
+    await executeOperation(
+      env,
+      'profiles.media.delete',
+      { userId: owner, mediaId: oversizedVideo.id },
+      crypto.randomUUID(),
+    );
+    const video = (await executeOperation(
+      env,
+      'profiles.media.add',
+      {
+        userId: owner,
+        telegramFileId: 'avatar-video-safe',
+        telegramFileUniqueId: 'avatar-video-safe-unique',
+        mediaType: 'video',
+        fileSizeBytes: 8 * 1024 * 1024,
+        durationSeconds: 6,
+        width: 720,
+        height: 720,
+      },
+      crypto.randomUUID(),
+    )) as { id: string };
+    await expect(
+      executeOperation(
+        env,
+        'profiles.avatar.set',
+        { userId: owner, mediaId: video.id },
+        crypto.randomUUID(),
+      ),
+    ).resolves.toEqual({ avatarMediaId: video.id, renderMode: 'animation' });
+    await expect(
+      executeOperation(
+        env,
+        'profiles.media.resolve',
+        { requesterUserId: viewer, mediaId: video.id },
+        crypto.randomUUID(),
+      ),
+    ).resolves.toMatchObject({ telegram_file_id: 'avatar-video-safe' });
+  });
+
   it('enforces free and Premium profile-media limits immediately after entitlement expiry', async () => {
     const userId = await onboard(2052);
     const adminId = await upsert(1_040_929_628);
-    await executeOperation(
+    const photo = (await executeOperation(
       env,
       'profiles.media.add',
       {
@@ -813,16 +1027,48 @@ describe('D1 domain operations', () => {
         mediaType: 'photo',
       },
       crypto.randomUUID(),
-    );
+    )) as { id: string };
+    const video = (await executeOperation(
+      env,
+      'profiles.media.add',
+      {
+        userId,
+        telegramFileId: 'free-video',
+        telegramFileUniqueId: 'free-video-unique',
+        mediaType: 'video',
+      },
+      crypto.randomUUID(),
+    )) as { id: string };
+    await expect(
+      executeOperation(
+        env,
+        'profiles.media.reorder',
+        { userId, mediaIds: [video.id, photo.id] },
+        crypto.randomUUID(),
+      ),
+    ).resolves.toMatchObject({ reordered: true });
     await expect(
       executeOperation(
         env,
         'profiles.media.add',
         {
           userId,
-          telegramFileId: 'free-video',
-          telegramFileUniqueId: 'free-video-unique',
-          mediaType: 'video',
+          telegramFileId: 'third-free-photo',
+          telegramFileUniqueId: 'third-free-photo-unique',
+          mediaType: 'photo',
+        },
+        crypto.randomUUID(),
+      ),
+    ).rejects.toMatchObject<ApiError>({ code: 'MEDIA_LIMIT' });
+    await expect(
+      executeOperation(
+        env,
+        'profiles.media.add',
+        {
+          userId,
+          telegramFileId: 'free-audio',
+          telegramFileUniqueId: 'free-audio-unique',
+          mediaType: 'audio',
         },
         crypto.randomUUID(),
       ),
@@ -839,20 +1085,52 @@ describe('D1 domain operations', () => {
       },
       crypto.randomUUID(),
     );
-    const video = (await executeOperation(
+    const audio = (await executeOperation(
       env,
       'profiles.media.add',
       {
         userId,
-        telegramFileId: 'premium-video',
-        telegramFileUniqueId: 'premium-video-unique',
-        mediaType: 'video',
+        telegramFileId: 'premium-audio',
+        telegramFileUniqueId: 'premium-audio-unique',
+        mediaType: 'audio',
+        trackTitle: 'Night Story',
+        trackPerformer: 'RoleMate Artist',
+        thumbnailTelegramFileId: 'track-cover-file',
       },
       crypto.randomUUID(),
     )) as { id: string };
+    const premiumMedia = (await executeOperation(
+      env,
+      'profiles.media.list',
+      { userId },
+      crypto.randomUUID(),
+    )) as Array<Record<string, unknown>>;
+    expect(premiumMedia).toHaveLength(3);
+    expect(premiumMedia.find((item) => item.id === audio.id)).toMatchObject({
+      track_title: 'Night Story',
+      track_performer: 'RoleMate Artist',
+      has_thumbnail: 1,
+    });
+    await expect(
+      executeOperation(
+        env,
+        'profiles.media.resolveThumbnail',
+        { requesterUserId: userId, mediaId: audio.id },
+        crypto.randomUUID(),
+      ),
+    ).resolves.toEqual({ telegram_file_id: 'track-cover-file' });
+    await executeOperation(
+      env,
+      'profiles.media.reorder',
+      { userId, mediaIds: [video.id, audio.id, photo.id] },
+      crypto.randomUUID(),
+    );
     expect(
-      await executeOperation(env, 'profiles.media.list', { userId }, crypto.randomUUID()),
-    ).toHaveLength(2);
+      sqlite
+        .prepare('SELECT id FROM profile_media ORDER BY sort_order')
+        .all()
+        .map((item) => (item as { id: string }).id),
+    ).toEqual([video.id, audio.id, photo.id]);
     sqlite
       .prepare(
         `UPDATE premium_entitlements SET ends_at = datetime('now', '-1 minute')
@@ -865,8 +1143,16 @@ describe('D1 domain operations', () => {
       { userId },
       crypto.randomUUID(),
     )) as Array<{ media_type: string }>;
-    expect(afterExpiry).toHaveLength(1);
-    expect(afterExpiry[0]?.media_type).toBe('photo');
+    expect(afterExpiry).toHaveLength(2);
+    expect(afterExpiry.map((item) => item.media_type)).toEqual(['video', 'photo']);
+    await expect(
+      executeOperation(
+        env,
+        'profiles.media.resolve',
+        { requesterUserId: userId, mediaId: audio.id },
+        crypto.randomUUID(),
+      ),
+    ).rejects.toMatchObject<ApiError>({ code: 'MEDIA_NOT_FOUND' });
     await expect(
       executeOperation(
         env,
@@ -874,7 +1160,7 @@ describe('D1 domain operations', () => {
         { requesterUserId: userId, mediaId: video.id },
         crypto.randomUUID(),
       ),
-    ).rejects.toMatchObject<ApiError>({ code: 'MEDIA_NOT_FOUND' });
+    ).resolves.toMatchObject({ telegram_file_id: 'free-video' });
   });
 
   it('deletes user content, pseudonymizes the tombstone, and permits a fresh registration', async () => {
@@ -1173,7 +1459,27 @@ describe('D1 domain operations', () => {
         { userId: freeUser, limit: 20 },
         crypto.randomUUID(),
       ),
-    ).rejects.toMatchObject<ApiError>({ code: 'PREMIUM_REQUIRED' });
+    ).resolves.toEqual([]);
+    await executeOperation(
+      env,
+      'swipes.create',
+      {
+        userId: secondTarget,
+        targetUserId: freeUser,
+        action: 'like',
+        source: 'miniapp',
+        idempotencyKey: 'free-incoming-like-visible',
+      },
+      crypto.randomUUID(),
+    );
+    await expect(
+      executeOperation(
+        env,
+        'swipes.incoming',
+        { userId: freeUser, limit: 20 },
+        crypto.randomUUID(),
+      ),
+    ).resolves.toEqual([expect.objectContaining({ user_id: secondTarget, action: 'like' })]);
     await expect(
       executeOperation(
         env,

@@ -94,12 +94,36 @@ export const workerOperations = {
     telegramFileId: z.string().min(1).max(512),
     telegramFileUniqueId: z.string().min(1).max(256),
     mediaType: z.enum(['photo', 'animation', 'video', 'audio', 'voice', 'document']),
+    trackTitle: z.string().trim().min(1).max(160).optional(),
+    trackPerformer: z.string().trim().min(1).max(160).optional(),
+    thumbnailTelegramFileId: z.string().min(1).max(512).optional(),
+    fileSizeBytes: z
+      .number()
+      .int()
+      .min(0)
+      .max(50 * 1024 * 1024)
+      .optional(),
+    durationSeconds: z.number().int().min(0).max(3_600).optional(),
+    width: z.number().int().min(1).max(8_192).optional(),
+    height: z.number().int().min(1).max(8_192).optional(),
   }),
   'profiles.media.delete': z.object({
     userId: z.string().uuid(),
     mediaId: z.string().uuid(),
   }),
+  'profiles.media.reorder': z.object({
+    userId: z.string().uuid(),
+    mediaIds: z.array(z.string().uuid()).min(1).max(8),
+  }),
+  'profiles.avatar.set': z.object({
+    userId: z.string().uuid(),
+    mediaId: z.string().uuid().nullable(),
+  }),
   'profiles.media.resolve': z.object({
+    requesterUserId: z.string().uuid(),
+    mediaId: z.string().uuid(),
+  }),
+  'profiles.media.resolveThumbnail': z.object({
     requesterUserId: z.string().uuid(),
     mediaId: z.string().uuid(),
   }),
@@ -179,6 +203,10 @@ export const workerOperations = {
     variantId: z.string().uuid(),
   }),
   'matches.list': z.object({ userId: z.string().uuid() }).merge(paginationSchema),
+  'conversations.startDirect': z.object({
+    userId: z.string().uuid(),
+    targetUserId: z.string().uuid(),
+  }),
   'conversations.list': z.object({ userId: z.string().uuid() }).merge(paginationSchema),
   'conversations.resolveRelay': z.object({
     telegramUserId: z.number().int().positive(),

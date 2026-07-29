@@ -74,6 +74,19 @@ export const api = {
   profileMedia: () => request<ProfileMedia[]>('/profile/media'),
   deleteProfileMedia: (mediaId: string) =>
     request<{ deleted: true }>(`/profile/media/${mediaId}`, { method: 'DELETE' }),
+  reorderProfileMedia: (mediaIds: string[]) =>
+    request<{ reordered: true; mediaIds: string[] }>('/profile/media/order', {
+      method: 'PUT',
+      body: JSON.stringify({ mediaIds }),
+    }),
+  setProfileAvatar: (mediaId: string | null) =>
+    request<{ avatarMediaId: string | null; renderMode: 'photo' | 'animation' | null }>(
+      '/profile/avatar',
+      {
+        method: 'PUT',
+        body: JSON.stringify({ mediaId }),
+      },
+    ),
   search: (query = '') =>
     request<SearchProfile[]>(`/search?limit=20&q=${encodeURIComponent(query)}`),
   searchAvailability: () => request<SearchAvailability>('/search/availability'),
@@ -139,6 +152,16 @@ export const api = {
   deleteProfileVariant: (variantId: string) =>
     request<{ deleted: true }>(`/premium/profile-variants/${variantId}`, { method: 'DELETE' }),
   conversations: () => request<Conversation[]>('/conversations'),
+  startDirectConversation: (targetUserId: string) =>
+    request<{ conversationId: string }>('/conversations/direct', {
+      method: 'POST',
+      body: JSON.stringify({ targetUserId }),
+    }),
+  sendConversationMessage: (conversationId: string, text: string) =>
+    request<{ sent: true }>(`/conversations/${conversationId}/messages`, {
+      method: 'POST',
+      body: JSON.stringify({ text }),
+    }),
   sendConversationMedia: (
     conversationId: string,
     input: {
@@ -417,12 +440,25 @@ export interface SearchProfile {
   writing_style: string;
   average_post_length: string;
   activity_frequency: string;
+  roleplay_experience?: string;
+  preferred_role?: string;
+  timezone?: string;
+  active_hours?: string;
+  languages?: string;
+  settings?: string;
+  plots?: string;
+  looking_for?: string;
+  boundaries?: string;
+  adult_topics_allowed?: number;
+  contact_reveal_policy?: string;
   compatibility: number;
   is_premium: number;
   has_premium: number;
   media_id?: string | null;
   media_type?: ProfileMedia['media_type'] | null;
   media_items?: string;
+  avatar_media_id?: string | null;
+  avatar_render_mode?: 'photo' | 'animation' | null;
   rating_likes: number;
   rating_dislikes: number;
   rating_score: number;
@@ -447,6 +483,14 @@ export interface ProfileMedia {
   sort_order: number;
   moderation_status: 'pending' | 'approved' | 'rejected';
   created_at: string;
+  track_title?: string | null;
+  track_performer?: string | null;
+  has_thumbnail?: number;
+  file_size_bytes?: number | null;
+  duration_seconds?: number | null;
+  width?: number | null;
+  height?: number | null;
+  is_avatar?: number;
 }
 
 export interface SearchPreferences {
@@ -565,6 +609,8 @@ export interface Match {
   other_user_id: string;
   display_name?: string;
   short_headline?: string;
+  avatar_media_id?: string | null;
+  avatar_render_mode?: 'photo' | 'animation' | null;
 }
 
 export type ReportCategory =

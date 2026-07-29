@@ -55,6 +55,8 @@ async function mockApi(
         riskScore: 0,
       },
       '/api/conversations': [],
+      '/api/matches': [],
+      '/api/swipes/incoming': [],
       '/api/profile': {
         id: '00000000-0000-4000-8000-000000000010',
         user_id: '00000000-0000-4000-8000-000000000001',
@@ -114,6 +116,9 @@ async function mockApi(
           {
             id: '00000000-0000-4000-8000-000000000213',
             media_type: 'audio',
+            track_title: 'Night Story',
+            track_performer: 'RoleMate Artist',
+            has_thumbnail: 1,
           },
         ]),
         rating_likes: 4,
@@ -151,6 +156,15 @@ async function mockApi(
           fandoms: '["Arcane","Cyberpunk 2077"]',
           genres: '["драма","приключения"]',
           tags: '["готический детектив"]',
+          roleplay_experience: '3_5_years',
+          preferred_role: '["соавтор","ведущий сюжета"]',
+          timezone: 'UTC+3',
+          active_hours: '19:00–23:00',
+          languages: '["Русский","English"]',
+          settings: 'Авторский готический город',
+          plots: 'Детективная история с несколькими вариантами финала.',
+          looking_for: '["долгая игра","совместное планирование"]',
+          boundaries: 'Без спешки и токсичного общения.',
           writing_style: 'literary',
           average_post_length: 'paragraphs_3_5',
           activity_frequency: 'daily',
@@ -169,6 +183,9 @@ async function mockApi(
             {
               id: '00000000-0000-4000-8000-000000000203',
               media_type: 'audio',
+              track_title: 'Night Story',
+              track_performer: 'RoleMate Artist',
+              has_thumbnail: 1,
             },
           ]),
         },
@@ -331,10 +348,103 @@ test('menu launch recovers initData from the Telegram URL when the SDK is late',
   await page.addInitScript(() => {
     Object.defineProperty(window, 'Telegram', { value: undefined, configurable: true });
   });
-  await mockApi(page);
+  let receivedInitData = '';
+  let meRequests = 0;
+  await mockApi(page, false, {
+    '/api/me': async (route) => {
+      meRequests += 1;
+      await route.fulfill({
+        status: meRequests === 1 ? 401 : 200,
+        contentType: 'application/json',
+        body: JSON.stringify(
+          meRequests === 1
+            ? { error: 'UNAUTHORIZED' }
+            : {
+                userId: '00000000-0000-4000-8000-000000000001',
+                telegramUserId: 42,
+                role: 'user',
+                isAdmin: false,
+                isOwner: false,
+                riskScore: 0,
+              },
+        ),
+      });
+    },
+    '/api/auth/telegram': async (route) => {
+      const body = route.request().postDataJSON() as { initData: string };
+      receivedInitData = body.initData;
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          user: {
+            id: '00000000-0000-4000-8000-000000000001',
+            telegramUserId: 42,
+            role: 'user',
+          },
+          csrfToken: 'csrf-token',
+        }),
+      });
+    },
+  });
   const initData = 'user=%7B%22id%22%3A42%7D&auth_date=1785270000&hash=signed';
   await page.goto(`/search#tgWebAppData=${encodeURIComponent(initData)}&tgWebAppVersion=9.1`);
   await expect(page.locator('main h2').first()).toBeVisible();
+  expect(receivedInitData).toBe(initData);
+});
+
+test('every MiniApp menu destination reuses a valid session without hanging on login', async ({
+  page,
+}) => {
+  await page.addInitScript(() => {
+    Object.defineProperty(window, 'Telegram', { value: undefined, configurable: true });
+  });
+  await mockApi(page);
+  for (const path of [
+    '/search',
+    '/profile',
+    '/matches',
+    '/chats',
+    '/premium',
+    '/referrals',
+    '/settings',
+  ]) {
+    await page.goto(path);
+    await expect(page.getByRole('button', { name: 'Повторить вход' })).toHaveCount(0);
+    await expect(page.locator('main')).toBeVisible();
+  }
+});
+
+test('free users can view an incoming like and answer it by normalized user id', async ({
+  page,
+}) => {
+  const likerId = '00000000-0000-4000-8000-000000000099';
+  let targetUserId = '';
+  await mockApi(page, false, {
+    '/api/swipes/incoming': [
+      {
+        swipe_id: '00000000-0000-4000-8000-000000000098',
+        user_id: likerId,
+        display_name: 'Ночной автор',
+        short_headline: 'Ищу сюжет',
+        action: 'like',
+        created_at: '2026-07-29 12:00:00',
+      },
+    ],
+    '/api/swipes': async (route) => {
+      targetUserId = (route.request().postDataJSON() as { targetUserId: string }).targetUserId;
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({ created: true, matched: true }),
+      });
+    },
+  });
+  await page.goto('/matches');
+  await expect(page.getByText('Ночной автор')).toBeVisible();
+  await expect(page.getByText('Список входящих симпатий доступен с Premium.')).toHaveCount(0);
+  await page.getByRole('button', { name: 'Ответить симпатией' }).click();
+  await expect.poll(() => targetUserId).toBe(likerId);
 });
 
 test('home readiness uses the saved profile completion instead of a hardcoded zero', async ({
@@ -452,6 +562,35 @@ test('profile owner can preview the exact public card with its media header', as
   await page.getByRole('button', { name: 'Следующее медиа' }).click();
   await expect(page.locator('.profile-cover video')).toBeVisible();
   await expect(page.getByRole('button', { name: 'Закрыть предпросмотр' })).toBeVisible();
+  await expect(page.locator('.profile-card')).toHaveCount(1);
+  await expect(page.getByText('Анкета участвует в поиске')).toHaveCount(0);
+});
+
+test('own profile uses the first ordered visual media as its header', async ({ page }) => {
+  await mockApi(page, false, {
+    '/api/profile/media': [
+      {
+        id: '00000000-0000-4000-8000-000000000301',
+        media_type: 'video',
+        sort_order: 0,
+        moderation_status: 'approved',
+        created_at: '2026-07-29 01:00:00',
+      },
+      {
+        id: '00000000-0000-4000-8000-000000000302',
+        media_type: 'photo',
+        sort_order: 1,
+        moderation_status: 'approved',
+        created_at: '2026-07-29 01:01:00',
+      },
+    ],
+  });
+  await page.goto('/profile');
+  await expect(page.locator('.profile-cover video')).toHaveAttribute(
+    'src',
+    '/api/profile-media/00000000-0000-4000-8000-000000000301',
+    { timeout: 15_000 },
+  );
 });
 
 test('keyword search sends the query and profile markdown is rendered safely', async ({ page }) => {
@@ -471,6 +610,171 @@ test('keyword search sends the query and profile markdown is rendered safely', a
   await expect(page.getByLabel('Аудио анкеты 1')).toBeVisible();
   await page.getByRole('button', { name: 'Следующее медиа' }).click();
   await expect(page.locator('.profile-cover video')).toBeVisible();
+});
+
+test('a search profile opens in full, renders a Telegram-style track, and starts chat directly', async ({
+  page,
+}) => {
+  let directStarted = false;
+  await mockApi(page, false, {
+    '/api/conversations/direct': async (route) => {
+      directStarted = true;
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          conversationId: '00000000-0000-4000-8000-000000000601',
+        }),
+      });
+    },
+    '/api/conversations': async (route) => {
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify(
+          directStarted
+            ? [
+                {
+                  id: '00000000-0000-4000-8000-000000000601',
+                  status: 'active',
+                  anonymous_alias: 'Собеседник B',
+                  other_user_id: '00000000-0000-4000-8000-000000000003',
+                  short_headline: 'Ищу соавтора для долгой истории',
+                  contact_reveal_status: 'private',
+                  is_muted: 0,
+                },
+              ]
+            : [],
+        ),
+      });
+    },
+  });
+  await page.goto('/search');
+  await page.getByRole('button', { name: 'Открыть анкету полностью' }).click();
+  const dialog = page.getByRole('dialog', { name: 'Полная анкета' });
+  await expect(dialog).toBeVisible();
+  await expect(
+    dialog.getByText('Детективная история с несколькими вариантами финала.'),
+  ).toBeVisible();
+  await expect(dialog.getByText('Night Story', { exact: true })).toBeVisible();
+  await expect(dialog.getByText('RoleMate Artist', { exact: true })).toBeVisible();
+  await expect(
+    dialog.locator('img[src="/api/profile-media/00000000-0000-4000-8000-000000000203/thumbnail"]'),
+  ).toBeVisible();
+
+  const directRequest = page.waitForRequest(
+    (request) =>
+      new URL(request.url()).pathname === '/api/conversations/direct' &&
+      request.method() === 'POST',
+  );
+  await dialog.getByRole('button', { name: 'Написать' }).click();
+  expect((await directRequest).postDataJSON()).toEqual({
+    targetUserId: '00000000-0000-4000-8000-000000000003',
+  });
+  await expect(page).toHaveURL('/chats');
+  const composer = page.getByLabel('Напиши анонимное сообщение…');
+  await expect(composer).toBeVisible();
+  await composer.fill('Привет! Хочу обсудить сюжет.');
+  const messageRequest = page.waitForRequest(
+    (request) =>
+      new URL(request.url()).pathname.endsWith('/messages') && request.method() === 'POST',
+  );
+  await page.getByRole('button', { name: 'Отправить' }).click();
+  expect((await messageRequest).postDataJSON()).toEqual({
+    text: 'Привет! Хочу обсудить сюжет.',
+  });
+});
+
+test('only a Premium first video autoplays and loops in the search list', async ({ page }) => {
+  const profile = {
+    id: '00000000-0000-4000-8000-000000000401',
+    user_id: '00000000-0000-4000-8000-000000000402',
+    display_name: 'Видеоистория',
+    age_group: '21_25',
+    gender: 'not_specified',
+    short_headline: 'Ищу соавтора для видеосюжета',
+    about: 'Подробное описание анкеты для проверки воспроизведения видео.',
+    fandoms: '[]',
+    genres: '["драма"]',
+    tags: '[]',
+    writing_style: 'literary',
+    average_post_length: 'paragraphs_3_5',
+    activity_frequency: 'daily',
+    compatibility: 90,
+    is_premium: 1,
+    has_premium: 1,
+    media_items: JSON.stringify([
+      {
+        id: '00000000-0000-4000-8000-000000000403',
+        media_type: 'video',
+      },
+    ]),
+    rating_likes: 0,
+    rating_dislikes: 0,
+    rating_score: 0,
+  };
+  await mockApi(page, false, { '/api/search': [profile] });
+  await page.goto('/search');
+  const premiumVideo = page.locator('.profile-card:not(.profile-card-expanded) video');
+  await expect(premiumVideo).toHaveAttribute('autoplay', '', { timeout: 15_000 });
+  await expect(premiumVideo).toHaveAttribute('loop', '');
+
+  await mockApi(page, false, {
+    '/api/search': [{ ...profile, is_premium: 0, has_premium: 0 }],
+  });
+  await page.reload();
+  const freeVideo = page.locator('.profile-card:not(.profile-card-expanded) video');
+  await expect(freeVideo).not.toHaveAttribute('autoplay', '');
+  await expect(freeVideo).not.toHaveAttribute('loop', '');
+});
+
+test('profile editor saves the user-selected media carousel order', async ({ page }) => {
+  const media = [
+    {
+      id: '00000000-0000-4000-8000-000000000501',
+      media_type: 'photo',
+      sort_order: 0,
+      moderation_status: 'approved',
+      created_at: '2026-07-29 01:00:00',
+    },
+    {
+      id: '00000000-0000-4000-8000-000000000502',
+      media_type: 'video',
+      sort_order: 1,
+      moderation_status: 'approved',
+      created_at: '2026-07-29 01:01:00',
+    },
+  ];
+  let savedOrder: string[] = [];
+  let avatarMediaId: string | null = null;
+  await mockApi(page, false, {
+    '/api/profile/media': media,
+    '/api/profile/media/order': async (route) => {
+      savedOrder = (route.request().postDataJSON() as { mediaIds: string[] }).mediaIds;
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({ reordered: true, mediaIds: savedOrder }),
+      });
+    },
+    '/api/profile/avatar': async (route) => {
+      avatarMediaId = (route.request().postDataJSON() as { mediaId: string | null }).mediaId;
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({ avatarMediaId, renderMode: 'photo' }),
+      });
+    },
+  });
+  await page.goto('/profile/edit');
+  await page.getByRole('button', { name: 'Переместить выше: 2' }).click();
+  await expect
+    .poll(() => savedOrder)
+    .toEqual(['00000000-0000-4000-8000-000000000502', '00000000-0000-4000-8000-000000000501']);
+  await expect(page.getByText('Порядок карусели сохранён')).toBeVisible();
+  await page.getByRole('button', { name: 'Сделать аватаром' }).first().click();
+  await expect.poll(() => avatarMediaId).not.toBeNull();
+  await expect(page.getByText('Аватар профиля обновлён')).toBeVisible();
 });
 
 test('regular users never see quick moderation in search', async ({ page }) => {

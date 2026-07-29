@@ -549,10 +549,16 @@ export function createBot(
   });
   bot.command('matches', async (context) => {
     const user = await upsertUser(context, dataApi);
-    const matches = await dataApi.execute<
-      Array<{ display_name?: string; short_headline?: string; conversation_id: string }>
-    >('matches.list', { userId: user.userId, limit: 20 });
-    if (!matches.length) {
+    const [matches, incoming] = await Promise.all([
+      dataApi.execute<
+        Array<{ display_name?: string; short_headline?: string; conversation_id: string }>
+      >('matches.list', { userId: user.userId, limit: 20 }),
+      dataApi.execute<Array<{ user_id: string; display_name?: string; action: string }>>(
+        'swipes.incoming',
+        { userId: user.userId, limit: 20 },
+      ),
+    ]);
+    if (!matches.length && !incoming.length) {
       await context.reply(ru.bot.noMatches);
       return;
     }
@@ -562,7 +568,18 @@ export function createBot(
         .text(`💌 ${match.display_name ?? ru.bot.roleplayer}`, `chat:${match.conversation_id}`)
         .row();
     }
-    await context.reply(ru.bot.matchesTitle, { reply_markup: keyboard });
+    for (const like of incoming) {
+      keyboard
+        .text(
+          `${like.action === 'super_like' ? '⭐' : '💗'} ${like.display_name ?? ru.bot.roleplayer}`,
+          `swipe:like:${like.user_id}`,
+        )
+        .row();
+    }
+    await context.reply(
+      matches.length ? ru.bot.matchesTitle : ru.miniApp.community.incomingLikesTitle,
+      { reply_markup: keyboard },
+    );
   });
   bot.command('chats', async (context) => {
     const user = await upsertUser(context, dataApi);
@@ -1316,6 +1333,12 @@ export function createBot(
         type ProfileMediaUpload = {
           file: { file_id: string; file_unique_id: string; file_size?: number };
           mediaType: 'photo' | 'animation' | 'video' | 'audio' | 'voice' | 'document';
+          trackTitle?: string;
+          trackPerformer?: string;
+          thumbnailTelegramFileId?: string;
+          durationSeconds?: number;
+          width?: number;
+          height?: number;
         };
         let profileMedia: ProfileMediaUpload | undefined;
         if ('photo' in context.message) {
@@ -1324,21 +1347,38 @@ export function createBot(
             profileMedia = {
               file,
               mediaType: 'photo',
+              width: file.width,
+              height: file.height,
             };
         } else if ('animation' in context.message) {
           profileMedia = {
             file: context.message.animation,
             mediaType: 'animation',
+            durationSeconds: context.message.animation.duration,
+            width: context.message.animation.width,
+            height: context.message.animation.height,
           };
         } else if ('video' in context.message) {
           profileMedia = {
             file: context.message.video,
             mediaType: 'video',
+            durationSeconds: context.message.video.duration,
+            width: context.message.video.width,
+            height: context.message.video.height,
           };
         } else if ('audio' in context.message) {
+          const trackTitle =
+            context.message.audio.title ?? context.message.audio.file_name?.replace(/\.[^.]+$/, '');
           profileMedia = {
             file: context.message.audio,
             mediaType: 'audio',
+            ...(trackTitle ? { trackTitle } : {}),
+            ...(context.message.audio.performer
+              ? { trackPerformer: context.message.audio.performer }
+              : {}),
+            ...(context.message.audio.thumbnail?.file_id
+              ? { thumbnailTelegramFileId: context.message.audio.thumbnail.file_id }
+              : {}),
           };
         } else if ('voice' in context.message) {
           profileMedia = {
@@ -1353,7 +1393,18 @@ export function createBot(
         ) {
           profileMedia = {
             file: context.message.document,
-            mediaType: documentMime === 'image/gif' ? 'animation' : 'document',
+            mediaType:
+              documentMime === 'image/gif'
+                ? 'animation'
+                : documentMime.startsWith('audio/')
+                  ? 'audio'
+                  : 'video',
+            ...(documentMime.startsWith('audio/') && context.message.document.file_name
+              ? { trackTitle: context.message.document.file_name.replace(/\.[^.]+$/, '') }
+              : {}),
+            ...(context.message.document.thumbnail?.file_id
+              ? { thumbnailTelegramFileId: context.message.document.thumbnail.file_id }
+              : {}),
           };
         }
         if (!profileMedia?.file) {
@@ -1372,6 +1423,19 @@ export function createBot(
             telegramFileId: profileMedia.file.file_id,
             telegramFileUniqueId: profileMedia.file.file_unique_id,
             mediaType: profileMedia.mediaType,
+            ...(profileMedia.trackTitle ? { trackTitle: profileMedia.trackTitle } : {}),
+            ...(profileMedia.trackPerformer ? { trackPerformer: profileMedia.trackPerformer } : {}),
+            ...(profileMedia.thumbnailTelegramFileId
+              ? { thumbnailTelegramFileId: profileMedia.thumbnailTelegramFileId }
+              : {}),
+            ...(profileMedia.file.file_size !== undefined
+              ? { fileSizeBytes: profileMedia.file.file_size }
+              : {}),
+            ...(profileMedia.durationSeconds !== undefined
+              ? { durationSeconds: profileMedia.durationSeconds }
+              : {}),
+            ...(profileMedia.width !== undefined ? { width: profileMedia.width } : {}),
+            ...(profileMedia.height !== undefined ? { height: profileMedia.height } : {}),
           });
         } catch (error) {
           if (

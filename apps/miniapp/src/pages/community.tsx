@@ -14,6 +14,7 @@ import {
   MessageCircle,
   PauseCircle,
   Save,
+  Send,
   ShieldCheck,
   LogOut,
 } from 'lucide-react';
@@ -21,15 +22,14 @@ import { ApiError, api, type SettingsInput } from '../api.js';
 import { Button, Card, EmptyState, SectionTitle, Skeleton } from '../components/ui.js';
 import { getTelegram } from '../telegram.js';
 import { ChatTools } from '../components/chat-tools.js';
+import { ProfileAvatar } from '../components/profile-avatar.js';
 
 export function MatchesPage() {
   const queryClient = useQueryClient();
   const matches = useQuery({ queryKey: ['matches'], queryFn: api.matches });
-  const premium = useQuery({ queryKey: ['premium-status'], queryFn: api.premiumStatus });
   const incoming = useQuery({
     queryKey: ['incoming-likes'],
     queryFn: api.incomingLikes,
-    enabled: premium.data?.premium === true,
   });
   const likeBack = useMutation({
     mutationFn: (userId: string) => api.swipe(userId, 'like'),
@@ -47,7 +47,11 @@ export function MatchesPage() {
       <div className="space-y-3">
         {(matches.data ?? []).map((match) => (
           <Card key={match.id} className="flex items-center gap-4 p-4">
-            <span className="avatar">{match.display_name?.slice(0, 1) ?? 'R'}</span>
+            <ProfileAvatar
+              mediaId={match.avatar_media_id}
+              renderMode={match.avatar_render_mode}
+              name={match.display_name}
+            />
             <div className="min-w-0 flex-1">
               <strong>{match.display_name ?? ru.miniApp.community.roleplayer}</strong>
               <p className="truncate text-sm text-muted">{match.short_headline}</p>
@@ -65,36 +69,44 @@ export function MatchesPage() {
           />
         ) : null}
       </div>
-      <SectionTitle eyebrow="Premium">{ru.miniApp.community.incomingLikesTitle}</SectionTitle>
-      {!premium.data?.premium ? (
-        <Card className="p-4 text-sm text-soft">
-          {ru.miniApp.community.incomingLikesPremium}{' '}
-          <a className="text-lilac underline" href="/premium">
-            {ru.miniApp.search.openPremium}
-          </a>
-        </Card>
-      ) : (
-        <div className="space-y-3">
-          {incoming.data?.map((like) => (
-            <Card key={like.swipe_id} className="p-4">
-              <div className="flex items-center justify-between gap-3">
-                <div>
+      <SectionTitle eyebrow={ru.miniApp.community.likesEyebrow}>
+        {ru.miniApp.community.incomingLikesTitle}
+      </SectionTitle>
+      <div className="space-y-3">
+        {incoming.data?.map((like) => (
+          <Card key={like.swipe_id} className="p-4">
+            <div className="flex items-center justify-between gap-3">
+              <div className="flex min-w-0 items-center gap-3">
+                <ProfileAvatar
+                  mediaId={like.avatar_media_id}
+                  renderMode={like.avatar_render_mode}
+                  name={like.display_name}
+                />
+                <div className="min-w-0">
                   <strong>{like.display_name}</strong>
-                  <p className="text-sm text-muted">{like.short_headline}</p>
+                  <p className="truncate text-sm text-muted">{like.short_headline}</p>
                 </div>
-                <span className="status-pill">{like.action}</span>
               </div>
-              <Button
-                className="mt-3"
-                onClick={() => likeBack.mutate(like.user_id)}
-                loading={likeBack.isPending}
-              >
-                <Heart className="h-4 w-4" /> {ru.miniApp.community.likeBack}
-              </Button>
-            </Card>
-          ))}
-        </div>
-      )}
+              <span className="status-pill">
+                {like.action === 'super_like'
+                  ? ru.miniApp.community.superLike
+                  : ru.miniApp.community.like}
+              </span>
+            </div>
+            <Button
+              className="mt-3"
+              onClick={() => likeBack.mutate(like.user_id)}
+              loading={likeBack.isPending}
+            >
+              <Heart className="h-4 w-4" /> {ru.miniApp.community.likeBack}
+            </Button>
+          </Card>
+        ))}
+        {!incoming.isLoading && !incoming.data?.length ? (
+          <Card className="p-4 text-sm text-soft">{ru.miniApp.community.incomingLikesEmpty}</Card>
+        ) : null}
+        {incoming.isError ? <div className="error-box">{incoming.error.message}</div> : null}
+      </div>
     </div>
   );
 }
@@ -250,7 +262,10 @@ export function ChatsPage() {
               <p className="mt-3 text-sm text-muted">{ru.miniApp.community.contactPending}</p>
             ) : null}
             {chat.status === 'active' ? (
-              <ChatTools conversationId={chat.id} premium={premium.data?.premium === true} />
+              <>
+                <ChatComposer conversationId={chat.id} />
+                <ChatTools conversationId={chat.id} premium={premium.data?.premium === true} />
+              </>
             ) : null}
             {report.data ? (
               <p className="mt-3 text-sm text-soft">
@@ -261,6 +276,45 @@ export function ChatsPage() {
         ))}
       </div>
     </div>
+  );
+}
+
+function ChatComposer({ conversationId }: { conversationId: string }) {
+  const [text, setText] = useState('');
+  const send = useMutation({
+    mutationFn: (message: string) => api.sendConversationMessage(conversationId, message),
+    onSuccess: () => setText(''),
+  });
+  return (
+    <form
+      className="chat-composer"
+      onSubmit={(event) => {
+        event.preventDefault();
+        const message = text.trim();
+        if (message) send.mutate(message);
+      }}
+    >
+      <textarea
+        value={text}
+        maxLength={4_000}
+        rows={2}
+        placeholder={ru.miniApp.community.messagePlaceholder}
+        aria-label={ru.miniApp.community.messagePlaceholder}
+        onChange={(event) => setText(event.target.value)}
+      />
+      <Button
+        type="submit"
+        disabled={!text.trim()}
+        loading={send.isPending}
+        aria-label={ru.miniApp.community.sendMessage}
+      >
+        <Send className="h-4 w-4" />
+      </Button>
+      {send.isSuccess ? (
+        <span className="chat-composer-notice">{ru.miniApp.community.messageSent}</span>
+      ) : null}
+      {send.isError ? <span className="chat-composer-error">{send.error.message}</span> : null}
+    </form>
   );
 }
 

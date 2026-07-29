@@ -2,6 +2,8 @@ import { zodResolver } from '@hookform/resolvers/zod';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   ArrowRight,
+  ArrowDown,
+  ArrowUp,
   Check,
   ChevronDown,
   Edit3,
@@ -19,6 +21,7 @@ import { profileSchema, ru, type ProfileInput } from '@rolemate/shared';
 import { ApiError, api } from '../api.js';
 import type { ProfileMedia } from '../api.js';
 import { ProfileMarkdown } from '../components/markdown.js';
+import { ProfileAvatar } from '../components/profile-avatar.js';
 import { Button, Card, EmptyState, SectionTitle, Skeleton } from '../components/ui.js';
 import { getTelegram } from '../telegram.js';
 import { ProfileCard } from './search.js';
@@ -313,6 +316,9 @@ export function ProfilePage() {
   const data = profile.data;
   if (!data) return null;
   const isActive = Boolean(data.is_active);
+  const ownCover = media.data?.find((item) =>
+    ['photo', 'animation', 'video'].includes(item.media_type),
+  );
   return (
     <div>
       <SectionTitle
@@ -345,89 +351,129 @@ export function ProfilePage() {
           {preview.isError ? <div className="error-box">{preview.error.message}</div> : null}
         </section>
       ) : null}
-      <Card className="overflow-hidden">
-        <div className="profile-cover min-h-52" />
-        <div className="p-6">
-          <span className="status-pill">
-            {String(data.moderation_status) === 'approved' && !data.in_search_pool
-              ? ru.miniApp.profile.readyAfterSetup
-              : (ru.miniApp.profile.statuses[String(data.moderation_status)] ??
-                String(data.moderation_status))}
-          </span>
-          <h2 className="mt-3 font-display text-3xl">{String(data.short_headline)}</h2>
-          <ProfileMarkdown
-            className="mt-4 text-sm leading-relaxed text-soft"
-            allowLinks={Boolean(data.has_premium)}
-          >
-            {String(data.about)}
-          </ProfileMarkdown>
-          <div className="mt-5 flex flex-wrap gap-2">
-            {[...stringList(data.fandoms), ...stringList(data.genres)].map((tag) => (
-              <span className="tag" key={tag}>
-                {tag}
-              </span>
-            ))}
-          </div>
-        </div>
-      </Card>
-      <Card className="mt-5 p-5">
-        <div className="profile-state-card">
-          <div className="profile-state-copy">
-            <strong className="block">
-              {isActive ? ru.miniApp.profile.profileActive : ru.miniApp.profile.profileDisabled}
-            </strong>
-            {stateMessage ? <p className="mt-2 text-sm text-muted">{stateMessage}</p> : null}
-          </div>
-          <Button
-            className="profile-state-action"
-            type="button"
-            variant={isActive ? 'danger' : 'secondary'}
-            loading={setActive.isPending}
-            onClick={() => {
-              if (isActive && !window.confirm(ru.miniApp.profile.disableProfileConfirm)) return;
-              setStateMessage('');
-              setActive.mutate(!isActive);
-            }}
-          >
-            {isActive ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
-            {isActive ? ru.miniApp.profile.disableProfile : ru.miniApp.profile.enableProfile}
-          </Button>
-        </div>
-        {setActive.isError ? (
-          <div className="error-box mt-3">
-            {setActive.error instanceof ApiError &&
-            setActive.error.code === 'PROFILE_REACTIVATION_BLOCKED'
-              ? ru.miniApp.profile.profileReactivationBlocked
-              : setActive.error.message}
-          </div>
-        ) : null}
-      </Card>
-      {media.data?.length ? (
-        <section className="mt-5">
-          <h2 className="font-display text-2xl">{ru.miniApp.profile.mediaTitle}</h2>
-          <div className="mt-3 grid grid-cols-2 gap-3">
-            {media.data.map((item) => (
-              <Card className="overflow-hidden" key={item.id}>
-                <ProfileMediaPreview item={item} />
-                <div className="flex items-center justify-between gap-2 p-3 text-xs">
-                  <span className="status-pill">
-                    {item.moderation_status === 'approved'
-                      ? ru.miniApp.profile.mediaApproved
-                      : item.moderation_status === 'rejected'
-                        ? ru.miniApp.profile.mediaRejected
-                        : ru.miniApp.profile.mediaPending}
-                  </span>
-                  <button
-                    aria-label={ru.miniApp.profile.deleteMedia}
-                    onClick={() => removeMedia.mutate(item.id)}
-                  >
-                    <Trash2 className="h-4 w-4" />
-                  </button>
+      {!previewOpen ? (
+        <>
+          <Card className="overflow-hidden">
+            <div className="profile-cover min-h-52">
+              {ownCover ? (
+                ownCover.media_type === 'video' ? (
+                  <video
+                    className="absolute inset-0 h-full w-full bg-black object-contain"
+                    src={`/api/profile-media/${ownCover.id}`}
+                    controls
+                    playsInline
+                    preload="metadata"
+                  />
+                ) : (
+                  <img
+                    className="absolute inset-0 h-full w-full object-cover"
+                    src={`/api/profile-media/${ownCover.id}`}
+                    alt=""
+                  />
+                )
+              ) : null}
+            </div>
+            <div className="p-6">
+              <div className="mb-4 flex items-center gap-3">
+                <ProfileAvatar
+                  mediaId={
+                    typeof data.avatar_media_id === 'string' ? data.avatar_media_id : undefined
+                  }
+                  renderMode={
+                    data.avatar_render_mode === 'photo' || data.avatar_render_mode === 'animation'
+                      ? data.avatar_render_mode
+                      : undefined
+                  }
+                  name={String(data.display_name)}
+                  className="profile-avatar-large"
+                />
+                <div>
+                  <strong>{String(data.display_name)}</strong>
+                  <p className="text-xs text-muted">{ru.miniApp.profile.profileIdentityHint}</p>
                 </div>
-              </Card>
-            ))}
-          </div>
-        </section>
+              </div>
+              <span className="status-pill">
+                {String(data.moderation_status) === 'approved' && !data.in_search_pool
+                  ? ru.miniApp.profile.readyAfterSetup
+                  : (ru.miniApp.profile.statuses[String(data.moderation_status)] ??
+                    String(data.moderation_status))}
+              </span>
+              <h2 className="mt-3 font-display text-3xl">{String(data.short_headline)}</h2>
+              <ProfileMarkdown
+                className="mt-4 text-sm leading-relaxed text-soft"
+                allowLinks={Boolean(data.has_premium)}
+              >
+                {String(data.about)}
+              </ProfileMarkdown>
+              <div className="mt-5 flex flex-wrap gap-2">
+                {[...stringList(data.fandoms), ...stringList(data.genres)].map((tag) => (
+                  <span className="tag" key={tag}>
+                    {tag}
+                  </span>
+                ))}
+              </div>
+            </div>
+          </Card>
+          <Card className="mt-5 p-5">
+            <div className="profile-state-card">
+              <div className="profile-state-copy">
+                <strong className="block">
+                  {isActive ? ru.miniApp.profile.profileActive : ru.miniApp.profile.profileDisabled}
+                </strong>
+                {stateMessage ? <p className="mt-2 text-sm text-muted">{stateMessage}</p> : null}
+              </div>
+              <Button
+                className="profile-state-action"
+                type="button"
+                variant={isActive ? 'danger' : 'secondary'}
+                loading={setActive.isPending}
+                onClick={() => {
+                  if (isActive && !window.confirm(ru.miniApp.profile.disableProfileConfirm)) return;
+                  setStateMessage('');
+                  setActive.mutate(!isActive);
+                }}
+              >
+                {isActive ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                {isActive ? ru.miniApp.profile.disableProfile : ru.miniApp.profile.enableProfile}
+              </Button>
+            </div>
+            {setActive.isError ? (
+              <div className="error-box mt-3">
+                {setActive.error instanceof ApiError &&
+                setActive.error.code === 'PROFILE_REACTIVATION_BLOCKED'
+                  ? ru.miniApp.profile.profileReactivationBlocked
+                  : setActive.error.message}
+              </div>
+            ) : null}
+          </Card>
+          {media.data?.length ? (
+            <section className="mt-5">
+              <h2 className="font-display text-2xl">{ru.miniApp.profile.mediaTitle}</h2>
+              <div className="mt-3 grid grid-cols-2 gap-3">
+                {media.data.map((item) => (
+                  <Card className="overflow-hidden" key={item.id}>
+                    <ProfileMediaPreview item={item} />
+                    <div className="flex items-center justify-between gap-2 p-3 text-xs">
+                      <span className="status-pill">
+                        {item.moderation_status === 'approved'
+                          ? ru.miniApp.profile.mediaApproved
+                          : item.moderation_status === 'rejected'
+                            ? ru.miniApp.profile.mediaRejected
+                            : ru.miniApp.profile.mediaPending}
+                      </span>
+                      <button
+                        aria-label={ru.miniApp.profile.deleteMedia}
+                        onClick={() => removeMedia.mutate(item.id)}
+                      >
+                        <Trash2 className="h-4 w-4" />
+                      </button>
+                    </div>
+                  </Card>
+                ))}
+              </div>
+            </section>
+          ) : null}
+        </>
       ) : null}
       <p className="mt-5 text-center text-xs text-muted">{ru.miniApp.attribution}</p>
     </div>
@@ -438,6 +484,7 @@ export function ProfileEditorPage() {
   const queryClient = useQueryClient();
   const [languageDraft, setLanguageDraft] = useState('');
   const profile = useQuery({ queryKey: ['profile'], queryFn: api.profile, retry: false });
+  const media = useQuery({ queryKey: ['profile-media'], queryFn: api.profileMedia, retry: false });
   const form = useForm<ProfileInput>({
     resolver: zodResolver(profileSchema) as Resolver<ProfileInput>,
     defaultValues: defaults,
@@ -455,6 +502,37 @@ export function ProfileEditorPage() {
       void queryClient.invalidateQueries({ queryKey: ['search'] });
     },
   });
+  const reorderMedia = useMutation({
+    mutationFn: api.reorderProfileMedia,
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ['profile-media'] });
+      void queryClient.invalidateQueries({ queryKey: ['profile-preview'] });
+      void queryClient.invalidateQueries({ queryKey: ['search'] });
+    },
+  });
+  const setAvatar = useMutation({
+    mutationFn: ({ mediaId }: { mediaId: string | null }) => api.setProfileAvatar(mediaId),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ['profile'] });
+      void queryClient.invalidateQueries({ queryKey: ['profile-media'] });
+      void queryClient.invalidateQueries({ queryKey: ['profile-preview'] });
+      void queryClient.invalidateQueries({ queryKey: ['search'] });
+      void queryClient.invalidateQueries({ queryKey: ['incoming-likes'] });
+      void queryClient.invalidateQueries({ queryKey: ['matches'] });
+    },
+  });
+  const moveMedia = (index: number, direction: -1 | 1) => {
+    if (!media.data) return;
+    const target = index + direction;
+    if (target < 0 || target >= media.data.length) return;
+    const mediaIds = media.data.map((item) => item.id);
+    const currentId = mediaIds[index];
+    const targetId = mediaIds[target];
+    if (!currentId || !targetId) return;
+    mediaIds[index] = targetId;
+    mediaIds[target] = currentId;
+    reorderMedia.mutate(mediaIds);
+  };
   const field = 'input-field';
   const selectedAgeGroup = form.watch('ageGroup');
   const isMinor = selectedAgeGroup === 'under_16' || selectedAgeGroup === '16_17';
@@ -779,6 +857,83 @@ export function ProfileEditorPage() {
           {ru.miniApp.profile.addInBot}
         </Button>
       </Card>
+      {media.data && media.data.length > 0 ? (
+        <Card className="space-y-4 p-5">
+          <div>
+            <strong>{ru.miniApp.profile.mediaOrderTitle}</strong>
+            <p className="mt-1 text-sm text-muted">{ru.miniApp.profile.mediaOrderDescription}</p>
+            <p className="mt-1 text-xs text-muted">{ru.miniApp.profile.avatarLimits}</p>
+          </div>
+          <div className="profile-media-order-list">
+            {media.data.map((item, index) => (
+              <div className="profile-media-order-item" key={item.id}>
+                <div className="profile-media-order-preview">
+                  <ProfileMediaPreview item={item} />
+                </div>
+                <div className="min-w-0 flex-1">
+                  <strong className="block truncate">
+                    {item.track_title || `${ru.miniApp.profile.mediaTitle} ${index + 1}`}
+                  </strong>
+                  {item.track_performer ? (
+                    <span className="block truncate text-xs text-muted">
+                      {item.track_performer}
+                    </span>
+                  ) : null}
+                </div>
+                <div className="profile-media-order-actions">
+                  {item.media_type === 'photo' || item.media_type === 'video' ? (
+                    <button
+                      className={item.is_avatar ? 'is-selected' : ''}
+                      type="button"
+                      disabled={setAvatar.isPending}
+                      aria-label={
+                        item.is_avatar
+                          ? ru.miniApp.profile.removeAvatar
+                          : ru.miniApp.profile.setAvatar
+                      }
+                      onClick={() => setAvatar.mutate({ mediaId: item.is_avatar ? null : item.id })}
+                    >
+                      <UserRound />
+                    </button>
+                  ) : null}
+                  <button
+                    type="button"
+                    disabled={index === 0 || reorderMedia.isPending}
+                    aria-label={`${ru.miniApp.profile.moveMediaUp}: ${index + 1}`}
+                    onClick={() => moveMedia(index, -1)}
+                  >
+                    <ArrowUp />
+                  </button>
+                  <button
+                    type="button"
+                    disabled={index === media.data.length - 1 || reorderMedia.isPending}
+                    aria-label={`${ru.miniApp.profile.moveMediaDown}: ${index + 1}`}
+                    onClick={() => moveMedia(index, 1)}
+                  >
+                    <ArrowDown />
+                  </button>
+                </div>
+              </div>
+            ))}
+          </div>
+          {reorderMedia.isSuccess ? (
+            <p className="text-sm text-lilac">{ru.miniApp.profile.mediaOrderSaved}</p>
+          ) : null}
+          {reorderMedia.isError ? (
+            <div className="error-box">{reorderMedia.error.message}</div>
+          ) : null}
+          {setAvatar.isSuccess ? (
+            <p className="text-sm text-lilac">{ru.miniApp.profile.avatarSaved}</p>
+          ) : null}
+          {setAvatar.isError ? (
+            <div className="error-box">
+              {setAvatar.error instanceof ApiError && setAvatar.error.code === 'VIDEO_AVATAR_LIMIT'
+                ? ru.miniApp.profile.avatarLimitError
+                : setAvatar.error.message}
+            </div>
+          ) : null}
+        </Card>
+      ) : null}
       {save.isError ? (
         <div className="error-box">
           <p>{save.error.message}</p>

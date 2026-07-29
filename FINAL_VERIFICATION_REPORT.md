@@ -9,10 +9,10 @@
 Northflank и банковская карта не являются обязательными зависимостями.
 
 - MiniApp и Bot API: <https://rolemate-app.carreljeremih.workers.dev>
-- App Worker version: `b47a5d08-eafc-4196-b417-02ccfe51c529`
+- App Worker version: `3af87d69-d3e4-40f7-98f3-fc025d8817a2`
 - D1 Data API: <https://rolemate-data-api.carreljeremih.workers.dev>
-- Data API version: `508b1036-9661-4d67-ae11-4435497b7ab5`
-- Preview Data API version: `2eccf767-5e9d-4a3e-a7db-69304972cdb5`
+- Data API version: `67102638-0d58-460d-8010-588969b0d207`
+- Preview Data API version: `4070eec0-32d3-4373-a52f-f89e300fb1fe`
 - D1 production и preview: миграции `0001`–`0021` применены, ожидающих миграций нет.
 - Production Time Travel bookmark перед `0019`–`0021`:
   `0000000c-000003fb-000050b7-9cf2cee41ffe0b88d26ba35a5156adef`.
@@ -23,6 +23,9 @@ Northflank и банковская карта не являются обязат
 
 - Исправлены поиск и ранжирование анкет: анкеты других пользователей видимы,
   возрастная изоляция удалена, сверху показываются более релевантные результаты.
+- Поставленные ранее `like` и `super_like` больше не исключают анкету из поиска;
+  явный пропуск, взаимные блокировки, отключение и модерационные ограничения
+  продолжают скрывать её.
 - Добавлены поиск по ключевым словам, тегам и псевдониму, пользовательские теги,
   ввод через запятую для языков, жанров, фандомов и целей поиска.
 - Анкеты публикуются автоматически; медиа больше не ждёт обязательной
@@ -41,8 +44,9 @@ Northflank и банковская карта не являются обязат
   внутреннему UUID профиля и не зависят от изменяемого Telegram username.
 - Добавлены профильные фото- и видеоаватары. Видео проверяется по лимитам 6 секунд,
   8 МБ и 720×720 и отображается как бесшумная зацикленная GIF-анимация.
-- Исправлен запуск разделов из `/menu`: бот создаёт отдельную HMAC-подписанную,
-  ограниченную по времени и привязанную к Telegram ID и маршруту ссылку. MiniApp
+- Исправлен запуск разделов из `/menu`: бот создаёт компактную HMAC-подписанную,
+  ограниченную по времени и привязанную к Telegram ID и маршруту ссылку прямо в
+  URL-пути, поэтому Telegram-клиенты не могут потерять её как query-параметр. MiniApp
   сначала использует действующую HttpOnly-сессию, затем безопасный menu launch,
   а после этого Telegram `initData`. Подмена маршрута, подписи и срока действия
   отклоняется.
@@ -78,7 +82,7 @@ Northflank и банковская карта не являются обязат
 | Prettier                         | passed                                |
 | ESLint                           | passed                                |
 | TypeScript `strict`              | passed                                |
-| Unit/integration/migration tests | 69 passed                             |
+| Unit/integration/migration tests | 70 passed                             |
 | Playwright E2E                   | 102 passed: Android, iPhone и desktop |
 | Production build                 | passed                                |
 | Dependency audit                 | известных уязвимостей нет             |
@@ -122,7 +126,7 @@ Northflank и банковская карта не являются обязат
 | App `/version`              | 200, production            |
 | Data API `/health/live`     | 200, `ok`                  |
 | Data API `/health/ready`    | 200, `ready`               |
-| MiniApp JS/CSS              | 200, `index-CF3gksza.js`   |
+| MiniApp JS/CSS              | 200, `index-BQ0ejPEf.js`   |
 | Menu auth с ложной подписью | 401, `INVALID_MENU_LAUNCH` |
 | User API без сессии         | 401                        |
 | Data API без подписи        | 401                        |

@@ -9,7 +9,7 @@
 Northflank и банковская карта не являются обязательными зависимостями.
 
 - MiniApp и Bot API: <https://rolemate-app.carreljeremih.workers.dev>
-- App Worker version: `20f71195-4d2b-46f6-9aed-1cfb9e6121c7`
+- App Worker version: `b47a5d08-eafc-4196-b417-02ccfe51c529`
 - D1 Data API: <https://rolemate-data-api.carreljeremih.workers.dev>
 - Data API version: `508b1036-9661-4d67-ae11-4435497b7ab5`
 - Preview Data API version: `2eccf767-5e9d-4a3e-a7db-69304972cdb5`
@@ -41,9 +41,11 @@ Northflank и банковская карта не являются обязат
   внутреннему UUID профиля и не зависят от изменяемого Telegram username.
 - Добавлены профильные фото- и видеоаватары. Видео проверяется по лимитам 6 секунд,
   8 МБ и 720×720 и отображается как бесшумная зацикленная GIF-анимация.
-- Исправлен запуск разделов из `/menu`: действующая HttpOnly-сессия
-  восстанавливается до Telegram-переавторизации, а первый запуск ждёт SDK и
-  восстанавливает подписанный `initData` из launch URL.
+- Исправлен запуск разделов из `/menu`: бот создаёт отдельную HMAC-подписанную,
+  ограниченную по времени и привязанную к Telegram ID и маршруту ссылку. MiniApp
+  сначала использует действующую HttpOnly-сессию, затем безопасный menu launch,
+  а после этого Telegram `initData`. Подмена маршрута, подписи и срока действия
+  отклоняется.
 - Добавлены предпросмотр собственной анкеты и понятное описание сюжетных вариантов.
 - После успешного действия «Сохранить и опубликовать» кнопка становится зелёной с
   галочкой и текстом «Опубликовано!». При новом редактировании состояние сбрасывается.
@@ -76,7 +78,7 @@ Northflank и банковская карта не являются обязат
 | Prettier                         | passed                                |
 | ESLint                           | passed                                |
 | TypeScript `strict`              | passed                                |
-| Unit/integration/migration tests | 66 passed                             |
+| Unit/integration/migration tests | 69 passed                             |
 | Playwright E2E                   | 102 passed: Android, iPhone и desktop |
 | Production build                 | passed                                |
 | Dependency audit                 | известных уязвимостей нет             |
@@ -113,16 +115,17 @@ Northflank и банковская карта не являются обязат
 
 Публичная проверка после развёртывания:
 
-| Endpoint                 | Результат                      |
-| ------------------------ | ------------------------------ |
-| App `/health/live`       | 200, `ok`                      |
-| App `/health/ready`      | 200, D1 `true`                 |
-| App `/version`           | 200, production                |
-| Data API `/health/live`  | 200, `ok`                      |
-| Data API `/health/ready` | 200, `ready`                   |
-| MiniApp JS/CSS           | 200, новая версия опубликована |
-| User API без сессии      | 401                            |
-| Data API без подписи     | 401                            |
+| Endpoint                    | Результат                  |
+| --------------------------- | -------------------------- |
+| App `/health/live`          | 200, `ok`                  |
+| App `/health/ready`         | 200, D1 `true`             |
+| App `/version`              | 200, production            |
+| Data API `/health/live`     | 200, `ok`                  |
+| Data API `/health/ready`    | 200, `ready`               |
+| MiniApp JS/CSS              | 200, `index-CF3gksza.js`   |
+| Menu auth с ложной подписью | 401, `INVALID_MENU_LAUNCH` |
+| User API без сессии         | 401                        |
+| Data API без подписи        | 401                        |
 
 ## Честно оставшиеся внешние проверки
 

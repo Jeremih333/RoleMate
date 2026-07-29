@@ -124,6 +124,12 @@ export const workerOperations = {
     requesterUserId: z.string().uuid(),
     profileUserId: z.string().uuid(),
   }),
+  'publicProfiles.search': z
+    .object({
+      requesterUserId: z.string().uuid(),
+      query: z.string().trim().max(80).default(''),
+    })
+    .merge(paginationSchema),
   'publicProfiles.update': z.object({
     userId: z.string().uuid(),
     displayName: z.string().trim().min(2).max(80),
@@ -347,6 +353,9 @@ export const workerOperations = {
   'posts.media.resolve': z.object({ userId: z.string().uuid(), postId: z.string().uuid() }),
   'posts.own.list': z.object({ userId: z.string().uuid() }).merge(paginationSchema),
   'posts.feed.list': z.object({ userId: z.string().uuid() }).merge(paginationSchema),
+  'posts.search': z
+    .object({ userId: z.string().uuid(), query: z.string().trim().max(80).default('') })
+    .merge(paginationSchema),
   'posts.comments.list': z
     .object({ userId: z.string().uuid(), postId: z.string().uuid() })
     .merge(paginationSchema),
@@ -451,6 +460,11 @@ export const workerOperations = {
     expiresAt: z.string().datetime(),
   }),
   'sessions.get': z.object({ sessionHash: z.string().length(64) }),
+  'sessions.refresh': z.object({
+    sessionHash: z.string().length(64),
+    csrfHash: z.string().length(64),
+    expiresAt: z.string().datetime(),
+  }),
   'sessions.revoke': z.object({ sessionHash: z.string().length(64) }),
   'system.runtime': z.object({}),
   'moderators.assign': z.object({
@@ -480,6 +494,34 @@ export const workerOperations = {
         .default('pending'),
     })
     .merge(paginationSchema),
+  'admin.publicProfiles.list': z
+    .object({
+      adminUserId: z.string().uuid(),
+      query: z.string().max(128).default(''),
+      status: z.enum(['active', 'blocked', 'all']).default('all'),
+    })
+    .merge(paginationSchema),
+  'admin.publicProfile.moderate': z.object({
+    adminUserId: z.string().uuid(),
+    profileUserId: z.string().uuid(),
+    status: z.enum(['active', 'blocked']),
+    reason: z.string().min(3).max(1_000),
+  }),
+  'admin.questionnaires.list': z
+    .object({
+      adminUserId: z.string().uuid(),
+      query: z.string().max(128).default(''),
+      status: z
+        .enum(['draft', 'pending', 'approved', 'rejected', 'paused', 'archived', 'all'])
+        .default('all'),
+    })
+    .merge(paginationSchema),
+  'admin.questionnaire.moderate': z.object({
+    adminUserId: z.string().uuid(),
+    questionnaireId: z.string().uuid(),
+    status: z.enum(['approved', 'rejected', 'paused', 'archived']),
+    reason: z.string().min(3).max(1_000),
+  }),
   'admin.posts.list': z
     .object({
       adminUserId: z.string().uuid(),

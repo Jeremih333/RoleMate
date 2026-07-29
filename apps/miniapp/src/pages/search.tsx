@@ -21,9 +21,13 @@ import { useLocation } from 'wouter';
 import {
   ApiError,
   api,
+  type GlobalSearchResult,
+  type GlobalSearchScope,
+  type PublicUserProfile,
   type SearchPreferences,
   type SearchPreferencesInput,
   type SearchProfile,
+  type SocialPost,
 } from '../api.js';
 import { Button, Card, EmptyState, Skeleton } from '../components/ui.js';
 import { ProfileMarkdown } from '../components/markdown.js';
@@ -413,17 +417,213 @@ function ProfileDetails({ profile }: { profile: SearchProfile }) {
   );
 }
 
+function SearchScopeTabs({
+  value,
+  onChange,
+}: {
+  value: GlobalSearchScope;
+  onChange: (scope: GlobalSearchScope) => void;
+}) {
+  const scopes: GlobalSearchScope[] = ['all', 'profiles', 'questionnaires', 'posts'];
+  return (
+    <div className="mb-4 grid grid-cols-2 gap-2 sm:grid-cols-4" role="tablist">
+      {scopes.map((scope) => (
+        <Button
+          key={scope}
+          type="button"
+          role="tab"
+          aria-selected={value === scope}
+          variant={value === scope ? 'primary' : 'secondary'}
+          onClick={() => onChange(scope)}
+        >
+          {ru.miniApp.search.scopes[scope]}
+        </Button>
+      ))}
+    </div>
+  );
+}
+
+function GlobalProfileResult({ profile }: { profile: PublicUserProfile }) {
+  return (
+    <Card className="p-4">
+      <div className="flex items-start gap-3">
+        <ProfileAvatar
+          mediaId={profile.avatar_media_id}
+          renderMode={profile.avatar_render_mode}
+          name={profile.display_name}
+        />
+        <div className="min-w-0 flex-1">
+          <strong className="break-words">{profile.display_name}</strong>
+          <p className="mt-1 whitespace-pre-wrap break-words text-sm text-soft">{profile.bio}</p>
+          <p className="mt-2 break-all text-xs text-muted">
+            {ru.miniApp.search.resultId(profile.id)}
+          </p>
+          <p className="mt-1 text-xs text-muted">
+            {ru.miniApp.social.questionnaireCount(profile.questionnaire_count)} ·{' '}
+            {ru.miniApp.social.postCount(profile.post_count)}
+          </p>
+        </div>
+      </div>
+    </Card>
+  );
+}
+
+function GlobalQuestionnaireResult({
+  questionnaire,
+  onMessage,
+  pending,
+}: {
+  questionnaire: SearchProfile;
+  onMessage: () => void;
+  pending: boolean;
+}) {
+  return (
+    <Card className="p-4">
+      <div className="flex items-start gap-3">
+        <ProfileAvatar
+          mediaId={questionnaire.avatar_media_id}
+          renderMode={questionnaire.avatar_render_mode}
+          name={questionnaire.display_name}
+        />
+        <div className="min-w-0 flex-1">
+          <strong className="break-words">{questionnaire.display_name}</strong>
+          <p className="mt-1 break-words text-sm text-muted">{questionnaire.short_headline}</p>
+          <p className="mt-2 line-clamp-3 whitespace-pre-wrap break-words text-sm text-soft">
+            {questionnaire.about}
+          </p>
+          <p className="mt-2 break-all text-xs text-muted">
+            {ru.miniApp.search.resultId(questionnaire.id)}
+          </p>
+        </div>
+      </div>
+      <Button className="mt-3" loading={pending} onClick={onMessage}>
+        <MessageCircle className="h-4 w-4" /> {ru.miniApp.search.writeMessage}
+      </Button>
+    </Card>
+  );
+}
+
+function GlobalPostResult({ post }: { post: SocialPost }) {
+  const hasMedia = Boolean(post.media_telegram_file_id);
+  return (
+    <Card className="overflow-hidden">
+      <div className="flex items-center gap-3 p-4">
+        <ProfileAvatar
+          mediaId={post.avatar_media_id}
+          renderMode={post.avatar_render_mode}
+          name={post.display_name}
+        />
+        <div className="min-w-0">
+          <strong className="break-words">{post.display_name}</strong>
+          <p className="break-all text-xs text-muted">{ru.miniApp.search.resultId(post.id)}</p>
+        </div>
+      </div>
+      {hasMedia && (post.content_type === 'photo' || post.content_type === 'animation') ? (
+        <img
+          className="max-h-80 w-full object-contain"
+          src={`/api/posts/${post.id}/media`}
+          alt=""
+          loading="lazy"
+        />
+      ) : hasMedia && (post.content_type === 'video' || post.content_type === 'video_note') ? (
+        <video
+          className="max-h-80 w-full"
+          src={`/api/posts/${post.id}/media`}
+          controls
+          playsInline
+          preload="metadata"
+        />
+      ) : null}
+      <p className="whitespace-pre-wrap break-words p-4 text-sm text-soft">{post.text_preview}</p>
+      <div className="flex gap-3 px-4 pb-4 text-xs text-muted">
+        <span>👍 {post.likes}</span>
+        <span>👎 {post.dislikes}</span>
+        <span>💬 {post.comment_count}</span>
+      </div>
+    </Card>
+  );
+}
+
+function UnifiedSearchResults({
+  result,
+  scope,
+  pendingUserId,
+  onMessage,
+}: {
+  result: GlobalSearchResult;
+  scope: GlobalSearchScope;
+  pendingUserId: string | null;
+  onMessage: (userId: string) => void;
+}) {
+  const total = result.profiles.length + result.questionnaires.length + result.posts.length;
+  if (!total) {
+    return (
+      <EmptyState
+        icon={<Search className="h-7 w-7" />}
+        title={ru.miniApp.search.emptyTitle}
+        description={ru.miniApp.search.globalEmpty}
+      />
+    );
+  }
+  return (
+    <div className="space-y-6">
+      {(scope === 'all' || scope === 'profiles') && result.profiles.length ? (
+        <section>
+          <h2 className="mb-3 font-display text-2xl">{ru.miniApp.search.profilesFound}</h2>
+          <div className="space-y-3">
+            {result.profiles.map((profile) => (
+              <GlobalProfileResult key={profile.id} profile={profile} />
+            ))}
+          </div>
+        </section>
+      ) : null}
+      {(scope === 'all' || scope === 'questionnaires') && result.questionnaires.length ? (
+        <section>
+          <h2 className="mb-3 font-display text-2xl">{ru.miniApp.search.questionnairesFound}</h2>
+          <div className="space-y-3">
+            {result.questionnaires.map((questionnaire) => (
+              <GlobalQuestionnaireResult
+                key={questionnaire.id}
+                questionnaire={questionnaire}
+                pending={pendingUserId === questionnaire.user_id}
+                onMessage={() => onMessage(questionnaire.user_id)}
+              />
+            ))}
+          </div>
+        </section>
+      ) : null}
+      {(scope === 'all' || scope === 'posts') && result.posts.length ? (
+        <section>
+          <h2 className="mb-3 font-display text-2xl">{ru.miniApp.search.postsFound}</h2>
+          <div className="space-y-3">
+            {result.posts.map((post) => (
+              <GlobalPostResult key={post.id} post={post} />
+            ))}
+          </div>
+        </section>
+      ) : null}
+    </div>
+  );
+}
+
 export function SearchPage() {
   const [, navigate] = useLocation();
   const queryClient = useQueryClient();
   const [query, setQuery] = useState('');
   const [queryDraft, setQueryDraft] = useState('');
+  const [scope, setScope] = useState<GlobalSearchScope>('all');
   const [staffNotice, setStaffNotice] = useState('');
   const [fullProfileOpen, setFullProfileOpen] = useState(false);
   const me = useQuery({ queryKey: ['me'], queryFn: api.me });
   const profiles = useQuery({
     queryKey: ['search', query],
     queryFn: () => api.search(query),
+    enabled: scope === 'questionnaires',
+  });
+  const global = useQuery({
+    queryKey: ['global-search', query, scope],
+    queryFn: () => api.globalSearch(query, scope),
+    enabled: scope !== 'questionnaires',
   });
   const premium = useQuery({ queryKey: ['premium-status'], queryFn: api.premiumStatus });
   const preferences = useQuery({
@@ -527,9 +727,42 @@ export function SearchPage() {
       setStaffNotice(ru.miniApp.search.moderationCompleted);
       if (variables.action !== 'warn') setIndex((value) => value + 1);
       void queryClient.invalidateQueries({ queryKey: ['admin-users'] });
-      void queryClient.invalidateQueries({ queryKey: ['admin-profiles'] });
+      void queryClient.invalidateQueries({ queryKey: ['admin-questionnaires'] });
+      void queryClient.invalidateQueries({ queryKey: ['admin-public-profiles'] });
     },
   });
+
+  if (scope !== 'questionnaires') {
+    return (
+      <div className="mx-auto max-w-lg">
+        <div className="mb-4">
+          <p className="eyebrow">{ru.miniApp.search.eyebrow}</p>
+          <h1 className="font-display text-3xl font-semibold">{ru.miniApp.search.title}</h1>
+        </div>
+        <SearchScopeTabs
+          value={scope}
+          onChange={(nextScope) => {
+            setScope(nextScope);
+            setIndex(0);
+          }}
+        />
+        <div className="mb-4">{searchForm}</div>
+        {global.isLoading ? <Skeleton className="h-[28rem]" /> : null}
+        {global.isError ? <div className="error-box">{global.error.message}</div> : null}
+        {global.data ? (
+          <UnifiedSearchResults
+            result={global.data}
+            scope={scope}
+            pendingUserId={directChat.isPending ? (directChat.variables ?? null) : null}
+            onMessage={(userId) => directChat.mutate(userId)}
+          />
+        ) : null}
+        {directChat.isError ? (
+          <div className="error-box mt-3">{ru.miniApp.search.directChatError}</div>
+        ) : null}
+      </div>
+    );
+  }
 
   if (profiles.isLoading) {
     return (
@@ -555,6 +788,13 @@ export function SearchPage() {
         description={emptyDescription}
         action={
           <div className="space-y-3">
+            <SearchScopeTabs
+              value={scope}
+              onChange={(nextScope) => {
+                setScope(nextScope);
+                setIndex(0);
+              }}
+            />
             {searchForm}
             <Button
               onClick={() => {
@@ -586,6 +826,13 @@ export function SearchPage() {
           <SlidersHorizontal className="h-5 w-5" />
         </Button>
       </div>
+      <SearchScopeTabs
+        value={scope}
+        onChange={(nextScope) => {
+          setScope(nextScope);
+          setIndex(0);
+        }}
+      />
       <div className="mb-4">{searchForm}</div>
       {premium.data ? (
         <p className="mb-3 text-center text-xs text-muted">

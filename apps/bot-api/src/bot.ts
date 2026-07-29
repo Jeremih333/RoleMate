@@ -499,6 +499,16 @@ export function createBot(
       });
       return;
     }
+    if (parameter === 'create_post') {
+      await dataApi.execute('posts.draft.start', { userId: user.userId });
+      await context.reply(ru.bot.postPrompt, {
+        reply_markup: {
+          force_reply: true,
+          selective: true,
+        },
+      });
+      return;
+    }
     const buttons = new InlineKeyboard()
       .text(ru.bot.buttons.start, 'onboarding:start')
       .row()

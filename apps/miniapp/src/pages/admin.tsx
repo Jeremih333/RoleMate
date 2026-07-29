@@ -31,12 +31,15 @@ import {
   type Product,
 } from '../api.js';
 import { Button, Card, SectionTitle, Skeleton } from '../components/ui.js';
+import { ProfileAvatar } from '../components/profile-avatar.js';
 import { useUserStore } from '../store.js';
 
 type AdminSection =
   | 'dashboard'
   | 'users'
-  | 'profiles'
+  | 'publicProfiles'
+  | 'questionnaires'
+  | 'posts'
   | 'reports'
   | 'payments'
   | 'referrals'
@@ -67,7 +70,9 @@ export function AdminPage() {
   ] as const;
   const moderationSections = [
     ['users', ru.miniApp.admin.sections[1]],
-    ['profiles', ru.miniApp.admin.sections[2]],
+    ['publicProfiles', ru.miniApp.admin.sections[13]],
+    ['questionnaires', ru.miniApp.admin.sections[2]],
+    ['posts', ru.miniApp.admin.sections[14]],
     ['reports', ru.miniApp.admin.sections[3]],
   ] as const;
   return (
@@ -100,7 +105,9 @@ export function AdminPage() {
         <AdminSectionBoundary key={section}>
           {section === 'dashboard' ? <Dashboard /> : null}
           {section === 'users' ? <UsersQueue isOwner={Boolean(isOwner)} /> : null}
-          {section === 'profiles' ? <ProfilesQueue /> : null}
+          {section === 'publicProfiles' ? <PublicProfilesQueue /> : null}
+          {section === 'questionnaires' ? <QuestionnairesQueue /> : null}
+          {section === 'posts' ? <PostsQueue /> : null}
           {section === 'reports' ? <ReportsQueue /> : null}
           {section === 'payments' ? <Payments /> : null}
           {section === 'referrals' ? <Referrals /> : null}
@@ -344,20 +351,17 @@ function UsersQueue({ isOwner }: { isOwner: boolean }) {
   );
 }
 
-function ProfilesQueue() {
+function PublicProfilesQueue() {
   const queryClient = useQueryClient();
   const [search, setSearch] = useState('');
   const profiles = useQuery({
-    queryKey: ['admin-profiles', search],
-    queryFn: () => api.adminProfiles('all', search),
+    queryKey: ['admin-public-profiles', search],
+    queryFn: () => api.adminPublicProfiles('all', search),
   });
   const moderate = useMutation({
-    mutationFn: (input: {
-      profileId: string;
-      status: 'approved' | 'rejected' | 'paused' | 'archived';
-      reason: string;
-    }) => api.adminModerateProfile(input.profileId, input.status, input.reason),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['admin-profiles'] }),
+    mutationFn: (input: { profileUserId: string; status: 'active' | 'blocked'; reason: string }) =>
+      api.adminModeratePublicProfile(input.profileUserId, input.status, input.reason),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['admin-public-profiles'] }),
   });
   if (profiles.isLoading) return <Skeleton className="h-72" />;
   if (profiles.isError)
@@ -370,7 +374,184 @@ function ProfilesQueue() {
           className="input-field"
           value={search}
           onChange={(event) => setSearch(event.target.value)}
-          placeholder={ru.miniApp.admin.searchPlaceholder}
+          placeholder={ru.miniApp.admin.contentSearchPlaceholder}
+        />
+      </label>
+      {profiles.data?.map((profile) => (
+        <Card key={profile.id} className="p-4">
+          <div className="flex items-start gap-3">
+            <ProfileAvatar
+              mediaId={profile.avatar_media_id}
+              renderMode={profile.avatar_render_mode}
+              name={profile.display_name}
+            />
+            <div className="min-w-0 flex-1">
+              <strong className="break-words">{profile.display_name}</strong>
+              <p className="mt-1 break-all text-xs text-muted">
+                {ru.miniApp.admin.contentId(profile.id)}
+              </p>
+              <p className="text-xs text-muted">
+                {ru.miniApp.admin.telegramUser(profile.telegram_user_id)} ·{' '}
+                {ru.miniApp.admin.riskLabel} {profile.risk_score}
+              </p>
+            </div>
+            <span className="status-pill">
+              {ru.miniApp.admin.publicProfileStatuses[profile.moderation_status] ??
+                profile.moderation_status}
+            </span>
+          </div>
+          <p className="mt-3 whitespace-pre-wrap break-words text-sm text-soft">{profile.bio}</p>
+          <p className="mt-3 text-xs text-muted">
+            {ru.miniApp.social.questionnaireCount(profile.questionnaire_count)} ·{' '}
+            {ru.miniApp.social.postCount(profile.post_count)}
+          </p>
+          <div className="mt-3 flex flex-wrap gap-2">
+            {profile.moderation_status === 'blocked' ? (
+              <Button
+                loading={moderate.isPending}
+                onClick={() =>
+                  moderate.mutate({
+                    profileUserId: profile.id,
+                    status: 'active',
+                    reason: ru.miniApp.admin.restorePublicProfileReason,
+                  })
+                }
+              >
+                {ru.miniApp.admin.restorePublicProfile}
+              </Button>
+            ) : (
+              <Button
+                variant="danger"
+                loading={moderate.isPending}
+                onClick={() => {
+                  const reason = window.prompt(ru.miniApp.admin.blockPublicProfilePrompt)?.trim();
+                  if (reason && reason.length >= 3) {
+                    moderate.mutate({
+                      profileUserId: profile.id,
+                      status: 'blocked',
+                      reason,
+                    });
+                  }
+                }}
+              >
+                {ru.miniApp.admin.blockPublicProfile}
+              </Button>
+            )}
+          </div>
+        </Card>
+      ))}
+      <MutationFeedback states={[moderate]} success={ru.miniApp.admin.actionCompleted} />
+    </div>
+  );
+}
+
+function PostsQueue() {
+  const queryClient = useQueryClient();
+  const [search, setSearch] = useState('');
+  const posts = useQuery({
+    queryKey: ['admin-posts', search],
+    queryFn: () => api.adminPosts('all', search),
+  });
+  const moderate = useMutation({
+    mutationFn: (input: { postId: string; status: 'active' | 'blocked'; reason: string }) =>
+      api.adminModeratePost(input.postId, input.status, input.reason),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['admin-posts'] }),
+  });
+  if (posts.isLoading) return <Skeleton className="h-72" />;
+  if (posts.isError) return <AdminRequestError error={posts.error} retry={() => posts.refetch()} />;
+  return (
+    <div className="space-y-3">
+      <label className="flex items-center gap-2">
+        <Search className="h-4 w-4" />
+        <input
+          className="input-field"
+          value={search}
+          onChange={(event) => setSearch(event.target.value)}
+          placeholder={ru.miniApp.admin.contentSearchPlaceholder}
+        />
+      </label>
+      {posts.data?.map((post) => (
+        <Card key={post.id} className="p-4">
+          <div className="flex items-start justify-between gap-3">
+            <div className="min-w-0">
+              <strong className="break-words">{post.display_name || post.author_user_id}</strong>
+              <p className="mt-1 break-all text-xs text-muted">
+                {ru.miniApp.admin.contentId(post.id)}
+              </p>
+              <p className="text-xs text-muted">
+                {ru.miniApp.admin.telegramUser(post.telegram_user_id)} · {post.content_type}
+              </p>
+            </div>
+            <span className="status-pill">
+              {ru.miniApp.admin.postStatuses[post.status] ?? post.status}
+            </span>
+          </div>
+          <p className="mt-3 whitespace-pre-wrap break-words text-sm text-soft">
+            {post.text_preview || ru.miniApp.admin.noComment}
+          </p>
+          <div className="mt-3 flex flex-wrap gap-2">
+            {post.status === 'blocked' ? (
+              <Button
+                loading={moderate.isPending}
+                onClick={() =>
+                  moderate.mutate({
+                    postId: post.id,
+                    status: 'active',
+                    reason: ru.miniApp.admin.restorePostReason,
+                  })
+                }
+              >
+                {ru.miniApp.admin.restorePost}
+              </Button>
+            ) : post.status === 'active' ? (
+              <Button
+                variant="danger"
+                loading={moderate.isPending}
+                onClick={() => {
+                  const reason = window.prompt(ru.miniApp.admin.blockPostPrompt)?.trim();
+                  if (reason && reason.length >= 3) {
+                    moderate.mutate({ postId: post.id, status: 'blocked', reason });
+                  }
+                }}
+              >
+                {ru.miniApp.admin.blockPost}
+              </Button>
+            ) : null}
+          </div>
+        </Card>
+      ))}
+      <MutationFeedback states={[moderate]} success={ru.miniApp.admin.actionCompleted} />
+    </div>
+  );
+}
+
+function QuestionnairesQueue() {
+  const queryClient = useQueryClient();
+  const [search, setSearch] = useState('');
+  const profiles = useQuery({
+    queryKey: ['admin-questionnaires', search],
+    queryFn: () => api.adminQuestionnaires('all', search),
+  });
+  const moderate = useMutation({
+    mutationFn: (input: {
+      profileId: string;
+      status: 'approved' | 'rejected' | 'paused' | 'archived';
+      reason: string;
+    }) => api.adminModerateQuestionnaire(input.profileId, input.status, input.reason),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['admin-questionnaires'] }),
+  });
+  if (profiles.isLoading) return <Skeleton className="h-72" />;
+  if (profiles.isError)
+    return <AdminRequestError error={profiles.error} retry={() => profiles.refetch()} />;
+  return (
+    <div className="space-y-3">
+      <label className="flex items-center gap-2">
+        <Search className="h-4 w-4" />
+        <input
+          className="input-field"
+          value={search}
+          onChange={(event) => setSearch(event.target.value)}
+          placeholder={ru.miniApp.admin.contentSearchPlaceholder}
         />
       </label>
       {profiles.data?.map((profile) => (
@@ -378,6 +559,9 @@ function ProfilesQueue() {
           <div className="flex justify-between gap-3">
             <div>
               <strong>{profile.display_name}</strong>
+              <p className="break-all text-xs text-muted">
+                {ru.miniApp.admin.contentId(profile.id)}
+              </p>
               <p className="text-sm text-muted">
                 {ru.miniApp.admin.telegramUser(profile.telegram_user_id)} ·{' '}
                 {ru.miniApp.admin.riskLabel} {profile.risk_score}
@@ -608,7 +792,8 @@ function ReportsQueue() {
       }),
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: ['admin-reports'] });
-      void queryClient.invalidateQueries({ queryKey: ['admin-profiles'] });
+      void queryClient.invalidateQueries({ queryKey: ['admin-questionnaires'] });
+      void queryClient.invalidateQueries({ queryKey: ['admin-public-profiles'] });
     },
   });
   if (reports.isLoading) return <Skeleton className="h-72" />;

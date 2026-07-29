@@ -21,7 +21,7 @@ import { z } from 'zod';
 import { createBot } from './bot.js';
 import { DataApiError, DataApiClient } from './d1-client.js';
 import type { AppEnv } from './env.js';
-import { assertCsrf, createSession, getSession } from './session.js';
+import { assertCsrf, createSession, getSession, refreshSession } from './session.js';
 import { TelegramStarsProvider } from './payments/telegram-stars.js';
 import { dispatchBroadcastBatch } from './broadcast.js';
 import { validateUserContentLinks } from './content-policy.js';
@@ -420,6 +420,32 @@ export async function buildServer(
     },
   );
 
+  app.post(
+    '/api/auth/session',
+    { config: { rateLimit: { max: 30, timeWindow: '1 minute' } } },
+    async (request, reply) => {
+      const renewed = await refreshSession(request, dataApi);
+      const session = await getSession(request, dataApi);
+      reply.setCookie('rm_session', renewed.token, {
+        path: '/',
+        httpOnly: true,
+        secure: env.NODE_ENV === 'production',
+        sameSite: 'strict',
+        expires: renewed.expiresAt,
+      });
+      return {
+        user: {
+          id: session.userId,
+          telegramUserId: session.telegramUserId,
+          role: session.role,
+          isAdmin: ['admin', 'moderator'].includes(session.role),
+          isOwner: session.telegramUserId === OWNER_TELEGRAM_ID && session.role === 'admin',
+        },
+        csrfToken: renewed.csrfToken,
+      };
+    },
+  );
+
   app.get('/api/me', async (request) => {
     const session = await authenticate(request);
     return {
@@ -668,6 +694,40 @@ export async function buildServer(
       limit: query.limit,
       query: query.q,
     });
+  });
+  app.get('/api/search/global', async (request) => {
+    const session = await authenticate(request);
+    const query = z
+      .object({
+        scope: z.enum(['all', 'profiles', 'questionnaires', 'posts']).default('all'),
+        q: z.string().trim().max(80).default(''),
+        limit: z.coerce.number().int().min(1).max(50).default(20),
+      })
+      .parse(request.query);
+    const [profiles, questionnaires, posts] = await Promise.all([
+      query.scope === 'all' || query.scope === 'profiles'
+        ? dataApi.execute('publicProfiles.search', {
+            requesterUserId: session.userId,
+            query: query.q,
+            limit: query.limit,
+          })
+        : Promise.resolve([]),
+      query.scope === 'all' || query.scope === 'questionnaires'
+        ? dataApi.execute('search.list', {
+            userId: session.userId,
+            query: query.q,
+            limit: query.limit,
+          })
+        : Promise.resolve([]),
+      query.scope === 'all' || query.scope === 'posts'
+        ? dataApi.execute('posts.search', {
+            userId: session.userId,
+            query: query.q,
+            limit: query.limit,
+          })
+        : Promise.resolve([]),
+    ]);
+    return { profiles, questionnaires, posts };
   });
   app.get('/api/search/availability', async (request) => {
     const session = await authenticate(request);
@@ -1168,6 +1228,13 @@ export async function buildServer(
       .parse(request.query);
     return dataApi.execute('posts.feed.list', { userId: session.userId, limit });
   });
+  app.get('/api/posts/own', async (request) => {
+    const session = await authenticate(request);
+    const { limit } = z
+      .object({ limit: z.coerce.number().int().min(1).max(50).default(20) })
+      .parse(request.query);
+    return dataApi.execute('posts.own.list', { userId: session.userId, limit });
+  });
   app.get('/api/posts/:postId/comments', async (request) => {
     const session = await authenticate(request);
     const { postId } = z.object({ postId: z.string().uuid() }).parse(request.params);
@@ -1410,6 +1477,40 @@ export async function buildServer(
       })
       .parse(request.query);
     return dataApi.execute('admin.profiles.list', {
+      adminUserId: session.userId,
+      status: query.status,
+      query: query.q,
+      limit: query.limit,
+    });
+  });
+  app.get('/api/admin/public-profiles', async (request) => {
+    const session = await requireModerationAccess(request);
+    const query = z
+      .object({
+        q: z.string().max(128).default(''),
+        status: z.enum(['active', 'blocked', 'all']).default('all'),
+        limit: z.coerce.number().int().min(1).max(100).default(50),
+      })
+      .parse(request.query);
+    return dataApi.execute('admin.publicProfiles.list', {
+      adminUserId: session.userId,
+      status: query.status,
+      query: query.q,
+      limit: query.limit,
+    });
+  });
+  app.get('/api/admin/questionnaires', async (request) => {
+    const session = await requireModerationAccess(request);
+    const query = z
+      .object({
+        q: z.string().max(128).default(''),
+        status: z
+          .enum(['draft', 'pending', 'approved', 'rejected', 'paused', 'archived', 'all'])
+          .default('all'),
+        limit: z.coerce.number().int().min(1).max(100).default(50),
+      })
+      .parse(request.query);
+    return dataApi.execute('admin.questionnaires.list', {
       adminUserId: session.userId,
       status: query.status,
       query: query.q,
@@ -1806,6 +1907,38 @@ export async function buildServer(
     });
     await writeAdminAudit(request, session.userId, `profile.${body.status}`, body.reason);
     return result;
+  });
+  app.post('/api/admin/public-profiles/:profileUserId/moderate', async (request) => {
+    const session = await requireModerationAccess(request, true);
+    const { profileUserId } = z.object({ profileUserId: z.string().uuid() }).parse(request.params);
+    const body = z
+      .object({
+        status: z.enum(['active', 'blocked']),
+        reason: z.string().min(3).max(1_000),
+      })
+      .parse(request.body);
+    return dataApi.execute('admin.publicProfile.moderate', {
+      adminUserId: session.userId,
+      profileUserId,
+      ...body,
+    });
+  });
+  app.post('/api/admin/questionnaires/:questionnaireId/moderate', async (request) => {
+    const session = await requireModerationAccess(request, true);
+    const { questionnaireId } = z
+      .object({ questionnaireId: z.string().uuid() })
+      .parse(request.params);
+    const body = z
+      .object({
+        status: z.enum(['approved', 'rejected', 'paused', 'archived']),
+        reason: z.string().min(3).max(1_000),
+      })
+      .parse(request.body);
+    return dataApi.execute('admin.questionnaire.moderate', {
+      adminUserId: session.userId,
+      questionnaireId,
+      ...body,
+    });
   });
   app.post('/api/admin/posts/:postId/moderate', async (request) => {
     const session = await requireModerationAccess(request, true);

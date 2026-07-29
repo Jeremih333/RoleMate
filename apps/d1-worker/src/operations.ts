@@ -1092,7 +1092,8 @@ const handlers: { [K in WorkerOperation]: Handler<K> } = {
       .run();
     const profile = await env.DB.prepare(
       `SELECT up.user_id AS id, up.display_name, up.bio, up.avatar_media_id,
-              up.avatar_render_mode, up.created_at, up.updated_at,
+              up.avatar_render_mode, up.moderation_status, up.moderation_reason,
+              up.created_at, up.updated_at,
               (SELECT COUNT(*) FROM questionnaires q WHERE q.user_id = up.user_id) AS questionnaire_count,
               (SELECT COUNT(*) FROM telegram_posts tp
                WHERE tp.author_user_id = up.user_id AND tp.status = 'active') AS post_count
@@ -1106,7 +1107,8 @@ const handlers: { [K in WorkerOperation]: Handler<K> } = {
   'publicProfiles.get': async (env, input) => {
     const profile = await env.DB.prepare(
       `SELECT up.user_id AS id, up.display_name, up.bio, up.avatar_media_id,
-              up.avatar_render_mode, up.created_at,
+              up.avatar_render_mode, up.moderation_status, up.moderation_reason,
+              up.created_at,
               (SELECT COUNT(*) FROM questionnaires q
                WHERE q.user_id = up.user_id AND q.is_active = 1
                  AND q.moderation_status = 'approved') AS questionnaire_count,
@@ -1114,7 +1116,8 @@ const handlers: { [K in WorkerOperation]: Handler<K> } = {
                WHERE tp.author_user_id = up.user_id AND tp.status = 'active') AS post_count
        FROM user_profiles up
        JOIN users u ON u.id = up.user_id
-       WHERE up.user_id = ?1 AND u.is_banned = 0 AND u.deleted_at IS NULL
+       WHERE up.user_id = ?1 AND up.moderation_status = 'active'
+         AND u.is_banned = 0 AND u.deleted_at IS NULL
          AND NOT EXISTS (
            SELECT 1 FROM blocks b
            WHERE (b.blocker_user_id = ?2 AND b.blocked_user_id = up.user_id)
@@ -1125,6 +1128,38 @@ const handlers: { [K in WorkerOperation]: Handler<K> } = {
       .first();
     if (!profile) throw new ApiError(404, 'PUBLIC_PROFILE_NOT_FOUND', 'Public profile not found');
     return profile;
+  },
+  'publicProfiles.search': async (env, input) => {
+    const pattern = `%${input.query.replaceAll('%', '\\%').replaceAll('_', '\\_')}%`;
+    return (
+      await env.DB.prepare(
+        `SELECT up.user_id AS id, up.display_name, up.bio, up.avatar_media_id,
+                up.avatar_render_mode, up.moderation_status, up.moderation_reason,
+                up.created_at, up.updated_at,
+                (SELECT COUNT(*) FROM questionnaires q
+                 WHERE q.user_id = up.user_id AND q.is_active = 1
+                   AND q.moderation_status = 'approved') AS questionnaire_count,
+                (SELECT COUNT(*) FROM telegram_posts tp
+                 WHERE tp.author_user_id = up.user_id AND tp.status = 'active') AS post_count
+         FROM user_profiles up
+         JOIN users u ON u.id = up.user_id
+         WHERE up.user_id <> ?1 AND up.moderation_status = 'active'
+           AND u.is_banned = 0 AND u.deleted_at IS NULL
+           AND NOT EXISTS (
+             SELECT 1 FROM blocks b
+             WHERE (b.blocker_user_id = ?1 AND b.blocked_user_id = up.user_id)
+                OR (b.blocker_user_id = up.user_id AND b.blocked_user_id = ?1)
+           )
+           AND (?2 = '' OR up.user_id = ?2
+             OR up.display_name LIKE ?3 ESCAPE '\\'
+             OR up.bio LIKE ?3 ESCAPE '\\')
+         ORDER BY CASE WHEN up.user_id = ?2 THEN 0 ELSE 1 END,
+                  up.updated_at DESC
+         LIMIT ?4`,
+      )
+        .bind(input.requesterUserId, input.query, pattern, input.limit)
+        .all()
+    ).results;
   },
   'publicProfiles.update': async (env, input) => {
     const premium = Boolean(await premiumEnd(env, input.userId));
@@ -3249,11 +3284,24 @@ const handlers: { [K in WorkerOperation]: Handler<K> } = {
   'posts.own.list': async (env, input) => {
     return (
       await env.DB.prepare(
-        `SELECT id, source_chat_id, source_message_id, content_type, text_preview,
-                status, published_at, created_at
-         FROM telegram_posts
-         WHERE author_user_id = ?1 AND status = 'active'
-         ORDER BY published_at DESC LIMIT ?2`,
+        `SELECT tp.id, tp.author_user_id, tp.source_chat_id, tp.source_message_id,
+                tp.content_type, tp.text_preview, tp.status, tp.published_at, tp.created_at,
+                tp.media_telegram_file_id, tp.media_thumbnail_file_id,
+                tp.track_title, tp.track_performer,
+                up.display_name, up.avatar_media_id, up.avatar_render_mode,
+                COALESCE(SUM(CASE WHEN pr.value = 1 THEN 1 ELSE 0 END), 0) AS likes,
+                COALESCE(SUM(CASE WHEN pr.value = -1 THEN 1 ELSE 0 END), 0) AS dislikes,
+                COALESCE(SUM(pr.value), 0) AS rating_score,
+                (SELECT COUNT(*) FROM post_comments pc
+                 WHERE pc.post_id = tp.id AND pc.status = 'active') AS comment_count,
+                (SELECT own.value FROM post_ratings own
+                 WHERE own.post_id = tp.id AND own.user_id = ?1) AS own_rating
+         FROM telegram_posts tp
+         JOIN user_profiles up ON up.user_id = tp.author_user_id
+         LEFT JOIN post_ratings pr ON pr.post_id = tp.id
+         WHERE tp.author_user_id = ?1 AND tp.status = 'active'
+         GROUP BY tp.id
+         ORDER BY tp.published_at DESC LIMIT ?2`,
       )
         .bind(input.userId, input.limit)
         .all()
@@ -3278,7 +3326,8 @@ const handlers: { [K in WorkerOperation]: Handler<K> } = {
          JOIN user_profiles up ON up.user_id = tp.author_user_id
          JOIN users u ON u.id = tp.author_user_id
          LEFT JOIN post_ratings pr ON pr.post_id = tp.id
-         WHERE tp.status = 'active' AND u.is_banned = 0 AND u.deleted_at IS NULL
+         WHERE tp.status = 'active' AND up.moderation_status = 'active'
+           AND u.is_banned = 0 AND u.deleted_at IS NULL
            AND NOT EXISTS (
              SELECT 1 FROM blocks b
              WHERE (b.blocker_user_id = ?1 AND b.blocked_user_id = tp.author_user_id)
@@ -3289,6 +3338,45 @@ const handlers: { [K in WorkerOperation]: Handler<K> } = {
          LIMIT ?2`,
       )
         .bind(input.userId, input.limit)
+        .all()
+    ).results;
+  },
+  'posts.search': async (env, input) => {
+    const pattern = `%${input.query.replaceAll('%', '\\%').replaceAll('_', '\\_')}%`;
+    return (
+      await env.DB.prepare(
+        `SELECT tp.id, tp.author_user_id, tp.source_chat_id, tp.source_message_id,
+                tp.content_type, tp.text_preview, tp.published_at,
+                tp.media_telegram_file_id, tp.media_thumbnail_file_id,
+                tp.track_title, tp.track_performer,
+                up.display_name, up.avatar_media_id, up.avatar_render_mode,
+                COALESCE(SUM(CASE WHEN pr.value = 1 THEN 1 ELSE 0 END), 0) AS likes,
+                COALESCE(SUM(CASE WHEN pr.value = -1 THEN 1 ELSE 0 END), 0) AS dislikes,
+                COALESCE(SUM(pr.value), 0) AS rating_score,
+                (SELECT COUNT(*) FROM post_comments pc
+                 WHERE pc.post_id = tp.id AND pc.status = 'active') AS comment_count,
+                (SELECT own.value FROM post_ratings own
+                 WHERE own.post_id = tp.id AND own.user_id = ?1) AS own_rating
+         FROM telegram_posts tp
+         JOIN user_profiles up ON up.user_id = tp.author_user_id
+         JOIN users u ON u.id = tp.author_user_id
+         LEFT JOIN post_ratings pr ON pr.post_id = tp.id
+         WHERE tp.status = 'active' AND up.moderation_status = 'active'
+           AND u.is_banned = 0 AND u.deleted_at IS NULL
+           AND NOT EXISTS (
+             SELECT 1 FROM blocks b
+             WHERE (b.blocker_user_id = ?1 AND b.blocked_user_id = tp.author_user_id)
+                OR (b.blocker_user_id = tp.author_user_id AND b.blocked_user_id = ?1)
+           )
+           AND (?2 = '' OR tp.id = ?2
+             OR tp.text_preview LIKE ?3 ESCAPE '\\'
+             OR up.display_name LIKE ?3 ESCAPE '\\')
+         GROUP BY tp.id
+         ORDER BY CASE WHEN tp.id = ?2 THEN 0 ELSE 1 END,
+                  rating_score DESC, tp.published_at DESC
+         LIMIT ?4`,
+      )
+        .bind(input.userId, input.query, pattern, input.limit)
         .all()
     ).results;
   },
@@ -3312,6 +3400,7 @@ const handlers: { [K in WorkerOperation]: Handler<K> } = {
          FROM post_comments pc
          JOIN user_profiles up ON up.user_id = pc.author_user_id
          WHERE pc.post_id = ?1 AND pc.status = 'active'
+           AND up.moderation_status = 'active'
            AND NOT EXISTS (
              SELECT 1 FROM blocks b
              WHERE (b.blocker_user_id = ?2 AND b.blocked_user_id = pc.author_user_id)
@@ -4130,6 +4219,19 @@ const handlers: { [K in WorkerOperation]: Handler<K> } = {
       .run();
     return session;
   },
+  'sessions.refresh': async (env, input) => {
+    const refreshed = await env.DB.prepare(
+      `UPDATE web_sessions
+       SET csrf_hash = ?2, expires_at = ?3, last_seen_at = CURRENT_TIMESTAMP
+       WHERE id_hash = ?1 AND revoked_at IS NULL AND expires_at > CURRENT_TIMESTAMP`,
+    )
+      .bind(input.sessionHash, input.csrfHash, input.expiresAt)
+      .run();
+    if (refreshed.meta.changes !== 1) {
+      throw new ApiError(401, 'SESSION_INVALID', 'Session expired');
+    }
+    return { refreshed: true };
+  },
   'sessions.revoke': async (env, input) => {
     await env.DB.prepare(
       'UPDATE web_sessions SET revoked_at = CURRENT_TIMESTAMP WHERE id_hash = ?1',
@@ -4473,17 +4575,186 @@ const handlers: { [K in WorkerOperation]: Handler<K> } = {
         .all()
     ).results;
   },
+  'admin.publicProfiles.list': async (env, input) => {
+    await assertModerationAccess(env, input.adminUserId);
+    const pattern = `%${input.query.replaceAll('%', '\\%').replaceAll('_', '\\_')}%`;
+    return (
+      await env.DB.prepare(
+        `SELECT up.user_id AS id, up.display_name, up.bio, up.avatar_media_id,
+                up.avatar_render_mode, up.moderation_status, up.moderation_reason,
+                up.updated_at, u.telegram_user_id, u.telegram_username, u.risk_score,
+                (SELECT COUNT(*) FROM questionnaires q WHERE q.user_id = up.user_id) AS questionnaire_count,
+                (SELECT COUNT(*) FROM telegram_posts tp
+                 WHERE tp.author_user_id = up.user_id AND tp.status = 'active') AS post_count
+         FROM user_profiles up
+         JOIN users u ON u.id = up.user_id
+         WHERE (?2 = 'all' OR up.moderation_status = ?2)
+           AND (
+             EXISTS (
+               SELECT 1 FROM users actor
+               WHERE actor.id = ?1 AND actor.role = 'admin'
+                 AND actor.telegram_user_id = 1040929628
+             )
+             OR (
+               u.role <> 'admin'
+               AND NOT EXISTS (
+                 SELECT 1 FROM moderator_assignments target_moderator
+                 WHERE target_moderator.user_id = u.id AND target_moderator.is_active = 1
+               )
+             )
+           )
+           AND (?3 = '' OR up.user_id = ?3
+             OR CAST(u.telegram_user_id AS TEXT) LIKE ?4 ESCAPE '\\'
+             OR COALESCE(u.telegram_username, '') LIKE ?4 ESCAPE '\\'
+             OR up.display_name LIKE ?4 ESCAPE '\\')
+         ORDER BY up.updated_at DESC LIMIT ?5`,
+      )
+        .bind(input.adminUserId, input.status, input.query, pattern, input.limit)
+        .all()
+    ).results;
+  },
+  'admin.publicProfile.moderate': async (env, input, requestId) => {
+    await assertModerationAccess(env, input.adminUserId);
+    const profile = await env.DB.prepare(
+      `SELECT user_id, moderation_status FROM user_profiles WHERE user_id = ?1`,
+    )
+      .bind(input.profileUserId)
+      .first<{ user_id: string; moderation_status: string }>();
+    if (!profile) throw new ApiError(404, 'PUBLIC_PROFILE_NOT_FOUND', 'Public profile not found');
+    await assertMayModerateTarget(env, input.adminUserId, profile.user_id);
+    await env.DB.batch([
+      env.DB.prepare(
+        `UPDATE user_profiles SET moderation_status = ?2, moderation_reason = ?3,
+           updated_at = CURRENT_TIMESTAMP WHERE user_id = ?1`,
+      ).bind(input.profileUserId, input.status, input.reason),
+      env.DB.prepare(
+        `INSERT INTO admin_audit_logs (
+           id, admin_user_id, target_user_id, action, reason,
+           old_state, new_state, request_id, result
+         ) VALUES (?1, ?2, ?3, 'public_profile.moderate', ?4, ?5, ?6, ?7, 'success')`,
+      ).bind(
+        crypto.randomUUID(),
+        input.adminUserId,
+        profile.user_id,
+        input.reason,
+        json({ status: profile.moderation_status }),
+        json({ status: input.status }),
+        requestId,
+      ),
+    ]);
+    return { updated: true };
+  },
+  'admin.questionnaires.list': async (env, input) => {
+    await assertModerationAccess(env, input.adminUserId);
+    const pattern = `%${input.query.replaceAll('%', '\\%').replaceAll('_', '\\_')}%`;
+    return (
+      await env.DB.prepare(
+        `SELECT q.*, u.telegram_user_id, u.telegram_username, u.risk_score,
+                (SELECT COUNT(*) FROM questionnaire_media qm
+                 WHERE qm.questionnaire_id = q.id) AS media_count
+         FROM questionnaires q
+         JOIN users u ON u.id = q.user_id
+         WHERE (?2 = 'all' OR q.moderation_status = ?2)
+           AND (
+             EXISTS (
+               SELECT 1 FROM users actor
+               WHERE actor.id = ?1 AND actor.role = 'admin'
+                 AND actor.telegram_user_id = 1040929628
+             )
+             OR (
+               u.role <> 'admin'
+               AND NOT EXISTS (
+                 SELECT 1 FROM moderator_assignments target_moderator
+                 WHERE target_moderator.user_id = u.id AND target_moderator.is_active = 1
+               )
+             )
+           )
+           AND (?3 = '' OR q.id = ?3
+             OR CAST(u.telegram_user_id AS TEXT) LIKE ?4 ESCAPE '\\'
+             OR COALESCE(u.telegram_username, '') LIKE ?4 ESCAPE '\\'
+             OR q.display_name LIKE ?4 ESCAPE '\\'
+             OR q.title LIKE ?4 ESCAPE '\\')
+         ORDER BY q.updated_at DESC LIMIT ?5`,
+      )
+        .bind(input.adminUserId, input.status, input.query, pattern, input.limit)
+        .all()
+    ).results;
+  },
+  'admin.questionnaire.moderate': async (env, input, requestId) => {
+    await assertModerationAccess(env, input.adminUserId);
+    const questionnaire = await env.DB.prepare(
+      `SELECT user_id, moderation_status, is_active, is_primary
+       FROM questionnaires WHERE id = ?1`,
+    )
+      .bind(input.questionnaireId)
+      .first<{
+        user_id: string;
+        moderation_status: string;
+        is_active: number;
+        is_primary: number;
+      }>();
+    if (!questionnaire)
+      throw new ApiError(404, 'QUESTIONNAIRE_NOT_FOUND', 'Questionnaire not found');
+    await assertMayModerateTarget(env, input.adminUserId, questionnaire.user_id);
+    const isActive = input.status === 'approved' ? 1 : 0;
+    const statements = [
+      env.DB.prepare(
+        `UPDATE questionnaires SET moderation_status = ?2, moderation_reason = ?3,
+           is_active = ?4, updated_at = CURRENT_TIMESTAMP WHERE id = ?1`,
+      ).bind(input.questionnaireId, input.status, input.reason, isActive),
+      env.DB.prepare(
+        `UPDATE users SET is_search_enabled = CASE
+           WHEN is_banned = 0 AND is_age_confirmed = 1 AND is_rules_accepted = 1
+             AND EXISTS (
+               SELECT 1 FROM questionnaires q
+               WHERE q.user_id = users.id AND q.moderation_status = 'approved'
+                 AND q.is_active = 1
+             )
+           THEN 1 ELSE 0 END,
+           updated_at = CURRENT_TIMESTAMP WHERE id = ?1`,
+      ).bind(questionnaire.user_id),
+      env.DB.prepare(
+        `INSERT INTO admin_audit_logs (
+           id, admin_user_id, target_user_id, action, reason,
+           old_state, new_state, request_id, result
+         ) VALUES (?1, ?2, ?3, 'questionnaire.moderate', ?4, ?5, ?6, ?7, 'success')`,
+      ).bind(
+        crypto.randomUUID(),
+        input.adminUserId,
+        questionnaire.user_id,
+        input.reason,
+        json({
+          questionnaireId: input.questionnaireId,
+          status: questionnaire.moderation_status,
+          isActive: questionnaire.is_active,
+        }),
+        json({ questionnaireId: input.questionnaireId, status: input.status, isActive }),
+        requestId,
+      ),
+    ];
+    if (questionnaire.is_primary) {
+      statements.push(
+        env.DB.prepare(
+          `UPDATE profiles SET moderation_status = ?2, moderation_reason = ?3,
+             is_active = ?4, updated_at = CURRENT_TIMESTAMP
+           WHERE user_id = ?1`,
+        ).bind(questionnaire.user_id, input.status, input.reason, isActive),
+      );
+    }
+    await env.DB.batch(statements);
+    return { updated: true };
+  },
   'admin.posts.list': async (env, input) => {
     await assertModerationAccess(env, input.adminUserId);
     const pattern = `%${input.query.replaceAll('%', '\\%').replaceAll('_', '\\_')}%`;
     return (
       await env.DB.prepare(
         `SELECT tp.id, tp.author_user_id, tp.content_type, tp.text_preview, tp.status,
-                tp.published_at, tp.created_at, p.display_name,
+                tp.published_at, tp.created_at, up.display_name,
                 u.telegram_user_id, u.telegram_username
          FROM telegram_posts tp
          JOIN users u ON u.id = tp.author_user_id
-         LEFT JOIN profiles p ON p.user_id = tp.author_user_id
+         LEFT JOIN user_profiles up ON up.user_id = tp.author_user_id
          WHERE (?2 = 'all' OR tp.status = ?2)
            AND (
              EXISTS (
@@ -4502,7 +4773,7 @@ const handlers: { [K in WorkerOperation]: Handler<K> } = {
            AND (?3 = '' OR tp.id = ?3
              OR CAST(u.telegram_user_id AS TEXT) LIKE ?4 ESCAPE '\\'
              OR COALESCE(u.telegram_username, '') LIKE ?4 ESCAPE '\\'
-             OR COALESCE(p.display_name, '') LIKE ?4 ESCAPE '\\')
+             OR COALESCE(up.display_name, '') LIKE ?4 ESCAPE '\\')
          ORDER BY COALESCE(tp.published_at, tp.created_at) DESC LIMIT ?5`,
       )
         .bind(input.adminUserId, input.status, input.query, pattern, input.limit)

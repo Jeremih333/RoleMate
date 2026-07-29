@@ -50,6 +50,7 @@ describe('D1 migrations', () => {
       '0020_direct_conversation_source.sql',
       '0021_profile_avatars.sql',
       '0022_social_profiles_questionnaires.sql',
+      '0023_public_profile_moderation.sql',
     ]);
     expect(() => applyMigrations()).not.toThrow();
     const tables = database
@@ -108,6 +109,12 @@ describe('D1 migrations', () => {
     }>;
     expect(profileColumns.map((column) => column.name)).toEqual(
       expect.arrayContaining(['avatar_media_id', 'avatar_render_mode']),
+    );
+    const publicProfileColumns = database
+      .prepare('PRAGMA table_info(user_profiles)')
+      .all() as Array<{ name: string }>;
+    expect(publicProfileColumns.map((column) => column.name)).toEqual(
+      expect.arrayContaining(['moderation_status', 'moderation_reason']),
     );
   });
 

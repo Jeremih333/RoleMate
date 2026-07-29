@@ -135,6 +135,7 @@ interface FetchOptions {
 
 function telegramAndDataFetch(options: FetchOptions = {}) {
   const requests: Array<{ url: string; body: Record<string, unknown> }> = [];
+  let activeCsrfHash = options.adminSession?.csrfHash;
   const fetchMock = vi.fn<typeof fetch>((input, init) => {
     const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
     const body =
@@ -168,43 +169,51 @@ function telegramAndDataFetch(options: FetchOptions = {}) {
                   ? { id: '00000000-0000-4000-8000-000000000700' }
                   : operation === 'payments.completeStars'
                     ? options.paymentResult
-                    : operation === 'sessions.get' && options.adminSession
-                      ? {
-                          user_id: '00000000-0000-4000-8000-000000000001',
-                          telegram_user_id: 1_040_929_628,
-                          role: 'admin',
-                          risk_score: 0,
-                          csrf_hash: options.adminSession.csrfHash,
-                        }
-                      : operation === 'admin.premium.grant' && options.adminSession
+                    : operation === 'sessions.refresh' && options.adminSession
+                      ? (() => {
+                          const input = body.input as { csrfHash?: string } | undefined;
+                          activeCsrfHash = input?.csrfHash ?? activeCsrfHash;
+                          return { refreshed: true };
+                        })()
+                      : operation === 'sessions.get' && options.adminSession
                         ? {
-                            granted: true,
-                            grantId: '00000000-0000-4000-8000-000000000701',
-                            durationDays: 14,
-                            notifyTelegramUserId: 777,
+                            user_id: '00000000-0000-4000-8000-000000000001',
+                            telegram_user_id: 1_040_929_628,
+                            role: 'admin',
+                            risk_score: 0,
+                            csrf_hash: activeCsrfHash,
                           }
-                        : operation === 'admin.audit'
-                          ? { written: true }
-                          : operation === 'premium.status'
-                            ? { premium: false }
-                            : operation === 'search.list'
-                              ? [
-                                  {
-                                    user_id: '00000000-0000-4000-8000-000000000099',
-                                    display_name: 'Ночной автор',
-                                    short_headline: 'Ищу сюжет',
-                                    compatibility: 88,
-                                  },
-                                ]
-                              : operation === 'conversations.resolveMiniAppRelay'
-                                ? {
-                                    destination_chat_id: 777,
-                                    recipient_muted: 0,
-                                    notify_message: 0,
-                                  }
-                                : operation === 'conversations.recordMiniAppMessage'
-                                  ? { recorded: true }
-                                  : null;
+                        : operation === 'publicProfiles.update' && options.adminSession
+                          ? { updated: true }
+                          : operation === 'admin.premium.grant' && options.adminSession
+                            ? {
+                                granted: true,
+                                grantId: '00000000-0000-4000-8000-000000000701',
+                                durationDays: 14,
+                                notifyTelegramUserId: 777,
+                              }
+                            : operation === 'admin.audit'
+                              ? { written: true }
+                              : operation === 'premium.status'
+                                ? { premium: false }
+                                : operation === 'search.list'
+                                  ? [
+                                      {
+                                        user_id: '00000000-0000-4000-8000-000000000099',
+                                        display_name: 'Ночной автор',
+                                        short_headline: 'Ищу сюжет',
+                                        compatibility: 88,
+                                      },
+                                    ]
+                                  : operation === 'conversations.resolveMiniAppRelay'
+                                    ? {
+                                        destination_chat_id: 777,
+                                        recipient_muted: 0,
+                                        notify_message: 0,
+                                      }
+                                    : operation === 'conversations.recordMiniAppMessage'
+                                      ? { recorded: true }
+                                      : null;
       return Promise.resolve(
         new Response(JSON.stringify({ ok: true, data, requestId: 'request' }), {
           status: 200,
@@ -520,6 +529,42 @@ describe('Mini App authentication errors', () => {
       error: 'INVALID_INIT_DATA',
       message: ru.miniApp.auth.invalidData,
     });
+    await app.close();
+  });
+
+  it('refreshes an existing session and accepts the rotated CSRF token for profile changes', async () => {
+    const oldCsrfToken = 'stale-profile-csrf-token';
+    const { fetchMock } = telegramAndDataFetch({
+      adminSession: { csrfHash: await sha256(oldCsrfToken) },
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    const app = await buildServer(testEnv());
+
+    const refreshed = await app.inject({
+      method: 'POST',
+      url: '/api/auth/session',
+      headers: { cookie: 'rm_session=existing-profile-session-token' },
+    });
+    expect(refreshed.statusCode, refreshed.body).toBe(200);
+    const refreshedBody = refreshed.json<{ csrfToken: string }>();
+    expect(refreshedBody.csrfToken).not.toBe(oldCsrfToken);
+    expect(refreshed.headers['set-cookie']).toContain('rm_session=');
+
+    const saved = await app.inject({
+      method: 'PUT',
+      url: '/api/public-profile',
+      headers: {
+        cookie: 'rm_session=existing-profile-session-token',
+        'x-csrf-token': refreshedBody.csrfToken,
+      },
+      payload: {
+        displayName: 'Влад',
+        bio: 'Публичное описание профиля',
+        avatarMediaId: null,
+      },
+    });
+    expect(saved.statusCode, saved.body).toBe(200);
+    expect(saved.json()).toMatchObject({ updated: true });
     await app.close();
   });
 

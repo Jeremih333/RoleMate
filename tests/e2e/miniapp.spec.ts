@@ -46,6 +46,16 @@ async function mockApi(
         },
         csrfToken: 'csrf-token',
       },
+      '/api/auth/session': {
+        user: {
+          id: '00000000-0000-4000-8000-000000000001',
+          telegramUserId: owner ? 1_040_929_628 : 42,
+          role: owner ? 'admin' : staff ? 'moderator' : 'user',
+          isAdmin: staff,
+          isOwner: owner,
+        },
+        csrfToken: 'refreshed-csrf-token',
+      },
       '/api/me': {
         userId: '00000000-0000-4000-8000-000000000001',
         telegramUserId: owner ? 1_040_929_628 : 42,
@@ -93,6 +103,8 @@ async function mockApi(
         bio: 'Отдельный публичный профиль',
         avatar_media_id: null,
         avatar_render_mode: null,
+        moderation_status: 'active',
+        moderation_reason: null,
         questionnaire_count: 1,
         post_count: 1,
         created_at: '2026-07-29 12:00:00',
@@ -140,6 +152,29 @@ async function mockApi(
           own_rating: null,
         },
       ],
+      '/api/posts/own': [],
+      '/api/search/global': {
+        profiles: [
+          {
+            id: '00000000-0000-4000-8000-000000000002',
+            display_name: 'Публичный автор',
+            bio: 'Профиль автора с опубликованными историями',
+            avatar_media_id: null,
+            avatar_render_mode: null,
+            moderation_status: 'active',
+            moderation_reason: null,
+            questionnaire_count: 1,
+            post_count: 1,
+            created_at: '2026-07-29 12:00:00',
+            updated_at: '2026-07-29 12:00:00',
+          },
+        ],
+        questionnaires: [],
+        posts: [],
+      },
+      '/api/admin/public-profiles': [],
+      '/api/admin/questionnaires': [],
+      '/api/admin/posts': [],
       '/api/posts/00000000-0000-4000-8000-000000000099/comments': [
         {
           id: '00000000-0000-4000-8000-000000000098',
@@ -411,6 +446,189 @@ test('public profile is separate from questionnaires and exposes only the intern
   await expect(page.getByText('Основная история')).toBeVisible();
 });
 
+test('profile save uses the CSRF token rotated by session refresh', async ({ page }) => {
+  let saveCsrf = '';
+  await page.addInitScript(() => sessionStorage.setItem('rm_csrf', 'stale-csrf-token'));
+  await mockApi(page, false, {
+    '/api/public-profile': async (route) => {
+      if (route.request().method() === 'PUT') {
+        saveCsrf = route.request().headers()['x-csrf-token'] ?? '';
+        await route.fulfill({
+          status: saveCsrf === 'refreshed-csrf-token' ? 200 : 403,
+          contentType: 'application/json',
+          body: JSON.stringify(
+            saveCsrf === 'refreshed-csrf-token'
+              ? { updated: true }
+              : { error: 'INVALID_CSRF', message: 'INVALID_CSRF' },
+          ),
+        });
+        return;
+      }
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          id: '00000000-0000-4000-8000-000000000001',
+          display_name: 'Лис',
+          bio: 'Публичный профиль',
+          avatar_media_id: null,
+          avatar_render_mode: null,
+          moderation_status: 'active',
+          moderation_reason: null,
+          questionnaire_count: 1,
+          post_count: 0,
+          created_at: '2026-07-29 12:00:00',
+          updated_at: '2026-07-29 12:00:00',
+        }),
+      });
+    },
+  });
+  await page.goto('/profile');
+  await page.locator('button').filter({ hasText: 'Редактировать профиль' }).click();
+  await page.locator('#public-bio').fill('Обновлённое описание профиля');
+  await page.locator('button').filter({ hasText: 'Сохранить профиль' }).click();
+  await expect.poll(() => saveCsrf).toBe('refreshed-csrf-token');
+  await expect(page.getByText('INVALID_CSRF')).toHaveCount(0);
+});
+
+test('profile preview exposes avatar media, published posts and post creation', async ({
+  page,
+}) => {
+  const mediaId = '00000000-0000-4000-8000-000000000031';
+  await mockApi(page, false, {
+    '/api/profile/media': [
+      {
+        id: mediaId,
+        media_type: 'photo',
+        sort_order: 0,
+        moderation_status: 'approved',
+        created_at: '2026-07-29 12:00:00',
+      },
+    ],
+    '/api/posts/own': [
+      {
+        id: '00000000-0000-4000-8000-000000000032',
+        author_user_id: '00000000-0000-4000-8000-000000000001',
+        source_chat_id: 42,
+        source_message_id: 13,
+        content_type: 'text',
+        text_preview: 'Мой опубликованный пост',
+        media_telegram_file_id: null,
+        media_thumbnail_file_id: null,
+        track_title: null,
+        track_performer: null,
+        published_at: '2026-07-29 12:00:00',
+        display_name: 'Лис',
+        avatar_media_id: null,
+        avatar_render_mode: null,
+        likes: 3,
+        dislikes: 1,
+        rating_score: 2,
+        comment_count: 0,
+        own_rating: null,
+      },
+    ],
+  });
+  await page.goto('/profile');
+  await expect(page.getByText('Мой опубликованный пост')).toBeVisible();
+  await page.locator('button').filter({ hasText: 'Редактировать профиль' }).click();
+  await expect(page.getByRole('button', { name: 'Выбрать этот аватар' })).toBeVisible();
+  await page.evaluate(() => {
+    const telegram = window.Telegram?.WebApp;
+    if (!telegram) return;
+    telegram.openTelegramLink = (link: string) => {
+      (window as unknown as { __openedLink?: string }).__openedLink = link;
+    };
+  });
+  await page.locator('button').filter({ hasText: 'Создать пост' }).click();
+  await expect
+    .poll(() =>
+      page.evaluate(() => (window as unknown as { __openedLink?: string }).__openedLink ?? ''),
+    )
+    .toContain('start=create_post');
+});
+
+test('global search defaults to all and switches between profiles, questionnaires and posts', async ({
+  page,
+}) => {
+  const requestedScopes: string[] = [];
+  await mockApi(page, false, {
+    '/api/search/global': async (route) => {
+      const scope = new URL(route.request().url()).searchParams.get('scope') ?? '';
+      requestedScopes.push(scope);
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          profiles:
+            scope === 'all' || scope === 'profiles'
+              ? [
+                  {
+                    id: '00000000-0000-4000-8000-000000000020',
+                    display_name: 'Профиль из поиска',
+                    bio: 'Отдельный публичный профиль',
+                    avatar_media_id: null,
+                    avatar_render_mode: null,
+                    moderation_status: 'active',
+                    moderation_reason: null,
+                    questionnaire_count: 2,
+                    post_count: 1,
+                    created_at: '2026-07-29 12:00:00',
+                    updated_at: '2026-07-29 12:00:00',
+                  },
+                ]
+              : [],
+          questionnaires: [],
+          posts:
+            scope === 'all' || scope === 'posts'
+              ? [
+                  {
+                    id: '00000000-0000-4000-8000-000000000021',
+                    author_user_id: '00000000-0000-4000-8000-000000000020',
+                    source_chat_id: 42,
+                    source_message_id: 12,
+                    content_type: 'text',
+                    text_preview: 'Пост из глобального поиска',
+                    media_telegram_file_id: null,
+                    media_thumbnail_file_id: null,
+                    track_title: null,
+                    track_performer: null,
+                    published_at: '2026-07-29 12:00:00',
+                    display_name: 'Профиль из поиска',
+                    avatar_media_id: null,
+                    avatar_render_mode: null,
+                    likes: 1,
+                    dislikes: 0,
+                    rating_score: 1,
+                    comment_count: 0,
+                    own_rating: null,
+                  },
+                ]
+              : [],
+        }),
+      });
+    },
+  });
+
+  await page.goto('/search');
+  const tabs = page.getByRole('tab');
+  await expect(tabs).toHaveCount(4);
+  await expect(tabs.nth(0)).toHaveAttribute('aria-selected', 'true');
+  await expect(page.getByText('Профиль из поиска').first()).toBeVisible();
+  await expect(page.getByText('Пост из глобального поиска')).toBeVisible();
+  await tabs.nth(1).click();
+  await expect(tabs.nth(1)).toHaveAttribute('aria-selected', 'true');
+  await tabs.nth(2).click();
+  await expect(page.getByRole('heading', { name: 'Лис' })).toBeVisible();
+  await tabs.nth(3).click();
+  await expect(page.getByText('Пост из глобального поиска')).toBeVisible();
+  expect(requestedScopes).toEqual(expect.arrayContaining(['all', 'profiles', 'posts']));
+  const overflow = await page.evaluate(
+    () => document.documentElement.scrollWidth > document.documentElement.clientWidth,
+  );
+  expect(overflow).toBe(false);
+});
+
 test('posts section renders ratings and opens comments', async ({ page }) => {
   await mockApi(page);
   await page.goto('/posts');
@@ -425,6 +643,7 @@ test('questionnaire media opens fullscreen and closes without losing the card', 
 }) => {
   await mockApi(page);
   await page.goto('/search');
+  await page.getByRole('tab', { name: 'Анкеты', exact: true }).click();
   await page.getByRole('button', { name: 'Открыть медиа на весь экран' }).click();
   const dialog = page.getByRole('dialog', { name: 'Открыть медиа на весь экран' });
   await expect(dialog).toBeVisible();
@@ -440,6 +659,7 @@ test('home and search remain usable on Telegram-sized screens', async ({ page })
   await expect(page.getByRole('heading', { name: /Найди того/ })).toBeVisible();
   await expect(page.getByText('@piarchaticksss · поддерживает RoleMate')).toBeVisible();
   await page.getByRole('link', { name: 'Поиск', exact: true }).click();
+  await page.getByRole('tab', { name: 'Анкеты', exact: true }).click();
   await expect(page.getByRole('heading', { name: 'Лис' })).toBeVisible();
   await expect(page.getByText('91%')).toBeVisible();
   await expect(page.locator('body')).not.toHaveCSS('overflow-x', 'scroll');
@@ -452,25 +672,14 @@ test('menu launch recovers initData from the Telegram URL when the SDK is late',
     Object.defineProperty(window, 'Telegram', { value: undefined, configurable: true });
   });
   let receivedInitData = '';
-  let meRequests = 0;
+  let sessionRequests = 0;
   await mockApi(page, false, {
-    '/api/me': async (route) => {
-      meRequests += 1;
+    '/api/auth/session': async (route) => {
+      sessionRequests += 1;
       await route.fulfill({
-        status: meRequests === 1 ? 401 : 200,
+        status: 401,
         contentType: 'application/json',
-        body: JSON.stringify(
-          meRequests === 1
-            ? { error: 'UNAUTHORIZED' }
-            : {
-                userId: '00000000-0000-4000-8000-000000000001',
-                telegramUserId: 42,
-                role: 'user',
-                isAdmin: false,
-                isOwner: false,
-                riskScore: 0,
-              },
-        ),
+        body: JSON.stringify({ error: 'UNAUTHORIZED' }),
       });
     },
     '/api/auth/telegram': async (route) => {
@@ -494,6 +703,7 @@ test('menu launch recovers initData from the Telegram URL when the SDK is late',
   await page.goto(`/search#tgWebAppData=${encodeURIComponent(initData)}&tgWebAppVersion=9.1`);
   await expect(page.locator('main h2').first()).toBeVisible();
   expect(receivedInitData).toBe(initData);
+  expect(sessionRequests).toBeGreaterThan(0);
 });
 
 test('every MiniApp menu destination authenticates with its signed fallback without initData', async ({
@@ -506,19 +716,21 @@ test('every MiniApp menu destination authenticates with its signed fallback with
   let receivedRoute = '';
   let receivedToken = '';
   await mockApi(page, false, {
-    '/api/me': async (route) => {
+    '/api/auth/session': async (route) => {
       await route.fulfill({
         status: authenticated ? 200 : 401,
         contentType: 'application/json',
         body: JSON.stringify(
           authenticated
             ? {
-                userId: '00000000-0000-4000-8000-000000000001',
-                telegramUserId: 42,
-                role: 'user',
-                isAdmin: false,
-                isOwner: false,
-                riskScore: 0,
+                user: {
+                  id: '00000000-0000-4000-8000-000000000001',
+                  telegramUserId: 42,
+                  role: 'user',
+                  isAdmin: false,
+                  isOwner: false,
+                },
+                csrfToken: 'refreshed-menu-csrf-token',
               }
             : { error: 'UNAUTHORIZED' },
         ),
@@ -748,6 +960,7 @@ test('own profile uses the first ordered visual media as its header', async ({ p
 test('keyword search sends the query and profile markdown is rendered safely', async ({ page }) => {
   await mockApi(page);
   await page.goto('/search');
+  await page.getByRole('tab', { name: 'Анкеты', exact: true }).click();
   const requestPromise = page.waitForRequest(
     (request) => new URL(request.url()).searchParams.get('q') === 'готический детектив',
   );
@@ -778,6 +991,7 @@ test('free super-like limit shows a clear Premium-aware message', async ({ page 
     },
   });
   await page.goto('/search');
+  await page.getByRole('tab', { name: 'Анкеты', exact: true }).click();
   await page.getByRole('button', { name: 'Суперсимпатия' }).click();
   await expect(
     page.getByText(
@@ -824,6 +1038,7 @@ test('a search profile opens in full, renders a Telegram-style track, and starts
     },
   });
   await page.goto('/search');
+  await page.getByRole('tab', { name: 'Анкеты', exact: true }).click();
   await page.getByRole('button', { name: 'Открыть анкету полностью' }).click();
   const dialog = page.getByRole('dialog', { name: 'Полная анкета' });
   await expect(dialog).toBeVisible();
@@ -889,6 +1104,7 @@ test('only a Premium first video autoplays and loops in the search list', async 
   };
   await mockApi(page, false, { '/api/search': [profile] });
   await page.goto('/search');
+  await page.getByRole('tab', { name: 'Анкеты', exact: true }).click();
   const premiumVideo = page.locator('.profile-card:not(.profile-card-expanded) video');
   await expect(premiumVideo).toHaveAttribute('autoplay', '', { timeout: 15_000 });
   await expect(premiumVideo).toHaveAttribute('loop', '');
@@ -897,6 +1113,7 @@ test('only a Premium first video autoplays and loops in the search list', async 
     '/api/search': [{ ...profile, is_premium: 0, has_premium: 0 }],
   });
   await page.reload();
+  await page.getByRole('tab', { name: 'Анкеты', exact: true }).click();
   const freeVideo = page.locator('.profile-card:not(.profile-card-expanded) video');
   await expect(freeVideo).not.toHaveAttribute('autoplay', '');
   await expect(freeVideo).not.toHaveAttribute('loop', '');
@@ -954,12 +1171,14 @@ test('profile editor saves the user-selected media carousel order', async ({ pag
 test('regular users never see quick moderation in search', async ({ page }) => {
   await mockApi(page);
   await page.goto('/search');
+  await page.getByRole('tab', { name: 'Анкеты', exact: true }).click();
   await expect(page.getByTestId('search-moderation-panel')).toHaveCount(0);
 });
 
 test('assigned staff can warn directly from search', async ({ page }) => {
   await mockApi(page, 'moderator');
   await page.goto('/search');
+  await page.getByRole('tab', { name: 'Анкеты', exact: true }).click();
   await expect(page.getByTestId('search-moderation-panel')).toBeVisible();
   const warningRequest = page.waitForRequest(
     (request) =>
@@ -1223,7 +1442,7 @@ test('moderator sees only moderation sections', async ({ page }) => {
   await mockApi(page, 'moderator');
   await page.goto('/admin');
   const sectionButtons = page.locator('.mt-4.flex.flex-wrap.gap-2 > button');
-  await expect(sectionButtons).toHaveCount(3);
+  await expect(sectionButtons).toHaveCount(5);
 });
 
 test('owner can open system status without breaking the mobile admin layout', async ({ page }) => {
@@ -1257,7 +1476,9 @@ test('every admin section remains renderable and isolated on mobile', async ({ p
   for (const section of [
     'Обзор',
     'Пользователи',
+    'Профили',
     'Анкеты',
+    'Посты',
     'Жалобы',
     'Платежи',
     'Рефералы',

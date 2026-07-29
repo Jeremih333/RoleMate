@@ -299,6 +299,174 @@ describe('D1 domain operations', () => {
     ).toBe(0);
   });
 
+  it('refreshes sessions by rotating CSRF and rejects expired sessions', async () => {
+    const userId = await upsert(2016);
+    const sessionHash = 'c'.repeat(64);
+    await executeOperation(
+      env,
+      'sessions.create',
+      {
+        userId,
+        sessionHash,
+        csrfHash: 'd'.repeat(64),
+        expiresAt: new Date(Date.now() + 60_000).toISOString(),
+      },
+      crypto.randomUUID(),
+    );
+    await executeOperation(
+      env,
+      'sessions.refresh',
+      {
+        sessionHash,
+        csrfHash: 'e'.repeat(64),
+        expiresAt: new Date(Date.now() + 15 * 60_000).toISOString(),
+      },
+      crypto.randomUUID(),
+    );
+    await expect(
+      executeOperation(env, 'sessions.get', { sessionHash }, crypto.randomUUID()),
+    ).resolves.toMatchObject({ csrf_hash: 'e'.repeat(64) });
+
+    sqlite
+      .prepare(
+        "UPDATE web_sessions SET expires_at = datetime('now', '-1 minute') WHERE id_hash = ?",
+      )
+      .run(sessionHash);
+    await expect(
+      executeOperation(
+        env,
+        'sessions.refresh',
+        {
+          sessionHash,
+          csrfHash: 'f'.repeat(64),
+          expiresAt: new Date(Date.now() + 15 * 60_000).toISOString(),
+        },
+        crypto.randomUUID(),
+      ),
+    ).rejects.toMatchObject<ApiError>({ code: 'SESSION_INVALID' });
+  });
+
+  it('searches all public entities and lets moderators block profiles, questionnaires and posts', async () => {
+    const requesterId = await onboard(2017);
+    const authorId = await onboard(2018);
+    const moderator = await upsert(2019);
+    const ownerId = await upsert(1_040_929_628);
+    sqlite
+      .prepare(
+        `INSERT INTO moderator_assignments
+           (user_id, assigned_by_user_id, is_active)
+         VALUES (?, ?, 1)`,
+      )
+      .run(moderator, ownerId);
+    await executeOperation(
+      env,
+      'publicProfiles.update',
+      {
+        userId: authorId,
+        displayName: 'Искомый автор',
+        bio: 'Публичный профиль для глобального поиска',
+        avatarMediaId: null,
+      },
+      crypto.randomUUID(),
+    );
+    const questionnaire = sqlite
+      .prepare('SELECT id FROM questionnaires WHERE user_id = ?')
+      .get(authorId) as { id: string };
+    const postId = crypto.randomUUID();
+    sqlite
+      .prepare(
+        `INSERT INTO telegram_posts
+           (id, author_user_id, content_type, text_preview, status, published_at)
+         VALUES (?, ?, 'text', ?, 'active', CURRENT_TIMESTAMP)`,
+      )
+      .run(postId, authorId, 'Искомая запись');
+
+    await expect(
+      executeOperation(
+        env,
+        'publicProfiles.search',
+        { requesterUserId: requesterId, query: authorId, limit: 20 },
+        crypto.randomUUID(),
+      ),
+    ).resolves.toContainEqual(expect.objectContaining({ id: authorId }));
+    await expect(
+      executeOperation(
+        env,
+        'posts.search',
+        { userId: requesterId, query: postId, limit: 20 },
+        crypto.randomUUID(),
+      ),
+    ).resolves.toContainEqual(expect.objectContaining({ id: postId }));
+    await expect(
+      executeOperation(
+        env,
+        'admin.questionnaires.list',
+        { adminUserId: moderator, status: 'all', query: questionnaire.id, limit: 20 },
+        crypto.randomUUID(),
+      ),
+    ).resolves.toContainEqual(expect.objectContaining({ id: questionnaire.id }));
+
+    await executeOperation(
+      env,
+      'admin.publicProfile.moderate',
+      {
+        adminUserId: moderator,
+        profileUserId: authorId,
+        status: 'blocked',
+        reason: 'Нарушение правил профиля',
+      },
+      crypto.randomUUID(),
+    );
+    await executeOperation(
+      env,
+      'admin.questionnaire.moderate',
+      {
+        adminUserId: moderator,
+        questionnaireId: questionnaire.id,
+        status: 'paused',
+        reason: 'Нарушение правил анкеты',
+      },
+      crypto.randomUUID(),
+    );
+    await executeOperation(
+      env,
+      'admin.post.moderate',
+      {
+        adminUserId: moderator,
+        postId,
+        status: 'blocked',
+        reason: 'Нарушение правил публикации',
+      },
+      crypto.randomUUID(),
+    );
+
+    expect(
+      sqlite
+        .prepare('SELECT moderation_status FROM user_profiles WHERE user_id = ?')
+        .pluck()
+        .get(authorId),
+    ).toBe('blocked');
+    expect(
+      sqlite
+        .prepare('SELECT moderation_status FROM questionnaires WHERE id = ?')
+        .pluck()
+        .get(questionnaire.id),
+    ).toBe('paused');
+    expect(
+      sqlite.prepare('SELECT status FROM telegram_posts WHERE id = ?').pluck().get(postId),
+    ).toBe('blocked');
+    expect(
+      sqlite
+        .prepare(
+          `SELECT COUNT(*) FROM admin_audit_logs
+           WHERE admin_user_id = ? AND action IN
+             ('public_profile.moderate', 'questionnaire.moderate', 'post.moderate')`,
+        )
+        .pluck()
+        .get(moderator),
+    ).toBe(3);
+  });
+
   it('supports post comments and independent post ratings', async () => {
     const authorUserId = await onboard(2014);
     const readerUserId = await onboard(2015);

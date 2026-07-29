@@ -41,6 +41,21 @@ async function request<T>(path: string, options: RequestInit & { body?: string }
 }
 
 export const api = {
+  async refreshSession() {
+    const result = await request<{
+      user: {
+        id: string;
+        telegramUserId: number;
+        role: string;
+        isAdmin: boolean;
+        isOwner: boolean;
+      };
+      csrfToken: string;
+    }>('/auth/session', { method: 'POST', body: '{}' });
+    csrfToken = result.csrfToken;
+    sessionStorage.setItem('rm_csrf', csrfToken);
+    return result.user;
+  },
   async authenticate(initData: string) {
     const result = await request<{
       user: { id: string; telegramUserId: number; role: string };
@@ -122,6 +137,10 @@ export const api = {
     ),
   search: (query = '') =>
     request<SearchProfile[]>(`/search?limit=20&q=${encodeURIComponent(query)}`),
+  globalSearch: (query = '', scope: GlobalSearchScope = 'all') =>
+    request<GlobalSearchResult>(
+      `/search/global?scope=${scope}&limit=20&q=${encodeURIComponent(query)}`,
+    ),
   searchAvailability: () => request<SearchAvailability>('/search/availability'),
   searchPreferences: () => request<SearchPreferences>('/search/preferences'),
   saveSearchPreferences: (preferences: SearchPreferencesInput) =>
@@ -154,6 +173,7 @@ export const api = {
     }),
   incomingLikes: () => request<IncomingLike[]>('/swipes/incoming'),
   posts: () => request<SocialPost[]>('/posts?limit=30'),
+  ownPosts: () => request<SocialPost[]>('/posts/own?limit=30'),
   postComments: (postId: string) => request<PostComment[]>(`/posts/${postId}/comments`),
   addPostComment: (postId: string, body: string) =>
     request<{ id: string; created: true }>(`/posts/${postId}/comments`, {
@@ -324,6 +344,41 @@ export const api = {
     request<AdminProfile[]>(
       `/admin/profiles?status=${encodeURIComponent(status)}&q=${encodeURIComponent(query)}&limit=50`,
     ),
+  adminPublicProfiles: (status = 'all', query = '') =>
+    request<AdminPublicProfile[]>(
+      `/admin/public-profiles?status=${encodeURIComponent(status)}&q=${encodeURIComponent(query)}&limit=50`,
+    ),
+  adminModeratePublicProfile: (
+    profileUserId: string,
+    status: 'active' | 'blocked',
+    reason: string,
+  ) =>
+    request<{ updated: true }>(`/admin/public-profiles/${profileUserId}/moderate`, {
+      method: 'POST',
+      body: JSON.stringify({ status, reason }),
+    }),
+  adminQuestionnaires: (status = 'all', query = '') =>
+    request<AdminQuestionnaire[]>(
+      `/admin/questionnaires?status=${encodeURIComponent(status)}&q=${encodeURIComponent(query)}&limit=50`,
+    ),
+  adminModerateQuestionnaire: (
+    questionnaireId: string,
+    status: 'approved' | 'rejected' | 'paused' | 'archived',
+    reason: string,
+  ) =>
+    request<{ updated: true }>(`/admin/questionnaires/${questionnaireId}/moderate`, {
+      method: 'POST',
+      body: JSON.stringify({ status, reason }),
+    }),
+  adminPosts: (status = 'all', query = '') =>
+    request<AdminPost[]>(
+      `/admin/posts?status=${encodeURIComponent(status)}&q=${encodeURIComponent(query)}&limit=50`,
+    ),
+  adminModeratePost: (postId: string, status: 'active' | 'blocked', reason: string) =>
+    request<{ moderated: true }>(`/admin/posts/${postId}/moderate`, {
+      method: 'POST',
+      body: JSON.stringify({ status, reason }),
+    }),
   adminMedia: (status = 'pending') =>
     request<AdminMedia[]>(`/admin/media?status=${encodeURIComponent(status)}&limit=50`),
   adminModerateMedia: (mediaId: string, status: 'approved' | 'rejected', reason: string) =>
@@ -522,6 +577,8 @@ export interface PublicUserProfile {
   bio: string;
   avatar_media_id: string | null;
   avatar_render_mode: 'photo' | 'animation' | null;
+  moderation_status: 'active' | 'blocked';
+  moderation_reason: string | null;
   questionnaire_count: number;
   post_count: number;
   created_at: string;
@@ -566,6 +623,14 @@ export interface SocialPost {
   rating_score: number;
   comment_count: number;
   own_rating: -1 | 1 | null;
+}
+
+export type GlobalSearchScope = 'all' | 'profiles' | 'questionnaires' | 'posts';
+
+export interface GlobalSearchResult {
+  profiles: PublicUserProfile[];
+  questionnaires: SearchProfile[];
+  posts: SocialPost[];
 }
 
 export interface PostComment {
@@ -884,6 +949,41 @@ export interface AdminProfile {
   moderation_status: string;
   risk_score: number;
   telegram_user_id: number;
+}
+
+export interface AdminPublicProfile {
+  id: string;
+  display_name: string;
+  bio: string;
+  avatar_media_id: string | null;
+  avatar_render_mode: 'photo' | 'animation' | null;
+  moderation_status: 'active' | 'blocked';
+  moderation_reason: string | null;
+  risk_score: number;
+  telegram_user_id: number;
+  telegram_username?: string;
+  questionnaire_count: number;
+  post_count: number;
+}
+
+export interface AdminQuestionnaire extends AdminProfile {
+  title: string;
+  is_primary: number;
+  is_active: number;
+  media_count: number;
+}
+
+export interface AdminPost {
+  id: string;
+  author_user_id: string;
+  content_type: string;
+  text_preview: string;
+  status: 'active' | 'deleted' | 'blocked';
+  published_at: string | null;
+  created_at: string;
+  display_name: string | null;
+  telegram_user_id: number;
+  telegram_username?: string;
 }
 
 export interface AdminMedia {

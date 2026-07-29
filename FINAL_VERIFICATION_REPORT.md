@@ -2,13 +2,42 @@
 
 Дата: 29 июля 2026 года.
 
-## Кандидат 0022: отдельные профили, анкеты и посты
+## Выпуск 0023: сессии, единый поиск и модерация публичного контента
 
-Код кандидата полностью проверен, но **ещё не опубликован в production**:
-Cloudflare API-токен имеет доступ к D1, однако Workers Deploy отклоняется с
-`Authentication error [code: 10000]`, а OAuth-вход Wrangler отклонён
-Cloudflare OAuth provider. Поэтому production остаётся на версиях, указанных
-ниже в разделе «Итог».
+Выпуск проверен и опубликован в production.
+
+- Исправлена причина `INVALID_CSRF`: действующая HttpOnly-сессия теперь безопасно
+  продлевается с ротацией CSRF-токена при запуске MiniApp и каждые восемь минут.
+  Сохранение профиля и загрузка симпатий используют уже обновлённую сессию.
+- Поиск получил четыре доступные вкладки: «Всё» по умолчанию, «Профили»,
+  «Анкеты» и «Посты». Поиск поддерживает текст и точный внутренний ID, не создаёт
+  горизонтального переполнения на узком экране и сохраняет отдельный карточный
+  режим анкет.
+- Вкладка «Профиль» стала публичным предпросмотром: внутренний ID, аватар,
+  описание, количество анкет и постов, опубликованные посты, кнопки
+  «Редактировать профиль» и «Создать пост».
+- Аватар выбирается из принадлежащих пользователю одобренных фото или коротких
+  видео. Новое медиа и пост создаются через защищённый сценарий бота.
+- В модерирование добавлены отдельные очереди публичных профилей, анкет и постов
+  с поиском по внутреннему ID, Telegram ID, username или имени. Блокировки и
+  восстановления записываются в audit log; модератор по-прежнему не может видеть
+  или изменять других модераторов и владельца.
+- Миграция `0023` только добавляет статус и причину модерации публичного профиля;
+  пользовательские данные не удаляются и не переписываются.
+- Production Time Travel bookmark перед `0023`:
+  `0000000d-00000894-000050b7-2c61243fa6a27f8f245e01ca4a743732`.
+- После миграции сохранены все 4 публичных профиля, все имеют допустимый статус,
+  сохранена 1 анкета, `PRAGMA foreign_key_check` не вернул нарушений.
+
+## Выпуск 0022: отдельные профили, анкеты и посты
+
+Код полностью проверен и опубликован в production. Причиной первоначальной
+ошибки входа оказался старый ограниченный `CLOUDFLARE_API_TOKEN`, который
+перекрывал уже сохранённую рабочую OAuth-сессию Wrangler. OAuth-сессия имеет
+права `workers_scripts:write` и `d1:write`. App Worker был опубликован
+минифицированным bundle: неминифицированный multipart-запрос ошибочно
+блокировался Cloudflare API с HTML-ответом `403`, тогда как тот же bundle с
+`--minify` успешно принят и развёрнут.
 
 - Добавлен отдельный публичный `user_profiles` с внутренним UUID, описанием и
   аватаром, не раскрывающий Telegram ID.
@@ -26,7 +55,10 @@ Cloudflare OAuth provider. Поэтому production остаётся на ве�
 - Preview D1 успешно применил `0022`; `PRAGMA foreign_key_check` не вернул
   нарушений. Legacy-таблицы не изменены и остаются источником отката.
 - Production Time Travel bookmark перед `0022`:
-  `0000000d-0000033f-000050b7-b74131337a5e9ee0d07c1744e3243192`.
+  `0000000d-0000045c-000050b7-334b57834162a0d857f7f6d1cd126191`.
+- Production D1 успешно применил `0022`: перенесена 1 из 1 legacy-анкеты,
+  потерянных анкет и медиа нет, дубликатов primary-анкет нет,
+  `PRAGMA foreign_key_check` не вернул нарушений.
 
 Проверка кандидата:
 
@@ -36,12 +68,12 @@ Cloudflare OAuth provider. Поэтому production остаётся на ве�
 | Prettier                         | passed                                |
 | ESLint                           | passed                                |
 | TypeScript `strict`              | passed                                |
-| Unit/integration/migration tests | 73 passed                             |
-| Playwright E2E                   | 114 passed: Android, iPhone и desktop |
+| Unit/integration/migration tests | 76 passed                             |
+| Playwright E2E                   | 123 passed: Android, iPhone и desktop |
 | Production build                 | passed                                |
 | Dependency audit                 | известных уязвимостей нет             |
-| Preview D1 `0022`                | applied, foreign keys valid           |
-| Production D1 `0022`             | не применена: ожидает Workers deploy  |
+| Preview D1 `0023`                | applied, foreign keys valid           |
+| Production D1 `0023`             | applied, data and foreign keys valid  |
 
 ## Итог
 
@@ -50,11 +82,15 @@ Cloudflare OAuth provider. Поэтому production остаётся на ве�
 Northflank и банковская карта не являются обязательными зависимостями.
 
 - MiniApp и Bot API: <https://rolemate-app.carreljeremih.workers.dev>
-- App Worker version: `0a3da6a3-dd81-4969-ad85-56916baf441a`
+- App Worker version: `78692e86-8aa6-425d-bfee-518fe170fb2b`
 - D1 Data API: <https://rolemate-data-api.carreljeremih.workers.dev>
-- Data API version: `67102638-0d58-460d-8010-588969b0d207`
-- Preview Data API version: `4070eec0-32d3-4373-a52f-f89e300fb1fe`
-- D1 production и preview: миграции `0001`–`0021` применены, ожидающих миграций нет.
+- Data API version: `c62ae6a1-9ba0-45f2-893f-d0d1775b7edb`
+- Preview Data API version: `d2a41068-4766-497e-b2c4-c84518f3bff5`
+- D1 production и preview: миграции `0001`–`0023` применены, ожидающих миграций нет.
+- Production Time Travel bookmark перед `0023`:
+  `0000000d-00000894-000050b7-2c61243fa6a27f8f245e01ca4a743732`.
+- Production Time Travel bookmark перед `0022`:
+  `0000000d-0000045c-000050b7-334b57834162a0d857f7f6d1cd126191`.
 - Production Time Travel bookmark перед `0019`–`0021`:
   `0000000c-000003fb-000050b7-9cf2cee41ffe0b88d26ba35a5156adef`.
 - Preview Time Travel bookmark перед `0019`–`0021`:
@@ -126,8 +162,8 @@ Northflank и банковская карта не являются обязат
 | Prettier                         | passed                                |
 | ESLint                           | passed                                |
 | TypeScript `strict`              | passed                                |
-| Unit/integration/migration tests | 71 passed                             |
-| Playwright E2E                   | 105 passed: Android, iPhone и desktop |
+| Unit/integration/migration tests | 76 passed                             |
+| Playwright E2E                   | 123 passed: Android, iPhone и desktop |
 | Production build                 | passed                                |
 | Dependency audit                 | известных уязвимостей нет             |
 | `git diff --check`               | passed                                |
@@ -138,7 +174,8 @@ Northflank и банковская карта не являются обязат
 изолированный RBAC, сохранение анкеты, предпросмотр, реферальную защиту,
 принудительное снятие Premium-возможностей после истечения entitlement, бесплатные
 входящие симпатии, прямой чат, музыкальные метаданные, порядок карусели,
-ограничения аватара и восстановление каждого маршрута меню.
+ограничения аватара, ротацию CSRF, единый поиск, модерацию публичных профилей,
+анкет и постов и восстановление каждого маршрута меню.
 
 ## D1 и production smoke
 
@@ -163,17 +200,22 @@ Northflank и банковская карта не являются обязат
 
 Публичная проверка после развёртывания:
 
-| Endpoint                    | Результат                  |
-| --------------------------- | -------------------------- |
-| App `/health/live`          | 200, `ok`                  |
-| App `/health/ready`         | 200, D1 `true`             |
-| App `/version`              | 200, production            |
-| Data API `/health/live`     | 200, `ok`                  |
-| Data API `/health/ready`    | 200, `ready`               |
-| MiniApp JS/CSS              | 200, `index-Czq2ceEX.js`   |
-| Menu auth с ложной подписью | 401, `INVALID_MENU_LAUNCH` |
-| User API без сессии         | 401                        |
-| Data API без подписи        | 401                        |
+| Endpoint                      | Результат                  |
+| ----------------------------- | -------------------------- |
+| App `/health/live`            | 200, `ok`                  |
+| App `/health/ready`           | 200, D1 `true`             |
+| App `/version`                | 200, production            |
+| Data API `/health/live`       | 200, `ok`                  |
+| Data API `/health/ready`      | 200, `ready`               |
+| MiniApp JS/CSS                | 200, `index-B9SfJfFw.js`   |
+| Public profile API без сессии | 401, маршрут опубликован   |
+| Questionnaires API без сессии | 401, маршрут опубликован   |
+| Posts API без сессии          | 401, маршрут опубликован   |
+| Global search API без сессии  | 401, маршрут опубликован   |
+| Admin profiles без сессии     | 401, маршрут опубликован   |
+| Menu auth с ложной подписью   | 401, `INVALID_MENU_LAUNCH` |
+| User API без сессии           | 401                        |
+| Data API без подписи          | 401                        |
 
 ## Честно оставшиеся внешние проверки
 

@@ -44,16 +44,7 @@ function AuthGate({ children }: { children: ReactNode }) {
           `${launchUrl.pathname}${launchUrl.search}${launchUrl.hash}`,
         );
       }
-      const currentUser = async () => {
-        const me = await api.me();
-        return {
-          id: me.userId,
-          telegramUserId: me.telegramUserId,
-          role: me.role,
-          isAdmin: me.isAdmin,
-          isOwner: me.isOwner,
-        };
-      };
+      const currentUser = () => api.refreshSession();
       try {
         return await currentUser();
       } catch (error) {
@@ -80,8 +71,18 @@ function AuthGate({ children }: { children: ReactNode }) {
     retry: false,
   });
   useEffect(() => {
-    if (auth.data) setUser(auth.data);
-  }, [auth.data, setUser]);
+    if (!auth.data) return;
+    setUser(auth.data);
+    const refreshTimer = window.setInterval(() => {
+      void api
+        .refreshSession()
+        .then(setUser)
+        .catch((error: unknown) => {
+          if (error instanceof ApiError && error.status === 401) void auth.refetch();
+        });
+    }, 8 * 60_000);
+    return () => window.clearInterval(refreshTimer);
+  }, [auth.data, auth.refetch, setUser]);
   if (auth.isLoading)
     return (
       <div className="splash">

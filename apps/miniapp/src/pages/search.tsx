@@ -21,17 +21,16 @@ import { useLocation } from 'wouter';
 import {
   ApiError,
   api,
-  type GlobalSearchResult,
-  type GlobalSearchScope,
   type PublicUserProfile,
+  type SearchScope,
   type SearchPreferences,
   type SearchPreferencesInput,
   type SearchProfile,
-  type SocialPost,
 } from '../api.js';
 import { Button, Card, EmptyState, Skeleton } from '../components/ui.js';
 import { ProfileMarkdown } from '../components/markdown.js';
 import { ProfileAvatar } from '../components/profile-avatar.js';
+import { VerificationBadge } from '../components/verification-badge.js';
 import { haptic } from '../telegram.js';
 
 function list(value: string | undefined): string[] {
@@ -139,10 +138,16 @@ export function ProfileCard({
     if (!fullscreenMediaOpen) return;
     const closeOnEscape = (event: KeyboardEvent) => {
       if (event.key === 'Escape') setFullscreenMediaOpen(false);
+      if (event.key === 'ArrowLeft' && visualMedia.length > 1) {
+        setMediaIndex((index) => (index - 1 + visualMedia.length) % visualMedia.length);
+      }
+      if (event.key === 'ArrowRight' && visualMedia.length > 1) {
+        setMediaIndex((index) => (index + 1) % visualMedia.length);
+      }
     };
     window.addEventListener('keydown', closeOnEscape);
     return () => window.removeEventListener('keydown', closeOnEscape);
-  }, [fullscreenMediaOpen]);
+  }, [fullscreenMediaOpen, visualMedia.length]);
   return (
     <>
       <Card className={`profile-card overflow-hidden ${expanded ? 'profile-card-expanded' : ''}`}>
@@ -229,9 +234,13 @@ export function ProfileCard({
                 name={profile.display_name}
               />
               <div className="min-w-0">
-                <h2 className="truncate font-display text-3xl font-semibold">
-                  {profile.display_name}
+                <h2 className="flex min-w-0 items-center gap-1 font-display text-3xl font-semibold">
+                  <span className="truncate">{profile.display_name}</span>
+                  <VerificationBadge kind={profile.verification_kind} />
                 </h2>
+                {profile.username ? (
+                  <p className="truncate text-xs text-lilac">@{profile.username}</p>
+                ) : null}
                 <p className="mt-1 truncate text-sm text-muted">{profile.short_headline}</p>
               </div>
             </div>
@@ -272,7 +281,14 @@ export function ProfileCard({
                       className="w-full"
                       src={`/api/profile-media/${item.id}`}
                       controls
-                      preload="none"
+                      preload="metadata"
+                      onPlay={(event) => {
+                        document
+                          .querySelectorAll<HTMLAudioElement>('.profile-track audio')
+                          .forEach((audio) => {
+                            if (audio !== event.currentTarget) audio.pause();
+                          });
+                      }}
                       aria-label={ru.miniApp.search.profileAudio(index + 1)}
                     />
                   </div>
@@ -365,6 +381,28 @@ export function ProfileCard({
             >
               <X />
             </button>
+            {visualMedia.length > 1 ? (
+              <>
+                <button
+                  className="media-lightbox-arrow media-lightbox-arrow-left"
+                  type="button"
+                  aria-label={ru.miniApp.search.previousMedia}
+                  onClick={() =>
+                    setMediaIndex((index) => (index - 1 + visualMedia.length) % visualMedia.length)
+                  }
+                >
+                  <ChevronLeft />
+                </button>
+                <button
+                  className="media-lightbox-arrow media-lightbox-arrow-right"
+                  type="button"
+                  aria-label={ru.miniApp.search.nextMedia}
+                  onClick={() => setMediaIndex((index) => (index + 1) % visualMedia.length)}
+                >
+                  <ChevronRight />
+                </button>
+              </>
+            ) : null}
             {currentMedia.media_type === 'video' ? (
               <video
                 className="media-lightbox-content"
@@ -421,12 +459,12 @@ function SearchScopeTabs({
   value,
   onChange,
 }: {
-  value: GlobalSearchScope;
-  onChange: (scope: GlobalSearchScope) => void;
+  value: SearchScope;
+  onChange: (scope: SearchScope) => void;
 }) {
-  const scopes: GlobalSearchScope[] = ['all', 'profiles', 'questionnaires', 'posts'];
+  const scopes: SearchScope[] = ['questionnaires', 'profiles'];
   return (
-    <div className="mb-4 grid grid-cols-2 gap-2 sm:grid-cols-4" role="tablist">
+    <div className="mb-4 grid grid-cols-2 gap-2" role="tablist">
       {scopes.map((scope) => (
         <Button
           key={scope}
@@ -453,7 +491,10 @@ function GlobalProfileResult({ profile }: { profile: PublicUserProfile }) {
           name={profile.display_name}
         />
         <div className="min-w-0 flex-1">
-          <strong className="break-words">{profile.display_name}</strong>
+          <strong className="flex items-center gap-1 break-words">
+            {profile.display_name}
+            <VerificationBadge kind={profile.verification_kind} />
+          </strong>
           <p className="mt-1 whitespace-pre-wrap break-words text-sm text-soft">{profile.bio}</p>
           <p className="mt-2 break-all text-xs text-muted">
             {ru.miniApp.search.resultId(profile.id)}
@@ -468,162 +509,24 @@ function GlobalProfileResult({ profile }: { profile: PublicUserProfile }) {
   );
 }
 
-function GlobalQuestionnaireResult({
-  questionnaire,
-  onMessage,
-  pending,
-}: {
-  questionnaire: SearchProfile;
-  onMessage: () => void;
-  pending: boolean;
-}) {
-  return (
-    <Card className="p-4">
-      <div className="flex items-start gap-3">
-        <ProfileAvatar
-          mediaId={questionnaire.avatar_media_id}
-          renderMode={questionnaire.avatar_render_mode}
-          name={questionnaire.display_name}
-        />
-        <div className="min-w-0 flex-1">
-          <strong className="break-words">{questionnaire.display_name}</strong>
-          <p className="mt-1 break-words text-sm text-muted">{questionnaire.short_headline}</p>
-          <p className="mt-2 line-clamp-3 whitespace-pre-wrap break-words text-sm text-soft">
-            {questionnaire.about}
-          </p>
-          <p className="mt-2 break-all text-xs text-muted">
-            {ru.miniApp.search.resultId(questionnaire.id)}
-          </p>
-        </div>
-      </div>
-      <Button className="mt-3" loading={pending} onClick={onMessage}>
-        <MessageCircle className="h-4 w-4" /> {ru.miniApp.search.writeMessage}
-      </Button>
-    </Card>
-  );
-}
-
-function GlobalPostResult({ post }: { post: SocialPost }) {
-  const hasMedia = Boolean(post.media_telegram_file_id);
-  return (
-    <Card className="overflow-hidden">
-      <div className="flex items-center gap-3 p-4">
-        <ProfileAvatar
-          mediaId={post.avatar_media_id}
-          renderMode={post.avatar_render_mode}
-          name={post.display_name}
-        />
-        <div className="min-w-0">
-          <strong className="break-words">{post.display_name}</strong>
-          <p className="break-all text-xs text-muted">{ru.miniApp.search.resultId(post.id)}</p>
-        </div>
-      </div>
-      {hasMedia && (post.content_type === 'photo' || post.content_type === 'animation') ? (
-        <img
-          className="max-h-80 w-full object-contain"
-          src={`/api/posts/${post.id}/media`}
-          alt=""
-          loading="lazy"
-        />
-      ) : hasMedia && (post.content_type === 'video' || post.content_type === 'video_note') ? (
-        <video
-          className="max-h-80 w-full"
-          src={`/api/posts/${post.id}/media`}
-          controls
-          playsInline
-          preload="metadata"
-        />
-      ) : null}
-      <p className="whitespace-pre-wrap break-words p-4 text-sm text-soft">{post.text_preview}</p>
-      <div className="flex gap-3 px-4 pb-4 text-xs text-muted">
-        <span>👍 {post.likes}</span>
-        <span>👎 {post.dislikes}</span>
-        <span>💬 {post.comment_count}</span>
-      </div>
-    </Card>
-  );
-}
-
-function UnifiedSearchResults({
-  result,
-  scope,
-  pendingUserId,
-  onMessage,
-}: {
-  result: GlobalSearchResult;
-  scope: GlobalSearchScope;
-  pendingUserId: string | null;
-  onMessage: (userId: string) => void;
-}) {
-  const total = result.profiles.length + result.questionnaires.length + result.posts.length;
-  if (!total) {
-    return (
-      <EmptyState
-        icon={<Search className="h-7 w-7" />}
-        title={ru.miniApp.search.emptyTitle}
-        description={ru.miniApp.search.globalEmpty}
-      />
-    );
-  }
-  return (
-    <div className="space-y-6">
-      {(scope === 'all' || scope === 'profiles') && result.profiles.length ? (
-        <section>
-          <h2 className="mb-3 font-display text-2xl">{ru.miniApp.search.profilesFound}</h2>
-          <div className="space-y-3">
-            {result.profiles.map((profile) => (
-              <GlobalProfileResult key={profile.id} profile={profile} />
-            ))}
-          </div>
-        </section>
-      ) : null}
-      {(scope === 'all' || scope === 'questionnaires') && result.questionnaires.length ? (
-        <section>
-          <h2 className="mb-3 font-display text-2xl">{ru.miniApp.search.questionnairesFound}</h2>
-          <div className="space-y-3">
-            {result.questionnaires.map((questionnaire) => (
-              <GlobalQuestionnaireResult
-                key={questionnaire.id}
-                questionnaire={questionnaire}
-                pending={pendingUserId === questionnaire.user_id}
-                onMessage={() => onMessage(questionnaire.user_id)}
-              />
-            ))}
-          </div>
-        </section>
-      ) : null}
-      {(scope === 'all' || scope === 'posts') && result.posts.length ? (
-        <section>
-          <h2 className="mb-3 font-display text-2xl">{ru.miniApp.search.postsFound}</h2>
-          <div className="space-y-3">
-            {result.posts.map((post) => (
-              <GlobalPostResult key={post.id} post={post} />
-            ))}
-          </div>
-        </section>
-      ) : null}
-    </div>
-  );
-}
-
 export function SearchPage() {
   const [, navigate] = useLocation();
   const queryClient = useQueryClient();
   const [query, setQuery] = useState('');
   const [queryDraft, setQueryDraft] = useState('');
-  const [scope, setScope] = useState<GlobalSearchScope>('all');
+  const [scope, setScope] = useState<SearchScope>('questionnaires');
   const [staffNotice, setStaffNotice] = useState('');
-  const [fullProfileOpen, setFullProfileOpen] = useState(false);
+  const [selectedProfile, setSelectedProfile] = useState<SearchProfile | null>(null);
   const me = useQuery({ queryKey: ['me'], queryFn: api.me });
   const profiles = useQuery({
     queryKey: ['search', query],
     queryFn: () => api.search(query),
     enabled: scope === 'questionnaires',
   });
-  const global = useQuery({
-    queryKey: ['global-search', query, scope],
-    queryFn: () => api.globalSearch(query, scope),
-    enabled: scope !== 'questionnaires',
+  const publicProfiles = useQuery({
+    queryKey: ['public-profile-search', query],
+    queryFn: () => api.searchPublicProfiles(query),
+    enabled: scope === 'profiles',
   });
   const premium = useQuery({ queryKey: ['premium-status'], queryFn: api.premiumStatus });
   const preferences = useQuery({
@@ -634,34 +537,25 @@ export function SearchPage() {
     queryKey: ['search-availability'],
     queryFn: api.searchAvailability,
   });
-  const [index, setIndex] = useState(0);
   const [filtersOpen, setFiltersOpen] = useState(false);
-  const current = profiles.data?.[index];
   useEffect(() => {
-    setIndex(0);
-  }, [profiles.dataUpdatedAt, query]);
-  useEffect(() => {
-    setFullProfileOpen(false);
-  }, [current?.id]);
-  useEffect(() => {
-    if (!fullProfileOpen) return;
+    if (!selectedProfile) return;
     const previousOverflow = document.body.style.overflow;
     document.body.style.overflow = 'hidden';
     const closeOnEscape = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') setFullProfileOpen(false);
+      if (event.key === 'Escape') setSelectedProfile(null);
     };
     window.addEventListener('keydown', closeOnEscape);
     return () => {
       document.body.style.overflow = previousOverflow;
       window.removeEventListener('keydown', closeOnEscape);
     };
-  }, [fullProfileOpen]);
+  }, [selectedProfile]);
   const searchForm = (
     <form
       className="search-box"
       onSubmit={(event) => {
         event.preventDefault();
-        setIndex(0);
         setQuery(queryDraft.trim());
       }}
     >
@@ -686,7 +580,7 @@ export function SearchPage() {
     }) => api.swipe(profile.user_id, action),
     onSuccess: (result) => {
       haptic(result.matched ? 'heavy' : 'light');
-      setIndex((value) => value + 1);
+      void queryClient.invalidateQueries({ queryKey: ['search'] });
       if (result.matched) void queryClient.invalidateQueries({ queryKey: ['conversations'] });
     },
   });
@@ -694,13 +588,12 @@ export function SearchPage() {
     mutationFn: api.rewind,
     onSuccess: () => {
       haptic('light');
-      setIndex((value) => Math.max(0, value - 1));
       void queryClient.invalidateQueries({ queryKey: ['search'] });
     },
   });
   const block = useMutation({
     mutationFn: (userId: string) => api.block(userId),
-    onSuccess: () => setIndex((value) => value + 1),
+    onSuccess: () => void queryClient.invalidateQueries({ queryKey: ['search'] }),
   });
   const report = useMutation({ mutationFn: api.report });
   const directChat = useMutation({
@@ -725,7 +618,9 @@ export function SearchPage() {
       api.adminModerateUser(userId, { action, reason, ...(bannedUntil ? { bannedUntil } : {}) }),
     onSuccess: (_result, variables) => {
       setStaffNotice(ru.miniApp.search.moderationCompleted);
-      if (variables.action !== 'warn') setIndex((value) => value + 1);
+      if (variables.action !== 'warn') {
+        void queryClient.invalidateQueries({ queryKey: ['search'] });
+      }
       void queryClient.invalidateQueries({ queryKey: ['admin-users'] });
       void queryClient.invalidateQueries({ queryKey: ['admin-questionnaires'] });
       void queryClient.invalidateQueries({ queryKey: ['admin-public-profiles'] });
@@ -743,22 +638,31 @@ export function SearchPage() {
           value={scope}
           onChange={(nextScope) => {
             setScope(nextScope);
-            setIndex(0);
           }}
         />
         <div className="mb-4">{searchForm}</div>
-        {global.isLoading ? <Skeleton className="h-[28rem]" /> : null}
-        {global.isError ? <div className="error-box">{global.error.message}</div> : null}
-        {global.data ? (
-          <UnifiedSearchResults
-            result={global.data}
-            scope={scope}
-            pendingUserId={directChat.isPending ? (directChat.variables ?? null) : null}
-            onMessage={(userId) => directChat.mutate(userId)}
-          />
+        {publicProfiles.isLoading ? <Skeleton className="h-[28rem]" /> : null}
+        {publicProfiles.isError ? (
+          <div className="error-box">{publicProfiles.error.message}</div>
         ) : null}
-        {directChat.isError ? (
-          <div className="error-box mt-3">{ru.miniApp.search.directChatError}</div>
+        <div className="space-y-3">
+          {publicProfiles.data?.map((profile) => (
+            <button
+              className="block w-full text-left"
+              key={profile.id}
+              type="button"
+              onClick={() => navigate(`/profiles/${profile.id}`)}
+            >
+              <GlobalProfileResult profile={profile} />
+            </button>
+          ))}
+        </div>
+        {!publicProfiles.isLoading && !publicProfiles.data?.length ? (
+          <EmptyState
+            icon={<Search className="h-7 w-7" />}
+            title={ru.miniApp.search.emptyTitle}
+            description={ru.miniApp.search.globalEmpty}
+          />
         ) : null}
       </div>
     );
@@ -772,7 +676,7 @@ export function SearchPage() {
       </div>
     );
   }
-  if (!current) {
+  if (!profiles.data?.length) {
     const emptyDescription =
       availability.data?.otherProfiles === 0
         ? ru.miniApp.search.emptyOnlyOwnProfile
@@ -792,13 +696,11 @@ export function SearchPage() {
               value={scope}
               onChange={(nextScope) => {
                 setScope(nextScope);
-                setIndex(0);
               }}
             />
             {searchForm}
             <Button
               onClick={() => {
-                setIndex(0);
                 void profiles.refetch();
                 void availability.refetch();
               }}
@@ -830,7 +732,6 @@ export function SearchPage() {
         value={scope}
         onChange={(nextScope) => {
           setScope(nextScope);
-          setIndex(0);
         }}
       />
       <div className="mb-4">{searchForm}</div>
@@ -850,7 +751,6 @@ export function SearchPage() {
             preferences={preferences.data}
             onSaved={() => {
               setFiltersOpen(false);
-              setIndex(0);
               void profiles.refetch();
             }}
           />
@@ -863,24 +763,141 @@ export function SearchPage() {
           </Card>
         )
       ) : null}
-      <AnimatePresence mode="wait">
-        <motion.div
-          key={current.id}
-          initial={{ opacity: 0, x: 40 }}
-          animate={{ opacity: 1, x: 0 }}
-          exit={{ opacity: 0, x: -80, rotate: -4 }}
-        >
-          <ProfileCard profile={current} onOpen={() => setFullProfileOpen(true)} />
-        </motion.div>
-      </AnimatePresence>
-      {fullProfileOpen ? (
+      <div className="space-y-8" data-testid="questionnaire-feed">
+        {profiles.data.map((profile, profileIndex) => (
+          <motion.article
+            key={profile.id}
+            initial={{ opacity: 0, y: 18 }}
+            animate={{ opacity: 1, y: 0 }}
+            className="space-y-3"
+          >
+            <ProfileCard profile={profile} onOpen={() => setSelectedProfile(profile)} />
+            {me.data?.isAdmin ? (
+              <Card
+                className="p-4"
+                data-testid={
+                  profileIndex === 0 ? 'search-moderation-panel' : `search-moderation-${profile.id}`
+                }
+              >
+                <strong className="text-sm">{ru.miniApp.search.quickModeration}</strong>
+                <div className="mt-3 flex flex-wrap gap-2">
+                  <Button
+                    variant="secondary"
+                    loading={staffModeration.isPending}
+                    onClick={() => {
+                      const reason = window.prompt(ru.miniApp.admin.warningReasonPrompt)?.trim();
+                      if (reason && reason.length >= 3) {
+                        setStaffNotice('');
+                        staffModeration.mutate({
+                          userId: profile.user_id,
+                          action: 'warn',
+                          reason,
+                        });
+                      }
+                    }}
+                  >
+                    {ru.miniApp.admin.warn}
+                  </Button>
+                  <Button
+                    variant="secondary"
+                    loading={staffModeration.isPending}
+                    onClick={() => {
+                      const reason = window
+                        .prompt(ru.miniApp.admin.temporaryBanReasonPrompt)
+                        ?.trim();
+                      if (reason && reason.length >= 3) {
+                        setStaffNotice('');
+                        staffModeration.mutate({
+                          userId: profile.user_id,
+                          action: 'temporary_ban',
+                          reason,
+                          bannedUntil: new Date(Date.now() + 86_400_000).toISOString(),
+                        });
+                      }
+                    }}
+                  >
+                    {ru.miniApp.admin.temporaryBan}
+                  </Button>
+                  <Button
+                    variant="danger"
+                    loading={staffModeration.isPending}
+                    onClick={() => {
+                      const reason = window.prompt(ru.miniApp.search.disableReasonPrompt)?.trim();
+                      if (reason && reason.length >= 3) {
+                        setStaffNotice('');
+                        staffModeration.mutate({
+                          userId: profile.user_id,
+                          action: 'disable_profile',
+                          reason,
+                        });
+                      }
+                    }}
+                  >
+                    {ru.miniApp.admin.disableProfile}
+                  </Button>
+                </div>
+              </Card>
+            ) : null}
+            <div className="swipe-actions">
+              <Button
+                variant="secondary"
+                aria-label={ru.miniApp.search.skip}
+                onClick={() => swipe.mutate({ action: 'skip', profile })}
+              >
+                <X />
+              </Button>
+              <Button
+                className="like-button"
+                aria-label={ru.miniApp.search.like}
+                onClick={() => swipe.mutate({ action: 'like', profile })}
+              >
+                <Heart />
+              </Button>
+              <Button
+                variant="secondary"
+                aria-label={ru.miniApp.search.superLike}
+                onClick={() => swipe.mutate({ action: 'super_like', profile })}
+              >
+                <Star />
+              </Button>
+            </div>
+            <div className="flex justify-center gap-6 text-xs text-muted">
+              <button
+                className="inline-flex gap-1"
+                onClick={() => {
+                  if (window.confirm(ru.miniApp.search.blockConfirm)) {
+                    block.mutate(profile.user_id);
+                  }
+                }}
+              >
+                <Ban className="h-3.5 w-3.5" /> {ru.miniApp.search.block}
+              </button>
+              <button
+                className="inline-flex gap-1"
+                onClick={() => {
+                  const description = window.prompt(ru.miniApp.search.reportPrompt) ?? '';
+                  if (!description) return;
+                  report.mutate({
+                    reportedUserId: profile.user_id,
+                    category: 'other',
+                    description,
+                  });
+                }}
+              >
+                <Flag className="h-3.5 w-3.5" /> {ru.miniApp.search.report}
+              </button>
+            </div>
+          </motion.article>
+        ))}
+      </div>
+      {selectedProfile ? (
         <div
           className="profile-full-overlay"
           role="dialog"
           aria-modal="true"
           aria-label={ru.miniApp.search.fullProfile}
           onMouseDown={(event) => {
-            if (event.target === event.currentTarget) setFullProfileOpen(false);
+            if (event.target === event.currentTarget) setSelectedProfile(null);
           }}
         >
           <div className="profile-full-dialog">
@@ -888,15 +905,15 @@ export function SearchPage() {
               type="button"
               className="profile-full-close"
               aria-label={ru.miniApp.search.closeProfile}
-              onClick={() => setFullProfileOpen(false)}
+              onClick={() => setSelectedProfile(null)}
             >
               <X />
             </button>
             <ProfileCard
-              profile={current}
+              profile={selectedProfile}
               expanded
               messagePending={directChat.isPending}
-              onMessage={() => directChat.mutate(current.user_id)}
+              onMessage={() => directChat.mutate(selectedProfile.user_id)}
             />
             {directChat.isError ? (
               <div className="error-box mt-3">{ru.miniApp.search.directChatError}</div>
@@ -904,67 +921,7 @@ export function SearchPage() {
           </div>
         </div>
       ) : null}
-      {me.data?.isAdmin ? (
-        <Card className="mt-3 p-4" data-testid="search-moderation-panel">
-          <strong className="text-sm">{ru.miniApp.search.quickModeration}</strong>
-          <p className="mt-1 text-xs text-muted">{ru.miniApp.search.quickModerationHint}</p>
-          <div className="mt-3 flex flex-wrap gap-2">
-            <Button
-              variant="secondary"
-              loading={staffModeration.isPending}
-              onClick={() => {
-                const reason = window.prompt(ru.miniApp.admin.warningReasonPrompt)?.trim();
-                if (reason && reason.length >= 3) {
-                  setStaffNotice('');
-                  staffModeration.mutate({ userId: current.user_id, action: 'warn', reason });
-                }
-              }}
-            >
-              {ru.miniApp.admin.warn}
-            </Button>
-            <Button
-              variant="secondary"
-              loading={staffModeration.isPending}
-              onClick={() => {
-                const reason = window.prompt(ru.miniApp.admin.temporaryBanReasonPrompt)?.trim();
-                if (reason && reason.length >= 3) {
-                  setStaffNotice('');
-                  staffModeration.mutate({
-                    userId: current.user_id,
-                    action: 'temporary_ban',
-                    reason,
-                    bannedUntil: new Date(Date.now() + 86_400_000).toISOString(),
-                  });
-                }
-              }}
-            >
-              {ru.miniApp.admin.temporaryBan}
-            </Button>
-            <Button
-              variant="danger"
-              loading={staffModeration.isPending}
-              onClick={() => {
-                const reason = window.prompt(ru.miniApp.search.disableReasonPrompt)?.trim();
-                if (reason && reason.length >= 3) {
-                  setStaffNotice('');
-                  staffModeration.mutate({
-                    userId: current.user_id,
-                    action: 'disable_profile',
-                    reason,
-                  });
-                }
-              }}
-            >
-              {ru.miniApp.admin.disableProfile}
-            </Button>
-          </div>
-          {staffNotice ? <p className="mt-3 text-sm text-lilac">{staffNotice}</p> : null}
-          {staffModeration.isError ? (
-            <div className="error-box mt-3">{staffModeration.error.message}</div>
-          ) : null}
-        </Card>
-      ) : null}
-      <div className="swipe-actions">
+      <div className="mt-5 flex justify-center">
         <Button
           variant="ghost"
           aria-label={ru.miniApp.search.rewind}
@@ -979,27 +936,6 @@ export function SearchPage() {
         >
           <RotateCcw />
         </Button>
-        <Button
-          variant="secondary"
-          aria-label={ru.miniApp.search.skip}
-          onClick={() => swipe.mutate({ action: 'skip', profile: current })}
-        >
-          <X />
-        </Button>
-        <Button
-          className="like-button"
-          aria-label={ru.miniApp.search.like}
-          onClick={() => swipe.mutate({ action: 'like', profile: current })}
-        >
-          <Heart />
-        </Button>
-        <Button
-          variant="secondary"
-          aria-label={ru.miniApp.search.superLike}
-          onClick={() => swipe.mutate({ action: 'super_like', profile: current })}
-        >
-          <Star />
-        </Button>
       </div>
       {swipe.isError ? (
         <div className="error-box mt-3">
@@ -1008,30 +944,10 @@ export function SearchPage() {
             : swipe.error.message}
         </div>
       ) : null}
-      <div className="mt-3 flex justify-center gap-6 text-xs text-muted">
-        <button
-          className="inline-flex gap-1"
-          onClick={() => {
-            if (window.confirm(ru.miniApp.search.blockConfirm)) block.mutate(current.user_id);
-          }}
-        >
-          <Ban className="h-3.5 w-3.5" /> {ru.miniApp.search.block}
-        </button>
-        <button
-          className="inline-flex gap-1"
-          onClick={() => {
-            const description = window.prompt(ru.miniApp.search.reportPrompt) ?? '';
-            if (!description) return;
-            report.mutate({
-              reportedUserId: current.user_id,
-              category: 'other',
-              description,
-            });
-          }}
-        >
-          <Flag className="h-3.5 w-3.5" /> {ru.miniApp.search.report}
-        </button>
-      </div>
+      {staffNotice ? <p className="mt-3 text-center text-sm text-lilac">{staffNotice}</p> : null}
+      {staffModeration.isError ? (
+        <div className="error-box mt-3">{staffModeration.error.message}</div>
+      ) : null}
     </div>
   );
 }

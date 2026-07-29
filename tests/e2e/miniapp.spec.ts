@@ -172,6 +172,24 @@ async function mockApi(
         questionnaires: [],
         posts: [],
       },
+      '/api/search/profiles': [
+        {
+          id: '00000000-0000-4000-8000-000000000002',
+          display_name: 'Публичный автор',
+          bio: 'Профиль автора с опубликованными историями',
+          avatar_media_id: null,
+          avatar_render_mode: null,
+          moderation_status: 'active',
+          moderation_reason: null,
+          verification_kind: null,
+          usernames: '[]',
+          featured_audio_items: '[]',
+          questionnaire_count: 1,
+          post_count: 1,
+          created_at: '2026-07-29 12:00:00',
+          updated_at: '2026-07-29 12:00:00',
+        },
+      ],
       '/api/admin/public-profiles': [],
       '/api/admin/questionnaires': [],
       '/api/admin/posts': [],
@@ -548,81 +566,128 @@ test('profile preview exposes avatar media, published posts and post creation', 
     .toContain('start=create_post');
 });
 
-test('global search defaults to all and switches between profiles, questionnaires and posts', async ({
+test('profile header stays readable on a narrow viewport and edit scrolls to the form', async ({
   page,
 }) => {
-  const requestedScopes: string[] = [];
+  await page.setViewportSize({ width: 320, height: 520 });
+  await mockApi(page);
+  await page.goto('/profile');
+  const identity = page.locator('.public-profile-identity');
+  await expect(identity).toBeVisible();
+  const identityBox = await identity.boundingBox();
+  expect(identityBox?.width ?? 0).toBeGreaterThan(100);
+  const edit = page.getByRole('button', { name: 'Редактировать профиль' });
+  await expect(edit).toHaveCSS('width', /.+/);
+  await edit.click();
+  await expect(page.locator('#public-profile-editor')).toBeInViewport();
+  await expect(page.locator('#public-display-name')).toBeFocused();
+  const overflow = await page.evaluate(
+    () => document.documentElement.scrollWidth > document.documentElement.clientWidth,
+  );
+  expect(overflow).toBe(false);
+});
+
+test('post owner edits Markdown and can replace or remove media from post settings', async ({
+  page,
+}) => {
+  const postId = '00000000-0000-4000-8000-000000000032';
+  let savedBody = '';
+  let mediaRemoved = false;
   await mockApi(page, false, {
-    '/api/search/global': async (route) => {
-      const scope = new URL(route.request().url()).searchParams.get('scope') ?? '';
-      requestedScopes.push(scope);
+    '/api/posts/own': [
+      {
+        id: postId,
+        author_user_id: '00000000-0000-4000-8000-000000000001',
+        source_chat_id: 42,
+        source_message_id: 13,
+        content_type: 'photo',
+        title: 'Старая глава',
+        body_markdown: '**Старый** текст',
+        text_preview: 'Старый текст',
+        media_telegram_file_id: 'telegram-photo',
+        media_thumbnail_file_id: null,
+        track_title: null,
+        track_performer: null,
+        published_at: '2026-07-29 12:00:00',
+        display_name: 'Лис',
+        avatar_media_id: null,
+        avatar_render_mode: null,
+        likes: 3,
+        dislikes: 1,
+        rating_score: 2,
+        comment_count: 0,
+        own_rating: null,
+      },
+    ],
+    [`/api/posts/${postId}`]: async (route) => {
+      const body = route.request().postDataJSON() as { bodyMarkdown: string };
+      savedBody = body.bodyMarkdown;
       await route.fulfill({
         status: 200,
         contentType: 'application/json',
-        body: JSON.stringify({
-          profiles:
-            scope === 'all' || scope === 'profiles'
-              ? [
-                  {
-                    id: '00000000-0000-4000-8000-000000000020',
-                    display_name: 'Профиль из поиска',
-                    bio: 'Отдельный публичный профиль',
-                    avatar_media_id: null,
-                    avatar_render_mode: null,
-                    moderation_status: 'active',
-                    moderation_reason: null,
-                    questionnaire_count: 2,
-                    post_count: 1,
-                    created_at: '2026-07-29 12:00:00',
-                    updated_at: '2026-07-29 12:00:00',
-                  },
-                ]
-              : [],
-          questionnaires: [],
-          posts:
-            scope === 'all' || scope === 'posts'
-              ? [
-                  {
-                    id: '00000000-0000-4000-8000-000000000021',
-                    author_user_id: '00000000-0000-4000-8000-000000000020',
-                    source_chat_id: 42,
-                    source_message_id: 12,
-                    content_type: 'text',
-                    text_preview: 'Пост из глобального поиска',
-                    media_telegram_file_id: null,
-                    media_thumbnail_file_id: null,
-                    track_title: null,
-                    track_performer: null,
-                    published_at: '2026-07-29 12:00:00',
-                    display_name: 'Профиль из поиска',
-                    avatar_media_id: null,
-                    avatar_render_mode: null,
-                    likes: 1,
-                    dislikes: 0,
-                    rating_score: 1,
-                    comment_count: 0,
-                    own_rating: null,
-                  },
-                ]
-              : [],
-        }),
+        body: JSON.stringify({ updated: true }),
       });
     },
+    [`/api/posts/${postId}/media`]: async (route) => {
+      if (route.request().method() === 'DELETE') {
+        mediaRemoved = true;
+        await route.fulfill({
+          status: 200,
+          contentType: 'application/json',
+          body: JSON.stringify({ removed: true }),
+        });
+        return;
+      }
+      await route.fulfill({ status: 200, contentType: 'image/jpeg', body: '' });
+    },
+  });
+  await page.goto('/profile');
+  await page.getByRole('button', { name: 'Настройки поста' }).click();
+  await page.locator(`#post-body-${postId}`).fill('## Новая глава\n\n**Новый** текст');
+  await page.getByRole('button', { name: 'Сохранить пост' }).click();
+  await expect.poll(() => savedBody).toContain('**Новый**');
+  await page.getByRole('button', { name: 'Настройки поста' }).click();
+  await page.evaluate(() => {
+    window.confirm = () => true;
+  });
+  await page.getByRole('button', { name: 'Убрать медиа' }).click();
+  await expect.poll(() => mediaRemoved).toBe(true);
+});
+
+test('search defaults to questionnaires and offers only questionnaire and profile filters', async ({
+  page,
+}) => {
+  await mockApi(page, false, {
+    '/api/search/profiles': [
+      {
+        id: '00000000-0000-4000-8000-000000000020',
+        display_name: 'Профиль из поиска',
+        bio: 'Отдельный публичный профиль',
+        avatar_media_id: null,
+        avatar_render_mode: null,
+        moderation_status: 'active',
+        moderation_reason: null,
+        verification_kind: null,
+        usernames: '[]',
+        featured_audio_items: '[]',
+        questionnaire_count: 2,
+        post_count: 1,
+        created_at: '2026-07-29 12:00:00',
+        updated_at: '2026-07-29 12:00:00',
+      },
+    ],
   });
 
   await page.goto('/search');
   const tabs = page.getByRole('tab');
-  await expect(tabs).toHaveCount(4);
+  await expect(tabs).toHaveCount(2);
   await expect(tabs.nth(0)).toHaveAttribute('aria-selected', 'true');
-  await expect(page.getByText('Профиль из поиска').first()).toBeVisible();
-  await expect(page.getByText('Пост из глобального поиска')).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Лис' })).toBeVisible();
   await tabs.nth(1).click();
   await expect(tabs.nth(1)).toHaveAttribute('aria-selected', 'true');
-  await tabs.nth(2).click();
-  await expect(page.getByRole('heading', { name: 'Лис' })).toBeVisible();
-  await tabs.nth(3).click();
-  await expect(page.getByText('Пост из глобального поиска')).toBeVisible();
-  expect(requestedScopes).toEqual(expect.arrayContaining(['all', 'profiles', 'posts']));
+  await expect(page.getByText('Профиль из поиска').first()).toBeVisible();
+  await expect(page.getByRole('tab', { name: 'Всё' })).toHaveCount(0);
+  await expect(page.getByRole('tab', { name: 'Посты' })).toHaveCount(0);
   const overflow = await page.evaluate(
     () => document.documentElement.scrollWidth > document.documentElement.clientWidth,
   );
@@ -648,6 +713,10 @@ test('questionnaire media opens fullscreen and closes without losing the card', 
   const dialog = page.getByRole('dialog', { name: 'Открыть медиа на весь экран' });
   await expect(dialog).toBeVisible();
   await expect(dialog.locator('img')).toHaveCSS('object-fit', 'contain');
+  if ((await page.getByRole('button', { name: 'Следующее медиа' }).count()) > 0) {
+    await page.getByRole('button', { name: 'Следующее медиа' }).last().click();
+    await expect(dialog.locator('video')).toBeVisible();
+  }
   await page.getByRole('button', { name: 'Закрыть полноэкранный просмотр' }).click();
   await expect(dialog).toBeHidden();
   await expect(page.getByRole('heading', { name: 'Лис' })).toBeVisible();

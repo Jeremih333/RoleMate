@@ -85,6 +85,20 @@ export const api = {
     }>('/me'),
   profile: () => request<UserProfileSummary>('/profile'),
   publicProfile: () => request<PublicUserProfile>('/public-profile'),
+  publicProfileByUsername: (username: string) =>
+    request<PublicUserProfile>(`/profiles/by-username/${encodeURIComponent(username)}`),
+  publicProfileByUserId: (userId: string) =>
+    request<PublicUserProfile>(`/users/${encodeURIComponent(userId)}/profile`),
+  publicProfileUsernames: () => request<ProfileUsername[]>('/public-profile/usernames'),
+  claimPublicProfileUsername: (username: string) =>
+    request<{ claimed: true; username: string }>('/public-profile/usernames', {
+      method: 'PUT',
+      body: JSON.stringify({ username }),
+    }),
+  releasePublicProfileUsername: (username: string) =>
+    request<{ released: true }>(`/public-profile/usernames/${encodeURIComponent(username)}`, {
+      method: 'DELETE',
+    }),
   savePublicProfile: (input: { displayName: string; bio: string; avatarMediaId: string | null }) =>
     request<{ updated: true }>('/public-profile', {
       method: 'PUT',
@@ -137,10 +151,8 @@ export const api = {
     ),
   search: (query = '') =>
     request<SearchProfile[]>(`/search?limit=20&q=${encodeURIComponent(query)}`),
-  globalSearch: (query = '', scope: GlobalSearchScope = 'all') =>
-    request<GlobalSearchResult>(
-      `/search/global?scope=${scope}&limit=20&q=${encodeURIComponent(query)}`,
-    ),
+  searchPublicProfiles: (query = '') =>
+    request<PublicUserProfile[]>(`/search/profiles?limit=20&q=${encodeURIComponent(query)}`),
   searchAvailability: () => request<SearchAvailability>('/search/availability'),
   searchPreferences: () => request<SearchPreferences>('/search/preferences'),
   saveSearchPreferences: (preferences: SearchPreferencesInput) =>
@@ -174,6 +186,13 @@ export const api = {
   incomingLikes: () => request<IncomingLike[]>('/swipes/incoming'),
   posts: () => request<SocialPost[]>('/posts?limit=30'),
   ownPosts: () => request<SocialPost[]>('/posts/own?limit=30'),
+  updateOwnPost: (postId: string, input: { title: string; bodyMarkdown: string }) =>
+    request<{ updated: true }>(`/posts/${postId}`, {
+      method: 'PUT',
+      body: JSON.stringify(input),
+    }),
+  removeOwnPostMedia: (postId: string) =>
+    request<{ removed: true }>(`/posts/${postId}/media`, { method: 'DELETE' }),
   postComments: (postId: string) => request<PostComment[]>(`/posts/${postId}/comments`),
   addPostComment: (postId: string, body: string) =>
     request<{ id: string; created: true }>(`/posts/${postId}/comments`, {
@@ -356,6 +375,11 @@ export const api = {
     request<{ updated: true }>(`/admin/public-profiles/${profileUserId}/moderate`, {
       method: 'POST',
       body: JSON.stringify({ status, reason }),
+    }),
+  adminReplaceProfileUsernames: (userId: string, usernames: string[]) =>
+    request<{ updated: true; usernames: string[] }>(`/admin/users/${userId}/usernames`, {
+      method: 'PUT',
+      body: JSON.stringify({ usernames }),
     }),
   adminQuestionnaires: (status = 'all', query = '') =>
     request<AdminQuestionnaire[]>(
@@ -562,6 +586,8 @@ export interface SearchProfile {
   rating_likes: number;
   rating_dislikes: number;
   rating_score: number;
+  username?: string | null;
+  verification_kind?: 'owner' | 'moderator' | null;
 }
 
 export interface UserProfileSummary extends Record<string, unknown> {
@@ -579,10 +605,19 @@ export interface PublicUserProfile {
   avatar_render_mode: 'photo' | 'animation' | null;
   moderation_status: 'active' | 'blocked';
   moderation_reason: string | null;
+  verification_kind: 'owner' | 'moderator' | null;
+  usernames: string;
+  featured_audio_items: string;
   questionnaire_count: number;
   post_count: number;
   created_at: string;
   updated_at: string;
+}
+
+export interface ProfileUsername {
+  username: string;
+  is_primary: number;
+  created_at: string;
 }
 
 export interface QuestionnaireSummary extends UserProfileSummary {
@@ -609,6 +644,8 @@ export interface SocialPost {
   source_chat_id: number | null;
   source_message_id: number | null;
   content_type: string;
+  title: string;
+  body_markdown: string;
   text_preview: string;
   media_telegram_file_id: string | null;
   media_thumbnail_file_id: string | null;
@@ -625,13 +662,7 @@ export interface SocialPost {
   own_rating: -1 | 1 | null;
 }
 
-export type GlobalSearchScope = 'all' | 'profiles' | 'questionnaires' | 'posts';
-
-export interface GlobalSearchResult {
-  profiles: PublicUserProfile[];
-  questionnaires: SearchProfile[];
-  posts: SocialPost[];
-}
+export type SearchScope = 'questionnaires' | 'profiles';
 
 export interface PostComment {
   id: string;
@@ -959,6 +990,8 @@ export interface AdminPublicProfile {
   avatar_render_mode: 'photo' | 'animation' | null;
   moderation_status: 'active' | 'blocked';
   moderation_reason: string | null;
+  verification_kind: 'owner' | 'moderator' | null;
+  usernames: string;
   risk_score: number;
   telegram_user_id: number;
   telegram_username?: string;

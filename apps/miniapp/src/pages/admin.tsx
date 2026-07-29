@@ -105,7 +105,7 @@ export function AdminPage() {
         <AdminSectionBoundary key={section}>
           {section === 'dashboard' ? <Dashboard /> : null}
           {section === 'users' ? <UsersQueue isOwner={Boolean(isOwner)} /> : null}
-          {section === 'publicProfiles' ? <PublicProfilesQueue /> : null}
+          {section === 'publicProfiles' ? <PublicProfilesQueue isOwner={Boolean(isOwner)} /> : null}
           {section === 'questionnaires' ? <QuestionnairesQueue /> : null}
           {section === 'posts' ? <PostsQueue /> : null}
           {section === 'reports' ? <ReportsQueue /> : null}
@@ -351,7 +351,7 @@ function UsersQueue({ isOwner }: { isOwner: boolean }) {
   );
 }
 
-function PublicProfilesQueue() {
+function PublicProfilesQueue({ isOwner }: { isOwner: boolean }) {
   const queryClient = useQueryClient();
   const [search, setSearch] = useState('');
   const profiles = useQuery({
@@ -361,6 +361,11 @@ function PublicProfilesQueue() {
   const moderate = useMutation({
     mutationFn: (input: { profileUserId: string; status: 'active' | 'blocked'; reason: string }) =>
       api.adminModeratePublicProfile(input.profileUserId, input.status, input.reason),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['admin-public-profiles'] }),
+  });
+  const replaceUsernames = useMutation({
+    mutationFn: ({ userId, usernames }: { userId: string; usernames: string[] }) =>
+      api.adminReplaceProfileUsernames(userId, usernames),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ['admin-public-profiles'] }),
   });
   if (profiles.isLoading) return <Skeleton className="h-72" />;
@@ -437,10 +442,42 @@ function PublicProfilesQueue() {
                 {ru.miniApp.admin.blockPublicProfile}
               </Button>
             )}
+            {isOwner ? (
+              <Button
+                variant="secondary"
+                loading={replaceUsernames.isPending}
+                onClick={() => {
+                  const current = (() => {
+                    try {
+                      const parsed: unknown = JSON.parse(profile.usernames ?? '[]');
+                      return Array.isArray(parsed) ? parsed.join(', ') : '';
+                    } catch {
+                      return '';
+                    }
+                  })();
+                  const value = window.prompt(ru.miniApp.admin.profileUsernamesPrompt, current);
+                  if (value === null) return;
+                  const usernames = Array.from(
+                    new Set(
+                      value
+                        .split(',')
+                        .map((item) => item.trim().replace(/^@/, '').toLowerCase())
+                        .filter(Boolean),
+                    ),
+                  ).slice(0, 5);
+                  replaceUsernames.mutate({ userId: profile.id, usernames });
+                }}
+              >
+                {ru.miniApp.admin.manageProfileUsernames}
+              </Button>
+            ) : null}
           </div>
         </Card>
       ))}
-      <MutationFeedback states={[moderate]} success={ru.miniApp.admin.actionCompleted} />
+      <MutationFeedback
+        states={[moderate, replaceUsernames]}
+        success={ru.miniApp.admin.actionCompleted}
+      />
     </div>
   );
 }

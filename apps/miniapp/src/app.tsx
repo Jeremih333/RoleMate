@@ -15,7 +15,12 @@ import {
 } from './pages/community.js';
 import { HomePage } from './pages/home.js';
 import { ProfileEditorPage, ProfilePage } from './pages/profile.js';
-import { PostsPage, PublicProfilePage, QuestionnairesPage } from './pages/social.js';
+import {
+  PostsPage,
+  PublicProfilePage,
+  PublicProfileViewerPage,
+  QuestionnairesPage,
+} from './pages/social.js';
 import { SearchPage } from './pages/search.js';
 import { useUserStore } from './store.js';
 import { waitForTelegramInitData } from './telegram.js';
@@ -126,6 +131,8 @@ export function App() {
         <Route path="/matches" component={MatchesPage} />
         <Route path="/chats" component={ChatsPage} />
         <Route path="/profile" component={PublicProfilePage} />
+        <Route path="/profiles/:userId" component={PublicProfileViewerPage} />
+        <Route path="/u/:username" component={PublicProfileViewerPage} />
         <Route path="/questionnaires" component={QuestionnairesPage} />
         <Route path="/questionnaires/edit" component={ProfileEditorPage} />
         <Route path="/questionnaires/:questionnaireId/edit" component={ProfileEditorPage} />

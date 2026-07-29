@@ -101,6 +101,17 @@ function searchUpdate(updateId: number) {
   };
 }
 
+function createPostButtonUpdate(updateId: number) {
+  return {
+    ...startUpdate(updateId),
+    message: {
+      ...startUpdate(updateId).message,
+      text: ru.bot.menu.createPost,
+      entities: [],
+    },
+  };
+}
+
 function successfulPaymentUpdate(updateId: number) {
   return {
     update_id: updateId,
@@ -384,6 +395,27 @@ describe('Telegram webhook integration', () => {
         }),
       ).resolves.toMatchObject({ telegramUserId: 42, route: launch!.route });
     }
+    await app.close();
+  });
+
+  it('starts the post draft when the reply-menu create-post button is pressed', async () => {
+    const { fetchMock, requests } = telegramAndDataFetch();
+    vi.stubGlobal('fetch', fetchMock);
+    const app = await buildServer(testEnv());
+    const response = await app.inject({
+      method: 'POST',
+      url: '/telegram/webhook',
+      headers: { 'x-telegram-bot-api-secret-token': 'test-webhook-secret-value' },
+      payload: createPostButtonUpdate(106),
+    });
+    expect(response.statusCode, response.body).toBe(200);
+    expect(requests.some((request) => request.body.operation === 'posts.draft.start')).toBe(true);
+    expect(
+      requests.some(
+        (request) =>
+          request.url.endsWith('/sendMessage') && request.body.text === ru.bot.postPrompt,
+      ),
+    ).toBe(true);
     await app.close();
   });
 

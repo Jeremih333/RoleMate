@@ -467,6 +467,77 @@ describe('D1 domain operations', () => {
     ).toBe(3);
   });
 
+  it('enforces unique profile aliases and exposes owner-managed aliases in profile search', async () => {
+    const requesterId = await onboard(2_021);
+    const authorId = await onboard(2_022);
+    const secondId = await onboard(2_023);
+    const moderatorId = await onboard(2_024);
+    const ownerId = await upsert(1_040_929_628);
+    await executeOperation(
+      env,
+      'profileUsernames.replaceOwn',
+      { userId: authorId, username: 'night_writer' },
+      crypto.randomUUID(),
+    );
+    await expect(
+      executeOperation(
+        env,
+        'profileUsernames.replaceOwn',
+        { userId: secondId, username: 'NIGHT_WRITER' },
+        crypto.randomUUID(),
+      ),
+    ).rejects.toMatchObject({ code: 'USERNAME_TAKEN' });
+    await expect(
+      executeOperation(
+        env,
+        'profileUsernames.replaceOwn',
+        { userId: secondId, username: 'crow' },
+        crypto.randomUUID(),
+      ),
+    ).rejects.toMatchObject({ code: 'USERNAME_RESERVED' });
+    await executeOperation(
+      env,
+      'admin.profileUsernames.replace',
+      {
+        adminUserId: ownerId,
+        targetUserId: authorId,
+        usernames: ['monk', 'crow', 'night_writer'],
+      },
+      crypto.randomUUID(),
+    );
+    const byAlias = (await executeOperation(
+      env,
+      'publicProfiles.getByUsername',
+      { requesterUserId: requesterId, username: 'crow' },
+      crypto.randomUUID(),
+    )) as { id: string; usernames: string };
+    expect(byAlias.id).toBe(authorId);
+    expect(JSON.parse(byAlias.usernames)).toEqual(['monk', 'crow', 'night_writer']);
+    await expect(
+      executeOperation(
+        env,
+        'publicProfiles.search',
+        { requesterUserId: requesterId, query: '@crow', limit: 20 },
+        crypto.randomUUID(),
+      ),
+    ).resolves.toContainEqual(expect.objectContaining({ id: authorId }));
+
+    sqlite
+      .prepare(
+        `INSERT INTO moderator_assignments (user_id, assigned_by_user_id, is_active)
+         VALUES (?, ?, 1)`,
+      )
+      .run(moderatorId, ownerId);
+    await expect(
+      executeOperation(
+        env,
+        'publicProfiles.get',
+        { requesterUserId: requesterId, profileUserId: moderatorId },
+        crypto.randomUUID(),
+      ),
+    ).resolves.toMatchObject({ verification_kind: 'moderator' });
+  });
+
   it('supports post comments and independent post ratings', async () => {
     const authorUserId = await onboard(2014);
     const readerUserId = await onboard(2015);
@@ -1836,6 +1907,26 @@ describe('D1 domain operations', () => {
         crypto.randomUUID(),
       ),
     ).resolves.toEqual([expect.objectContaining({ user_id: secondTarget, action: 'like' })]);
+    await executeOperation(
+      env,
+      'swipes.create',
+      {
+        userId: freeUser,
+        targetUserId: secondTarget,
+        action: 'like',
+        source: 'miniapp',
+        idempotencyKey: 'free-like-back-keeps-incoming-visible',
+      },
+      crypto.randomUUID(),
+    );
+    await expect(
+      executeOperation(
+        env,
+        'swipes.incoming',
+        { userId: freeUser, limit: 20 },
+        crypto.randomUUID(),
+      ),
+    ).resolves.toEqual([expect.objectContaining({ user_id: secondTarget, action: 'like' })]);
     await expect(
       executeOperation(
         env,
@@ -2700,6 +2791,105 @@ describe('D1 domain operations', () => {
     await expect(
       executeOperation(env, 'posts.feed.next', { userId: viewerId }, crypto.randomUUID()),
     ).resolves.toBeNull();
+  });
+
+  it('lets only the author edit Markdown and replace or remove post media', async () => {
+    const authorId = await onboard(6_111);
+    const otherId = await onboard(6_112);
+    const draft = (await executeOperation(
+      env,
+      'posts.draft.start',
+      { userId: authorId },
+      crypto.randomUUID(),
+    )) as { postId: string };
+    await executeOperation(
+      env,
+      'posts.draft.attach',
+      {
+        userId: authorId,
+        sourceChatId: 6_111,
+        sourceMessageId: 10,
+        contentType: 'photo',
+        textPreview: 'Первый текст',
+        mediaTelegramFileId: 'photo-old',
+      },
+      crypto.randomUUID(),
+    );
+    await executeOperation(
+      env,
+      'posts.draft.publish',
+      { userId: authorId, postId: draft.postId },
+      crypto.randomUUID(),
+    );
+
+    await expect(
+      executeOperation(
+        env,
+        'posts.updateOwn',
+        {
+          userId: otherId,
+          postId: draft.postId,
+          title: 'Чужой заголовок',
+          bodyMarkdown: '**Чужое изменение**',
+        },
+        crypto.randomUUID(),
+      ),
+    ).rejects.toMatchObject({ code: 'POST_NOT_FOUND' });
+    await executeOperation(
+      env,
+      'posts.updateOwn',
+      {
+        userId: authorId,
+        postId: draft.postId,
+        title: 'Новая история',
+        bodyMarkdown: '## Глава\n\n**Отформатированный** текст',
+      },
+      crypto.randomUUID(),
+    );
+    await executeOperation(
+      env,
+      'posts.mediaEdit.start',
+      { userId: authorId, postId: draft.postId },
+      crypto.randomUUID(),
+    );
+    await executeOperation(
+      env,
+      'posts.mediaEdit.attach',
+      {
+        userId: authorId,
+        sourceChatId: 6_111,
+        sourceMessageId: 11,
+        contentType: 'photo',
+        mediaTelegramFileId: 'photo-new',
+      },
+      crypto.randomUUID(),
+    );
+    expect(
+      sqlite
+        .prepare(
+          `SELECT title, body_markdown, media_telegram_file_id
+           FROM telegram_posts WHERE id = ?`,
+        )
+        .get(draft.postId),
+    ).toEqual({
+      title: 'Новая история',
+      body_markdown: '## Глава\n\n**Отформатированный** текст',
+      media_telegram_file_id: 'photo-new',
+    });
+    await expect(
+      executeOperation(env, 'posts.mediaEdit.get', { userId: authorId }, crypto.randomUUID()),
+    ).resolves.toBeNull();
+    await executeOperation(
+      env,
+      'posts.media.removeOwn',
+      { userId: authorId, postId: draft.postId },
+      crypto.randomUUID(),
+    );
+    expect(
+      sqlite
+        .prepare('SELECT content_type, media_telegram_file_id FROM telegram_posts WHERE id = ?')
+        .get(draft.postId),
+    ).toEqual({ content_type: 'text', media_telegram_file_id: null });
   });
 
   it('applies Premium and Stars promo codes with activation limits', async () => {

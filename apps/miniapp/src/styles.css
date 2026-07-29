@@ -392,6 +392,58 @@ select:focus-visible {
 .profile-card {
   min-height: 520px;
 }
+
+.public-profile-header {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: start;
+  gap: 1rem;
+}
+
+.public-profile-identity {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.public-profile-edit-button {
+  max-width: 100%;
+}
+
+.public-profile-editor {
+  overflow-wrap: anywhere;
+}
+
+.verification-badge {
+  display: inline-flex;
+  flex: 0 0 auto;
+  vertical-align: -0.15em;
+}
+
+.verification-badge svg {
+  width: 1.1em;
+  height: 1.1em;
+  fill: currentColor;
+  stroke: #111827;
+}
+
+.verification-badge-owner {
+  color: #f6c453;
+}
+
+.verification-badge-moderator {
+  color: #4da3ff;
+}
+
+@media (max-width: 460px) {
+  .public-profile-header {
+    grid-template-columns: auto minmax(0, 1fr);
+  }
+
+  .public-profile-edit-button {
+    grid-column: 1 / -1;
+    width: 100%;
+  }
+}
 .profile-cover {
   position: relative;
   min-height: 210px;
@@ -428,7 +480,7 @@ select:focus-visible {
   position: absolute;
   z-index: 4;
   right: 12px;
-  bottom: 12px;
+  top: 12px;
   display: grid;
   width: 42px;
   height: 42px;
@@ -438,6 +490,30 @@ select:focus-visible {
   color: white;
   background: rgba(10, 15, 27, 0.76);
   backdrop-filter: blur(10px);
+}
+
+.media-lightbox-arrow {
+  position: fixed;
+  top: 50%;
+  z-index: 80;
+  display: grid;
+  width: 2.75rem;
+  height: 2.75rem;
+  place-items: center;
+  border: 1px solid rgb(255 255 255 / 24%);
+  border-radius: 999px;
+  background: rgb(10 14 25 / 78%);
+  color: white;
+  transform: translateY(-50%);
+  backdrop-filter: blur(10px);
+}
+
+.media-lightbox-arrow-left {
+  left: max(0.75rem, env(safe-area-inset-left));
+}
+
+.media-lightbox-arrow-right {
+  right: max(0.75rem, env(safe-area-inset-right));
 }
 .media-lightbox {
   position: fixed;
@@ -540,7 +616,19 @@ select:focus-visible {
   font-size: 11px;
 }
 .profile-track-content audio {
+  display: block;
+  width: 100%;
+  max-width: 100%;
   height: 32px;
+}
+@media (max-width: 380px) {
+  .profile-track {
+    grid-template-columns: 56px minmax(0, 1fr);
+  }
+  .profile-track-cover {
+    width: 56px;
+    height: 56px;
+  }
 }
 .profile-card-primary-actions {
   display: flex;

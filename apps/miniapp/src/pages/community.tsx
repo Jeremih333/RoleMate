@@ -23,6 +23,7 @@ import { Button, Card, EmptyState, SectionTitle, Skeleton } from '../components/
 import { getTelegram } from '../telegram.js';
 import { ChatTools } from '../components/chat-tools.js';
 import { ProfileAvatar } from '../components/profile-avatar.js';
+import { VerificationBadge } from '../components/verification-badge.js';
 
 export function MatchesPage() {
   const queryClient = useQueryClient();
@@ -83,7 +84,13 @@ export function MatchesPage() {
                   name={like.display_name}
                 />
                 <div className="min-w-0">
-                  <strong>{like.display_name}</strong>
+                  <strong className="flex items-center gap-1">
+                    {like.display_name}
+                    <VerificationBadge kind={like.verification_kind} />
+                  </strong>
+                  {like.username ? (
+                    <p className="truncate text-xs text-lilac">@{like.username}</p>
+                  ) : null}
                   <p className="truncate text-sm text-muted">{like.short_headline}</p>
                 </div>
               </div>

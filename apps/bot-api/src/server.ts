@@ -32,6 +32,13 @@ const menuAuthBodySchema = z.object({
   token: z.string().min(80).max(1_024),
   route: menuLaunchRouteSchema,
 });
+const profileUsernameSchema = z
+  .string()
+  .trim()
+  .toLowerCase()
+  .min(4)
+  .max(32)
+  .regex(/^[a-z][a-z0-9_]*$/);
 const swipeBodySchema = z.object({
   targetUserId: z.string().uuid(),
   action: z.enum(['like', 'skip', 'super_like', 'rewind']),
@@ -477,6 +484,33 @@ export async function buildServer(
       .parse(request.body);
     return dataApi.execute('publicProfiles.update', { userId: session.userId, ...body });
   });
+  app.get('/api/public-profile/usernames', async (request) => {
+    const session = await authenticate(request);
+    return dataApi.execute('profileUsernames.listOwn', { userId: session.userId });
+  });
+  app.post('/api/public-profile/usernames', async (request) => {
+    const session = await mutateSafe(request);
+    const { username } = z.object({ username: profileUsernameSchema }).parse(request.body);
+    return dataApi.execute('profileUsernames.claim', { userId: session.userId, username });
+  });
+  app.put('/api/public-profile/usernames', async (request) => {
+    const session = await mutateSafe(request);
+    const { username } = z.object({ username: profileUsernameSchema }).parse(request.body);
+    return dataApi.execute('profileUsernames.replaceOwn', { userId: session.userId, username });
+  });
+  app.delete('/api/public-profile/usernames/:username', async (request) => {
+    const session = await mutateSafe(request);
+    const { username } = z.object({ username: profileUsernameSchema }).parse(request.params);
+    return dataApi.execute('profileUsernames.release', { userId: session.userId, username });
+  });
+  app.get('/api/profiles/by-username/:username', async (request) => {
+    const session = await authenticate(request);
+    const { username } = z.object({ username: profileUsernameSchema }).parse(request.params);
+    return dataApi.execute('publicProfiles.getByUsername', {
+      requesterUserId: session.userId,
+      username,
+    });
+  });
   app.get('/api/users/:userId/profile', async (request) => {
     const session = await authenticate(request);
     const { userId } = z.object({ userId: z.string().uuid() }).parse(request.params);
@@ -728,6 +762,20 @@ export async function buildServer(
         : Promise.resolve([]),
     ]);
     return { profiles, questionnaires, posts };
+  });
+  app.get('/api/search/profiles', async (request) => {
+    const session = await authenticate(request);
+    const { q, limit } = z
+      .object({
+        q: z.string().trim().max(80).default(''),
+        limit: z.coerce.number().int().min(1).max(50).default(20),
+      })
+      .parse(request.query);
+    return dataApi.execute('publicProfiles.search', {
+      requesterUserId: session.userId,
+      query: q,
+      limit,
+    });
   });
   app.get('/api/search/availability', async (request) => {
     const session = await authenticate(request);
@@ -1234,6 +1282,26 @@ export async function buildServer(
       .object({ limit: z.coerce.number().int().min(1).max(50).default(20) })
       .parse(request.query);
     return dataApi.execute('posts.own.list', { userId: session.userId, limit });
+  });
+  app.put('/api/posts/:postId', async (request) => {
+    const session = await mutateSafe(request);
+    const { postId } = z.object({ postId: z.string().uuid() }).parse(request.params);
+    const body = z
+      .object({
+        title: z.string().trim().max(120),
+        bodyMarkdown: z.string().trim().min(1).max(8_000),
+      })
+      .parse(request.body);
+    return dataApi.execute('posts.updateOwn', {
+      userId: session.userId,
+      postId,
+      ...body,
+    });
+  });
+  app.delete('/api/posts/:postId/media', async (request) => {
+    const session = await mutateSafe(request);
+    const { postId } = z.object({ postId: z.string().uuid() }).parse(request.params);
+    return dataApi.execute('posts.media.removeOwn', { userId: session.userId, postId });
   });
   app.get('/api/posts/:postId/comments', async (request) => {
     const session = await authenticate(request);
@@ -1921,6 +1989,18 @@ export async function buildServer(
       adminUserId: session.userId,
       profileUserId,
       ...body,
+    });
+  });
+  app.put('/api/admin/users/:userId/usernames', async (request) => {
+    const session = await requireAdmin(request, true);
+    const { userId } = z.object({ userId: z.string().uuid() }).parse(request.params);
+    const { usernames } = z
+      .object({ usernames: z.array(profileUsernameSchema).max(5) })
+      .parse(request.body);
+    return dataApi.execute('admin.profileUsernames.replace', {
+      adminUserId: session.userId,
+      targetUserId: userId,
+      usernames,
     });
   });
   app.post('/api/admin/questionnaires/:questionnaireId/moderate', async (request) => {

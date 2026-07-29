@@ -54,6 +54,14 @@ export interface ProductRow {
   is_active: number;
 }
 
+const profileUsernameSchema = z
+  .string()
+  .trim()
+  .toLowerCase()
+  .min(4)
+  .max(32)
+  .regex(/^[a-z][a-z0-9_]*$/);
+
 export const workerOperations = {
   'users.upsert': z.object({
     telegramUser: telegramUserSchema,
@@ -124,6 +132,10 @@ export const workerOperations = {
     requesterUserId: z.string().uuid(),
     profileUserId: z.string().uuid(),
   }),
+  'publicProfiles.getByUsername': z.object({
+    requesterUserId: z.string().uuid(),
+    username: profileUsernameSchema,
+  }),
   'publicProfiles.search': z
     .object({
       requesterUserId: z.string().uuid(),
@@ -135,6 +147,19 @@ export const workerOperations = {
     displayName: z.string().trim().min(2).max(80),
     bio: z.string().trim().max(1_500),
     avatarMediaId: z.string().uuid().nullable(),
+  }),
+  'profileUsernames.listOwn': z.object({ userId: z.string().uuid() }),
+  'profileUsernames.claim': z.object({
+    userId: z.string().uuid(),
+    username: profileUsernameSchema,
+  }),
+  'profileUsernames.replaceOwn': z.object({
+    userId: z.string().uuid(),
+    username: profileUsernameSchema,
+  }),
+  'profileUsernames.release': z.object({
+    userId: z.string().uuid(),
+    username: profileUsernameSchema,
   }),
   'questionnaires.listOwn': z.object({ userId: z.string().uuid() }),
   'questionnaires.getOwn': z.object({
@@ -348,6 +373,39 @@ export const workerOperations = {
   }),
   'posts.draft.publish': z.object({ userId: z.string().uuid(), postId: z.string().uuid() }),
   'posts.draft.cancel': z.object({ userId: z.string().uuid() }),
+  'posts.updateOwn': z.object({
+    userId: z.string().uuid(),
+    postId: z.string().uuid(),
+    title: z.string().trim().max(120),
+    bodyMarkdown: z.string().trim().min(1).max(8_000),
+  }),
+  'posts.media.removeOwn': z.object({
+    userId: z.string().uuid(),
+    postId: z.string().uuid(),
+  }),
+  'posts.mediaEdit.start': z.object({
+    userId: z.string().uuid(),
+    postId: z.string().uuid(),
+  }),
+  'posts.mediaEdit.get': z.object({ userId: z.string().uuid() }),
+  'posts.mediaEdit.attach': z.object({
+    userId: z.string().uuid(),
+    sourceChatId: z.number().int(),
+    sourceMessageId: z.number().int().positive(),
+    contentType: z.enum([
+      'photo',
+      'document',
+      'animation',
+      'video',
+      'video_note',
+      'voice',
+      'audio',
+    ]),
+    mediaTelegramFileId: z.string().min(1).max(512),
+    mediaThumbnailFileId: z.string().min(1).max(512).optional(),
+    trackTitle: z.string().trim().min(1).max(160).optional(),
+    trackPerformer: z.string().trim().min(1).max(160).optional(),
+  }),
   'posts.feed.next': z.object({ userId: z.string().uuid() }),
   'posts.get': z.object({ userId: z.string().uuid(), postId: z.string().uuid() }),
   'posts.media.resolve': z.object({ userId: z.string().uuid(), postId: z.string().uuid() }),
@@ -506,6 +564,11 @@ export const workerOperations = {
     profileUserId: z.string().uuid(),
     status: z.enum(['active', 'blocked']),
     reason: z.string().min(3).max(1_000),
+  }),
+  'admin.profileUsernames.replace': z.object({
+    adminUserId: z.string().uuid(),
+    targetUserId: z.string().uuid(),
+    usernames: z.array(profileUsernameSchema).max(5),
   }),
   'admin.questionnaires.list': z
     .object({

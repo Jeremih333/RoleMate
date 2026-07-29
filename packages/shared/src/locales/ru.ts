@@ -180,6 +180,9 @@ export const ru = {
     postPrompt:
       '✍️ Отправь одним сообщением текст, фото или документ для нового поста. Видео, GIF, аудио и любые разрешённые Telegram-ссылки доступны только с Premium.',
     postDraftReady: '✨ Пост готов. Проверь его и нажми «Опубликовать».',
+    postMediaEditPrompt:
+      '🖼 Отправь новое фото или другой медиафайл. Он заменит текущее медиа поста. Ссылка действует 15 минут.',
+    postMediaUpdated: '✅ Медиа поста обновлено.',
     postPublished: '✅ Пост опубликован и уже доступен в ленте.',
     postCancelled: 'Черновик поста удалён.',
     postDeleted: '🗑 Твой пост удалён.',
@@ -374,6 +377,14 @@ export const ru = {
       profileDescription:
         'Профиль — твоя постоянная личность RoleMate. Он отделён от анкет и имеет внутренний ID.',
       editProfile: 'Редактировать профиль',
+      ownerVerification: 'Владелец RoleMate',
+      moderatorVerification: 'Модератор RoleMate',
+      usernameTitle: 'Юзернейм RoleMate',
+      usernameDescription:
+        'Уникальный адрес профиля. Используй от 5 до 32 латинских букв, цифр и знак подчёркивания.',
+      usernamePlaceholder: 'например, night_writer',
+      usernameClaim: 'Сохранить юзернейм',
+      usernameRelease: 'Освободить юзернейм',
       displayName: 'Отображаемое имя',
       bio: 'О себе',
       bioEmpty: 'Описание профиля пока не заполнено.',
@@ -393,6 +404,15 @@ export const ru = {
       ownPostsTitle: 'Опубликованные посты',
       ownPostsEmpty: 'В профиле пока нет опубликованных постов.',
       createPost: 'Создать пост',
+      postSettings: 'Настройки поста',
+      postTitle: 'Заголовок',
+      postBody: 'Текст поста',
+      postMarkdownHint:
+        'Поддерживается Markdown: заголовки, списки, цитаты, жирный, курсив и ссылки по правилам RoleMate.',
+      savePost: 'Сохранить пост',
+      addPostMedia: 'Добавить или заменить медиа',
+      removePostMedia: 'Убрать медиа',
+      removePostMediaConfirm: 'Убрать медиа из этого поста?',
       questionnairesEyebrow: 'мои анкеты',
       questionnairesTitle: 'Анкеты для поиска',
       questionnaireLimit: (used: number, limit: number) => `${used} из ${limit}`,
@@ -942,6 +962,9 @@ export const ru = {
       ],
       searchPlaceholder: 'Telegram ID, username или псевдоним',
       contentSearchPlaceholder: 'Внутренний ID, Telegram ID, username или имя',
+      manageProfileUsernames: 'Настроить юзернеймы',
+      profileUsernamesPrompt:
+        'Введите до 5 уникальных юзернеймов через запятую. Четырёхзначные адреса доступны только владельцу.',
       contentId: (id: string) => `ID: ${id}`,
       publicProfileStatuses: {
         active: 'Отображается',

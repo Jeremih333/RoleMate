@@ -509,6 +509,17 @@ export function createBot(
       });
       return;
     }
+    if (parameter?.startsWith('post_media_')) {
+      const postId = parameter.slice('post_media_'.length);
+      await dataApi.execute('posts.mediaEdit.start', { userId: user.userId, postId });
+      await context.reply(ru.bot.postMediaEditPrompt, {
+        reply_markup: {
+          force_reply: true,
+          selective: true,
+        },
+      });
+      return;
+    }
     const buttons = new InlineKeyboard()
       .text(ru.bot.buttons.start, 'onboarding:start')
       .row()
@@ -1315,6 +1326,14 @@ export function createBot(
       [ru.bot.menu.posts]: '/posts',
       [ru.bot.menu.createPost]: '/post',
     };
+    if (text === ru.bot.menu.createPost) {
+      const user = await upsertUser(context, dataApi);
+      await dataApi.execute('posts.draft.start', { userId: user.userId });
+      await context.reply(ru.bot.postPrompt, {
+        reply_markup: { force_reply: true, selective: true },
+      });
+      return;
+    }
     if (text in menuMap) {
       await context.reply(ru.bot.useCommand(menuMap[text]!));
       return;
@@ -1616,6 +1635,48 @@ export function createBot(
             .text(ru.bot.buttons.publishPost, `postpublish:${attached.postId}`)
             .text(ru.bot.buttons.cancel, 'postcancel'),
         });
+        return;
+      }
+      const postEdit = await dataApi.execute<{ post_id: string } | null>('posts.mediaEdit.get', {
+        userId: user.userId,
+      });
+      if (postEdit) {
+        if (messageType === 'sticker') {
+          await context.reply(ru.bot.postUnsupportedMedia);
+          return;
+        }
+        const mediaTelegramFileId =
+          ('photo' in context.message && context.message.photo.at(-1)?.file_id) ||
+          ('animation' in context.message && context.message.animation.file_id) ||
+          ('voice' in context.message && context.message.voice.file_id) ||
+          ('audio' in context.message && context.message.audio.file_id) ||
+          ('video' in context.message && context.message.video.file_id) ||
+          ('video_note' in context.message && context.message.video_note.file_id) ||
+          ('document' in context.message && context.message.document.file_id) ||
+          undefined;
+        if (!mediaTelegramFileId) {
+          await context.reply(ru.bot.postUnsupportedMedia);
+          return;
+        }
+        const mediaThumbnailFileId =
+          ('audio' in context.message && context.message.audio.thumbnail?.file_id) ||
+          ('video' in context.message && context.message.video.thumbnail?.file_id) ||
+          ('document' in context.message && context.message.document.thumbnail?.file_id) ||
+          undefined;
+        const trackTitle = ('audio' in context.message && context.message.audio.title) || undefined;
+        const trackPerformer =
+          ('audio' in context.message && context.message.audio.performer) || undefined;
+        await dataApi.execute('posts.mediaEdit.attach', {
+          userId: user.userId,
+          sourceChatId: context.chat.id,
+          sourceMessageId: context.message.message_id,
+          contentType: messageType,
+          mediaTelegramFileId,
+          ...(mediaThumbnailFileId ? { mediaThumbnailFileId } : {}),
+          ...(trackTitle ? { trackTitle } : {}),
+          ...(trackPerformer ? { trackPerformer } : {}),
+        });
+        await context.reply(ru.bot.postMediaUpdated);
         return;
       }
       try {

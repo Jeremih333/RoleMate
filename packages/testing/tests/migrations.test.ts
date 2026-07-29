@@ -51,6 +51,8 @@ describe('D1 migrations', () => {
       '0021_profile_avatars.sql',
       '0022_social_profiles_questionnaires.sql',
       '0023_public_profile_moderation.sql',
+      '0024_profile_usernames.sql',
+      '0025_post_editor.sql',
     ]);
     expect(() => applyMigrations()).not.toThrow();
     const tables = database
@@ -87,6 +89,8 @@ describe('D1 migrations', () => {
         'questionnaire_ratings',
         'post_comments',
         'post_ratings',
+        'profile_usernames',
+        'telegram_post_edit_sessions',
       ]),
     );
     expect(tables.length).toBeGreaterThanOrEqual(35);

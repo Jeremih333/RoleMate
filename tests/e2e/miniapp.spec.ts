@@ -67,6 +67,8 @@ async function mockApi(
       '/api/conversations': [],
       '/api/matches': [],
       '/api/swipes/incoming': [],
+      '/api/notifications': [],
+      '/api/mentions/resolve': [],
       '/api/profile': {
         id: '00000000-0000-4000-8000-000000000010',
         user_id: '00000000-0000-4000-8000-000000000001',
@@ -107,6 +109,10 @@ async function mockApi(
         moderation_reason: null,
         questionnaire_count: 1,
         post_count: 1,
+        rating_likes: 0,
+        rating_dislikes: 0,
+        rating_score: 0,
+        own_rating: null,
         created_at: '2026-07-29 12:00:00',
         updated_at: '2026-07-29 12:00:00',
       },
@@ -150,6 +156,7 @@ async function mockApi(
           rating_score: 2,
           comment_count: 1,
           own_rating: null,
+          media_items: '[]',
         },
       ],
       '/api/posts/own': [],
@@ -186,6 +193,10 @@ async function mockApi(
           featured_audio_items: '[]',
           questionnaire_count: 1,
           post_count: 1,
+          rating_likes: 0,
+          rating_dislikes: 0,
+          rating_score: 0,
+          own_rating: null,
           created_at: '2026-07-29 12:00:00',
           updated_at: '2026-07-29 12:00:00',
         },
@@ -251,6 +262,8 @@ async function mockApi(
         message_notifications_enabled: 1,
         referral_notifications_enabled: 1,
         premium_notifications_enabled: 1,
+        mention_notifications_enabled: 1,
+        comment_notifications_enabled: 1,
         privacy_shield_enabled: 1,
         show_online_status: 1,
         show_premium_badge: 1,
@@ -457,11 +470,129 @@ test('public profile is separate from questionnaires and exposes only the intern
   await expect(page.getByRole('heading', { name: 'Мой профиль' })).toBeVisible();
   await expect(page.getByText('00000000-0000-4000-8000-000000000001')).toBeVisible();
   await expect(page.getByText(/Telegram ID/i)).toHaveCount(0);
+  await expect(page.getByRole('heading', { name: 'Мои анкеты' })).toBeVisible();
+  await expect(page.getByText('1 из 5')).toBeVisible();
 
   await page.goto('/questionnaires');
-  await expect(page.getByRole('heading', { name: 'Анкеты для поиска' })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Мои анкеты' })).toBeVisible();
   await expect(page.getByText('1 из 5')).toBeVisible();
   await expect(page.getByText('Основная история')).toBeVisible();
+});
+
+test('a public profile exposes chat, rating, active questionnaires and posts', async ({ page }) => {
+  const targetUserId = '00000000-0000-4000-8000-000000000222';
+  let chatStarted = false;
+  let ratedValue: number | null = null;
+  await mockApi(page, false, {
+    [`/api/users/${targetUserId}/profile`]: {
+      id: targetUserId,
+      display_name: 'Автор Nuar',
+      bio: 'Публичное описание автора',
+      avatar_media_id: null,
+      avatar_render_mode: null,
+      moderation_status: 'active',
+      moderation_reason: null,
+      verification_kind: null,
+      usernames: '["nuar","night_owner"]',
+      featured_audio_items: '[]',
+      questionnaire_count: 1,
+      post_count: 1,
+      rating_likes: 7,
+      rating_dislikes: 2,
+      rating_score: 5,
+      own_rating: null,
+      created_at: '2026-07-29 12:00:00',
+      updated_at: '2026-07-29 12:00:00',
+    },
+    [`/api/users/${targetUserId}/questionnaires`]: [
+      {
+        id: '00000000-0000-4000-8000-000000000223',
+        user_id: targetUserId,
+        display_name: 'Автор Nuar',
+        age_group: '21_25',
+        gender: 'not_specified',
+        short_headline: 'Активная анкета автора',
+        about: 'Полное описание активной анкеты автора.',
+        roleplay_experience: '1_3_years',
+        preferred_role: '[]',
+        timezone: 'UTC+3',
+        active_hours: 'вечером',
+        languages: '["Русский"]',
+        fandoms: '["Original"]',
+        genres: '["драма"]',
+        tags: '["сюжет"]',
+        settings: '',
+        plots: '',
+        looking_for: '[]',
+        boundaries: '',
+        adult_topics_allowed: 0,
+        contact_reveal_policy: 'mutual_only',
+        writing_style: 'literary',
+        average_post_length: 'paragraphs_3_5',
+        activity_frequency: 'daily',
+        compatibility: 0,
+        is_premium: 0,
+        has_premium: 0,
+        media_items: '[]',
+        rating_likes: 3,
+        rating_dislikes: 0,
+        rating_score: 3,
+      },
+    ],
+    [`/api/users/${targetUserId}/posts`]: [
+      {
+        id: '00000000-0000-4000-8000-000000000224',
+        author_user_id: targetUserId,
+        source_chat_id: 42,
+        source_message_id: 99,
+        content_type: 'text',
+        title: 'Запись профиля',
+        body_markdown: '**Пост** из публичного профиля',
+        text_preview: 'Пост из публичного профиля',
+        media_telegram_file_id: null,
+        media_thumbnail_file_id: null,
+        media_items: '[]',
+        track_title: null,
+        track_performer: null,
+        published_at: '2026-07-29 12:00:00',
+        display_name: 'Автор Nuar',
+        avatar_media_id: null,
+        avatar_render_mode: null,
+        likes: 1,
+        dislikes: 0,
+        rating_score: 1,
+        comment_count: 0,
+        own_rating: null,
+      },
+    ],
+    [`/api/users/${targetUserId}/profile/rating`]: async (route) => {
+      ratedValue = (route.request().postDataJSON() as { value: number }).value;
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({ saved: true }),
+      });
+    },
+    '/api/conversations/direct': async (route) => {
+      chatStarted = true;
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          conversationId: '00000000-0000-4000-8000-000000000225',
+        }),
+      });
+    },
+  });
+  await page.goto(`/profiles/${targetUserId}`);
+  await expect(page.getByText('Активная анкета автора')).toBeVisible();
+  await expect(page.getByText('Запись профиля')).toBeVisible();
+  await expect(page.getByText('@nuar')).toBeVisible();
+  await page.getByRole('button', { name: '7' }).click();
+  await expect.poll(() => ratedValue).toBe(1);
+  await page.getByRole('button', { name: 'Написать', exact: true }).first().click();
+  await expect.poll(() => chatStarted).toBe(true);
+  await expect(page).toHaveURL('/chats');
 });
 
 test('profile save uses the CSRF token rotated by session refresh', async ({ page }) => {
@@ -592,6 +723,7 @@ test('post owner edits Markdown and can replace or remove media from post settin
 }) => {
   const postId = '00000000-0000-4000-8000-000000000032';
   let savedBody = '';
+  let savedMetadata: { tags?: string[]; fandoms?: string[]; hashtags?: string[] } = {};
   let mediaRemoved = false;
   await mockApi(page, false, {
     '/api/posts/own': [
@@ -617,11 +749,21 @@ test('post owner edits Markdown and can replace or remove media from post settin
         rating_score: 2,
         comment_count: 0,
         own_rating: null,
+        tags: '["сюжет"]',
+        fandoms: '["Arcane"]',
+        hashtags: '["rolemate"]',
+        reach_status: 'normal',
       },
     ],
     [`/api/posts/${postId}`]: async (route) => {
-      const body = route.request().postDataJSON() as { bodyMarkdown: string };
+      const body = route.request().postDataJSON() as {
+        bodyMarkdown: string;
+        tags?: string[];
+        fandoms?: string[];
+        hashtags?: string[];
+      };
       savedBody = body.bodyMarkdown;
+      savedMetadata = body;
       await route.fulfill({
         status: 200,
         contentType: 'application/json',
@@ -644,8 +786,18 @@ test('post owner edits Markdown and can replace or remove media from post settin
   await page.goto('/profile');
   await page.getByRole('button', { name: 'Настройки поста' }).click();
   await page.locator(`#post-body-${postId}`).fill('## Новая глава\n\n**Новый** текст');
+  await page.locator(`#post-tags-${postId}`).fill('сюжет, slowburn');
+  await page.locator(`#post-fandoms-${postId}`).fill('Arcane, Dishonored');
+  await page.locator(`#post-hashtags-${postId}`).fill('#rolemate, #recommendations');
   await page.getByRole('button', { name: 'Сохранить пост' }).click();
   await expect.poll(() => savedBody).toContain('**Новый**');
+  await expect
+    .poll(() => savedMetadata)
+    .toMatchObject({
+      tags: ['сюжет', 'slowburn'],
+      fandoms: ['Arcane', 'Dishonored'],
+      hashtags: ['#rolemate', '#recommendations'],
+    });
   await page.getByRole('button', { name: 'Настройки поста' }).click();
   await page.evaluate(() => {
     window.confirm = () => true;
@@ -701,6 +853,51 @@ test('posts section renders ratings and opens comments', async ({ page }) => {
   await expect(page.getByText('Пост из отдельного профиля')).toBeVisible();
   await page.getByRole('button', { name: /1$/ }).click();
   await expect(page.getByText('Первый комментарий')).toBeVisible();
+});
+
+test('notification bell opens a mention and marks it as read', async ({ page }) => {
+  const notificationId = '00000000-0000-4000-8000-000000000701';
+  await mockApi(page, false, {
+    '/api/notifications': [
+      {
+        id: notificationId,
+        actor_user_id: '00000000-0000-4000-8000-000000000003',
+        kind: 'mention',
+        context: 'post',
+        entity_id: '00000000-0000-4000-8000-000000000099',
+        message: 'Вас упомянули в посте',
+        open_path: '/posts',
+        read_at: null,
+        created_at: '2026-07-29 12:00:00',
+      },
+    ],
+  });
+  await page.goto('/');
+  await page.getByRole('button', { name: 'Уведомления' }).click();
+  await expect(page.getByText('Вас упомянули в посте')).toBeVisible();
+  const readRequest = page.waitForRequest(
+    (request) =>
+      request.url().endsWith(`/api/notifications/${notificationId}/read`) &&
+      request.method() === 'PUT',
+  );
+  await page.getByText('Вас упомянули в посте').click();
+  await expect(readRequest).resolves.toBeTruthy();
+  await expect(page).toHaveURL(/\/posts$/);
+});
+
+test('questionnaire like is bound to the exact questionnaire rating target', async ({ page }) => {
+  await mockApi(page);
+  await page.goto('/search');
+  const requestPromise = page.waitForRequest(
+    (request) => request.url().endsWith('/api/swipes') && request.method() === 'POST',
+  );
+  await page.getByRole('button', { name: 'Нравится', exact: true }).first().click();
+  const request = await requestPromise;
+  expect(request.postDataJSON()).toMatchObject({
+    targetUserId: '00000000-0000-4000-8000-000000000003',
+    questionnaireId: '00000000-0000-4000-8000-000000000002',
+    action: 'like',
+  });
 });
 
 test('questionnaire media opens fullscreen and closes without losing the card', async ({
@@ -1042,6 +1239,7 @@ test('keyword search sends the query and profile markdown is rendered safely', a
   await expect(page.getByText('готический детектив', { exact: true })).toBeVisible();
   await expect(page.locator('.profile-markdown strong')).toHaveText('сложные сюжеты');
   await expect(page.getByLabel('Аудио анкеты 1')).toBeVisible();
+  await expect(page.locator('.profile-track audio').first()).not.toHaveAttribute('controls', '');
   await page.getByRole('button', { name: 'Следующее медиа' }).click();
   await expect(page.locator('.profile-cover video')).toBeVisible();
 });
@@ -1512,6 +1710,92 @@ test('moderator sees only moderation sections', async ({ page }) => {
   await page.goto('/admin');
   const sectionButtons = page.locator('.mt-4.flex.flex-wrap.gap-2 > button');
   await expect(sectionButtons).toHaveCount(5);
+});
+
+test('moderator expands a reported reply with its full post thread and returns to decisions', async ({
+  page,
+}) => {
+  const reportId = '00000000-0000-4000-8000-000000000601';
+  await mockApi(page, 'moderator', {
+    '/api/admin/reports': [
+      {
+        id: reportId,
+        reporter_user_id: '00000000-0000-4000-8000-000000000001',
+        reported_user_id: '00000000-0000-4000-8000-000000000003',
+        reported_telegram_id: 2099,
+        reported_display_name: 'Автор ветки',
+        category: 'harassment',
+        description: 'Нарушение в ответе',
+        status: 'open',
+        target_type: 'comment',
+        target_title: 'Ответ в ветке',
+        target_body: '## Проверяемый пост\n\nПолный текст поста',
+        context_items: JSON.stringify([
+          {
+            id: '00000000-0000-4000-8000-000000000602',
+            parent_comment_id: null,
+            body: 'Корневой комментарий',
+            display_name: 'Автор',
+            created_at: '2026-07-29 12:00:00',
+          },
+          {
+            id: '00000000-0000-4000-8000-000000000603',
+            parent_comment_id: '00000000-0000-4000-8000-000000000602',
+            body: 'Ответ в ветке',
+            display_name: 'Автор ветки',
+            created_at: '2026-07-29 12:01:00',
+          },
+        ]),
+        created_at: '2026-07-29 12:02:00',
+      },
+    ],
+  });
+  await page.goto('/admin');
+  await page.getByTestId('admin-section-reports').click();
+  await page.getByRole('button', { name: 'Раскрыть' }).click();
+  await expect(page.getByText('Полный текст поста')).toBeVisible();
+  await expect(page.getByText('Корневой комментарий')).toBeVisible();
+  await expect(page.getByText('Ответ в ветке')).toHaveCount(2);
+  await page.getByRole('button', { name: 'Вернуться' }).click();
+  await expect(page.getByText('Полный текст поста')).toBeHidden();
+});
+
+test('moderator can limit a post from the feed and shadow-ban it in the admin queue', async ({
+  page,
+}) => {
+  const postId = '00000000-0000-4000-8000-000000000099';
+  await mockApi(page, 'moderator', {
+    '/api/admin/posts': [
+      {
+        id: postId,
+        author_user_id: '00000000-0000-4000-8000-000000000002',
+        content_type: 'text',
+        text_preview: 'Проверяемый пост',
+        status: 'active',
+        reach_status: 'normal',
+        published_at: '2026-07-29 12:00:00',
+        created_at: '2026-07-29 12:00:00',
+        display_name: 'Автор',
+        telegram_user_id: 2095,
+      },
+    ],
+  });
+  await page.goto('/posts');
+  const limitRequest = page.waitForRequest(
+    (request) =>
+      request.url().endsWith(`/api/admin/posts/${postId}/moderate`) && request.method() === 'POST',
+  );
+  await page.getByRole('button', { name: 'Ограничить охват' }).click();
+  expect((await limitRequest).postDataJSON()).toMatchObject({ status: 'limited' });
+
+  await page.goto('/admin');
+  await page.getByTestId('admin-section-posts').click();
+  const shadowRequest = page.waitForRequest(
+    (request) =>
+      request.url().endsWith(`/api/admin/posts/${postId}/moderate`) && request.method() === 'POST',
+  );
+  await page.getByRole('button', { name: 'Теневой бан' }).click();
+  expect((await shadowRequest).postDataJSON()).toMatchObject({ status: 'shadow_banned' });
 });
 
 test('owner can open system status without breaking the mobile admin layout', async ({ page }) => {

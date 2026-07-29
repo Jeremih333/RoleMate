@@ -32,6 +32,7 @@ import {
 } from '../api.js';
 import { Button, Card, SectionTitle, Skeleton } from '../components/ui.js';
 import { ProfileAvatar } from '../components/profile-avatar.js';
+import { ProfileMarkdown } from '../components/markdown.js';
 import { useUserStore } from '../store.js';
 
 type AdminSection =
@@ -490,8 +491,11 @@ function PostsQueue() {
     queryFn: () => api.adminPosts('all', search),
   });
   const moderate = useMutation({
-    mutationFn: (input: { postId: string; status: 'active' | 'blocked'; reason: string }) =>
-      api.adminModeratePost(input.postId, input.status, input.reason),
+    mutationFn: (input: {
+      postId: string;
+      status: 'active' | 'blocked' | 'limited' | 'shadow_banned';
+      reason: string;
+    }) => api.adminModeratePost(input.postId, input.status, input.reason),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ['admin-posts'] }),
   });
   if (posts.isLoading) return <Skeleton className="h-72" />;
@@ -522,6 +526,9 @@ function PostsQueue() {
             <span className="status-pill">
               {ru.miniApp.admin.postStatuses[post.status] ?? post.status}
             </span>
+            <span className="status-pill">
+              {ru.miniApp.admin.reachStatuses[post.reach_status] ?? post.reach_status}
+            </span>
           </div>
           <p className="mt-3 whitespace-pre-wrap break-words text-sm text-soft">
             {post.text_preview || ru.miniApp.admin.noComment}
@@ -540,18 +547,61 @@ function PostsQueue() {
               >
                 {ru.miniApp.admin.restorePost}
               </Button>
-            ) : post.status === 'active' ? (
-              <Button
-                variant="danger"
-                loading={moderate.isPending}
-                onClick={() => {
-                  const reason = window.prompt(ru.miniApp.admin.blockPostPrompt)?.trim();
-                  if (reason && reason.length >= 3) {
-                    moderate.mutate({ postId: post.id, status: 'blocked', reason });
+            ) : null}
+            {post.status === 'active' ? (
+              <>
+                <Button
+                  variant="secondary"
+                  loading={moderate.isPending}
+                  onClick={() =>
+                    moderate.mutate({
+                      postId: post.id,
+                      status: 'limited',
+                      reason: ru.miniApp.admin.limitPostReason,
+                    })
                   }
-                }}
+                >
+                  {ru.miniApp.admin.limitPost}
+                </Button>
+                <Button
+                  variant="secondary"
+                  loading={moderate.isPending}
+                  onClick={() =>
+                    moderate.mutate({
+                      postId: post.id,
+                      status: 'shadow_banned',
+                      reason: ru.miniApp.admin.shadowBanPostReason,
+                    })
+                  }
+                >
+                  {ru.miniApp.admin.shadowBanPost}
+                </Button>
+                <Button
+                  variant="danger"
+                  loading={moderate.isPending}
+                  onClick={() => {
+                    const reason = window.prompt(ru.miniApp.admin.blockPostPrompt)?.trim();
+                    if (reason && reason.length >= 3) {
+                      moderate.mutate({ postId: post.id, status: 'blocked', reason });
+                    }
+                  }}
+                >
+                  {ru.miniApp.admin.blockPost}
+                </Button>
+              </>
+            ) : null}
+            {post.status === 'active' && post.reach_status !== 'normal' ? (
+              <Button
+                loading={moderate.isPending}
+                onClick={() =>
+                  moderate.mutate({
+                    postId: post.id,
+                    status: 'active',
+                    reason: ru.miniApp.admin.restorePostReachReason,
+                  })
+                }
               >
-                {ru.miniApp.admin.blockPost}
+                {ru.miniApp.admin.restorePostReach}
               </Button>
             ) : null}
           </div>
@@ -809,6 +859,7 @@ function ModerationMediaPreview({
 
 function ReportsQueue() {
   const queryClient = useQueryClient();
+  const [expandedReportId, setExpandedReportId] = useState<string | null>(null);
   const reports = useQuery({
     queryKey: ['admin-reports'],
     queryFn: () => api.adminReports('all'),
@@ -853,6 +904,60 @@ function ReportsQueue() {
             {ru.miniApp.admin.reportedUser}{' '}
             {report.reported_display_name ?? report.reported_telegram_id}
           </p>
+          <Button
+            className="mt-3"
+            variant="secondary"
+            onClick={() =>
+              setExpandedReportId((current) => (current === report.id ? null : report.id))
+            }
+          >
+            {expandedReportId === report.id
+              ? ru.miniApp.admin.collapseReport
+              : ru.miniApp.admin.expandReport}
+          </Button>
+          {expandedReportId === report.id ? (
+            <div className="mt-3 rounded-2xl border border-white/10 bg-black/15 p-4">
+              <strong>{ru.miniApp.admin.reportContextTitle}</strong>
+              {report.target_title ? (
+                <p className="mt-2 whitespace-pre-wrap break-words text-sm">
+                  {report.target_title}
+                </p>
+              ) : null}
+              {report.target_body && report.target_body !== report.target_title ? (
+                <ProfileMarkdown className="mt-2 break-words text-sm text-soft" allowLinks={false}>
+                  {report.target_body}
+                </ProfileMarkdown>
+              ) : null}
+              {report.target_type === 'conversation' ? (
+                <p className="mt-2 text-xs text-muted">
+                  {ru.miniApp.admin.reportConversationPrivacy}
+                </p>
+              ) : null}
+              <div className="mt-3 space-y-2">
+                {parseReportContext(report.context_items).map((item, index) => (
+                  <div
+                    className={`rounded-xl border border-white/10 p-3 ${
+                      item.parentCommentId ? 'ml-5' : ''
+                    }`}
+                    key={item.id ?? `${report.id}-${index}`}
+                  >
+                    {item.displayName ? (
+                      <strong className="text-sm">{item.displayName}</strong>
+                    ) : null}
+                    {item.body ? (
+                      <p className="mt-1 whitespace-pre-wrap break-words text-sm">{item.body}</p>
+                    ) : null}
+                    {item.messageType ? <p className="text-sm">{item.messageType}</p> : null}
+                    {item.createdAt ? (
+                      <p className="mt-1 text-xs text-muted">
+                        {new Date(item.createdAt).toLocaleString('ru-RU')}
+                      </p>
+                    ) : null}
+                  </div>
+                ))}
+              </div>
+            </div>
+          ) : null}
           <div className="mt-3 flex gap-2">
             {report.status === 'open' ? (
               <Button
@@ -911,6 +1016,38 @@ function ReportsQueue() {
       />
     </div>
   );
+}
+
+function parseReportContext(value: string): Array<{
+  id?: string;
+  parentCommentId?: string | null;
+  body?: string;
+  displayName?: string;
+  messageType?: string;
+  createdAt?: string;
+}> {
+  try {
+    const parsed: unknown = JSON.parse(value || '[]');
+    if (!Array.isArray(parsed)) return [];
+    return parsed.flatMap((item) => {
+      if (typeof item !== 'object' || item === null) return [];
+      const record = item as Record<string, unknown>;
+      return [
+        {
+          ...(typeof record.id === 'string' ? { id: record.id } : {}),
+          ...(typeof record.parent_comment_id === 'string' || record.parent_comment_id === null
+            ? { parentCommentId: record.parent_comment_id }
+            : {}),
+          ...(typeof record.body === 'string' ? { body: record.body } : {}),
+          ...(typeof record.display_name === 'string' ? { displayName: record.display_name } : {}),
+          ...(typeof record.message_type === 'string' ? { messageType: record.message_type } : {}),
+          ...(typeof record.created_at === 'string' ? { createdAt: record.created_at } : {}),
+        },
+      ];
+    });
+  } catch {
+    return [];
+  }
 }
 
 function Payments() {

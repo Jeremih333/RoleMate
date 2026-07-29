@@ -83,12 +83,31 @@ export const api = {
       isOwner: boolean;
       riskScore: number;
     }>('/me'),
+  notifications: () => request<UserNotification[]>('/notifications'),
+  readNotification: (notificationId: string) =>
+    request<{ read: true }>(`/notifications/${notificationId}/read`, {
+      method: 'PUT',
+      body: '{}',
+    }),
+  resolveMentions: (usernames: string[]) =>
+    request<Array<{ username: string; user_id: string }>>(
+      `/mentions/resolve?usernames=${encodeURIComponent(usernames.join(','))}`,
+    ),
   profile: () => request<UserProfileSummary>('/profile'),
   publicProfile: () => request<PublicUserProfile>('/public-profile'),
   publicProfileByUsername: (username: string) =>
     request<PublicUserProfile>(`/profiles/by-username/${encodeURIComponent(username)}`),
   publicProfileByUserId: (userId: string) =>
     request<PublicUserProfile>(`/users/${encodeURIComponent(userId)}/profile`),
+  publicQuestionnaires: (userId: string) =>
+    request<SearchProfile[]>(`/users/${encodeURIComponent(userId)}/questionnaires?limit=5`),
+  publicPosts: (userId: string) =>
+    request<SocialPost[]>(`/users/${encodeURIComponent(userId)}/posts?limit=30`),
+  ratePublicProfile: (userId: string, value: -1 | 1) =>
+    request<{ saved: true }>(`/users/${encodeURIComponent(userId)}/profile/rating`, {
+      method: 'PUT',
+      body: JSON.stringify({ value }),
+    }),
   publicProfileUsernames: () => request<ProfileUsername[]>('/public-profile/usernames'),
   claimPublicProfileUsername: (username: string) =>
     request<{ claimed: true; username: string }>('/public-profile/usernames', {
@@ -173,10 +192,14 @@ export const api = {
     }),
   deleteFilterSet: (filterSetId: string) =>
     request<{ deleted: true }>(`/search/filter-sets/${filterSetId}`, { method: 'DELETE' }),
-  swipe: (targetUserId: string, action: 'like' | 'skip' | 'super_like' | 'rewind') =>
+  swipe: (
+    targetUserId: string,
+    action: 'like' | 'skip' | 'super_like' | 'rewind',
+    questionnaireId?: string,
+  ) =>
     request<{ matched: boolean; matchId?: string }>('/swipes', {
       method: 'POST',
-      body: JSON.stringify({ targetUserId, action }),
+      body: JSON.stringify({ targetUserId, action, questionnaireId }),
     }),
   rewind: () =>
     request<{ rewound: true; targetUserId: string }>('/swipes/rewind', {
@@ -186,7 +209,16 @@ export const api = {
   incomingLikes: () => request<IncomingLike[]>('/swipes/incoming'),
   posts: () => request<SocialPost[]>('/posts?limit=30'),
   ownPosts: () => request<SocialPost[]>('/posts/own?limit=30'),
-  updateOwnPost: (postId: string, input: { title: string; bodyMarkdown: string }) =>
+  updateOwnPost: (
+    postId: string,
+    input: {
+      title: string;
+      bodyMarkdown: string;
+      tags: string[];
+      fandoms: string[];
+      hashtags: string[];
+    },
+  ) =>
     request<{ updated: true }>(`/posts/${postId}`, {
       method: 'PUT',
       body: JSON.stringify(input),
@@ -194,10 +226,15 @@ export const api = {
   removeOwnPostMedia: (postId: string) =>
     request<{ removed: true }>(`/posts/${postId}/media`, { method: 'DELETE' }),
   postComments: (postId: string) => request<PostComment[]>(`/posts/${postId}/comments`),
-  addPostComment: (postId: string, body: string) =>
+  addPostComment: (postId: string, body: string, parentCommentId?: string) =>
     request<{ id: string; created: true }>(`/posts/${postId}/comments`, {
       method: 'POST',
-      body: JSON.stringify({ body }),
+      body: JSON.stringify({ body, ...(parentCommentId ? { parentCommentId } : {}) }),
+    }),
+  ratePostComment: (commentId: string, value: -1 | 1) =>
+    request<{ saved: true }>(`/comments/${commentId}/rating`, {
+      method: 'PUT',
+      body: JSON.stringify({ value }),
     }),
   ratePost: (postId: string, value: -1 | 1) =>
     request<{ saved: true }>(`/posts/${postId}/rating`, {
@@ -302,6 +339,9 @@ export const api = {
   report: (input: {
     reportedUserId: string;
     conversationId?: string;
+    postId?: string;
+    questionnaireId?: string;
+    commentId?: string;
     category: ReportCategory;
     description: string;
   }) =>
@@ -398,7 +438,11 @@ export const api = {
     request<AdminPost[]>(
       `/admin/posts?status=${encodeURIComponent(status)}&q=${encodeURIComponent(query)}&limit=50`,
     ),
-  adminModeratePost: (postId: string, status: 'active' | 'blocked', reason: string) =>
+  adminModeratePost: (
+    postId: string,
+    status: 'active' | 'blocked' | 'limited' | 'shadow_banned',
+    reason: string,
+  ) =>
     request<{ moderated: true }>(`/admin/posts/${postId}/moderate`, {
       method: 'POST',
       body: JSON.stringify({ status, reason }),
@@ -610,8 +654,24 @@ export interface PublicUserProfile {
   featured_audio_items: string;
   questionnaire_count: number;
   post_count: number;
+  rating_likes: number;
+  rating_dislikes: number;
+  rating_score: number;
+  own_rating: -1 | 1 | null;
   created_at: string;
   updated_at: string;
+}
+
+export interface UserNotification {
+  id: string;
+  actor_user_id: string | null;
+  kind: 'mention' | 'comment' | 'message';
+  context: 'chat' | 'questionnaire' | 'post' | 'comment';
+  entity_id: string | null;
+  message: string;
+  open_path: string;
+  read_at: string | null;
+  created_at: string;
 }
 
 export interface ProfileUsername {
@@ -660,6 +720,12 @@ export interface SocialPost {
   rating_score: number;
   comment_count: number;
   own_rating: -1 | 1 | null;
+  media_items: string;
+  tags: string;
+  fandoms: string;
+  hashtags: string;
+  reach_status: 'normal' | 'limited' | 'shadow_banned';
+  affinity_score?: number;
 }
 
 export type SearchScope = 'questionnaires' | 'profiles';
@@ -668,11 +734,16 @@ export interface PostComment {
   id: string;
   post_id: string;
   author_user_id: string;
+  parent_comment_id: string | null;
   body: string;
   created_at: string;
   display_name: string;
   avatar_media_id: string | null;
   avatar_render_mode: 'photo' | 'animation' | null;
+  verification_kind: 'owner' | 'moderator' | null;
+  likes: number;
+  dislikes: number;
+  own_rating: -1 | 1 | null;
 }
 
 export interface SearchAvailability {
@@ -834,6 +905,8 @@ export interface UserSettings {
   notifications_enabled: number;
   match_notifications_enabled: number;
   message_notifications_enabled: number;
+  mention_notifications_enabled: number;
+  comment_notifications_enabled: number;
   referral_notifications_enabled: number;
   premium_notifications_enabled: number;
   privacy_shield_enabled: number;
@@ -847,6 +920,8 @@ export interface SettingsInput {
   notificationsEnabled: boolean;
   matchNotificationsEnabled: boolean;
   messageNotificationsEnabled: boolean;
+  mentionNotificationsEnabled: boolean;
+  commentNotificationsEnabled: boolean;
   referralNotificationsEnabled: boolean;
   premiumNotificationsEnabled: boolean;
   privacyShieldEnabled: boolean;
@@ -1017,6 +1092,7 @@ export interface AdminPost {
   display_name: string | null;
   telegram_user_id: number;
   telegram_username?: string;
+  reach_status: 'normal' | 'limited' | 'shadow_banned';
 }
 
 export interface AdminMedia {
@@ -1039,6 +1115,14 @@ export interface AdminReport {
   reported_telegram_id: number;
   reported_display_name?: string;
   created_at: string;
+  questionnaire_id?: string | null;
+  post_id?: string | null;
+  comment_id?: string | null;
+  conversation_id?: string | null;
+  target_type: 'questionnaire' | 'post' | 'comment' | 'conversation' | 'user';
+  target_title?: string | null;
+  target_body?: string | null;
+  context_items: string;
 }
 
 export interface AdminPayment {

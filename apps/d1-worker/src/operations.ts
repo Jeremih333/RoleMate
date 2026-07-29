@@ -271,7 +271,7 @@ const handlers: { [K in WorkerOperation]: Handler<K> } = {
       `SELECT id, telegram_user_id, telegram_username, telegram_first_name, status, role,
               is_onboarding_completed, is_age_confirmed, is_rules_accepted,
               is_search_enabled, is_banned, risk_score, created_at, updated_at
-       FROM users WHERE telegram_user_id = ?1 AND deleted_at IS NULL`,
+      FROM users WHERE telegram_user_id = ?1 AND deleted_at IS NULL`,
     )
       .bind(input.telegramUserId)
       .first();
@@ -359,7 +359,8 @@ const handlers: { [K in WorkerOperation]: Handler<K> } = {
          message_notifications_enabled = ?4, referral_notifications_enabled = ?5,
          premium_notifications_enabled = ?6, privacy_shield_enabled = ?7,
          show_online_status = ?8, show_premium_badge = ?9, theme = ?10,
-         hide_demographics = ?11,
+         hide_demographics = ?11, mention_notifications_enabled = ?12,
+         comment_notifications_enabled = ?13,
          updated_at = CURRENT_TIMESTAMP
        WHERE user_id = ?1`,
     )
@@ -375,6 +376,8 @@ const handlers: { [K in WorkerOperation]: Handler<K> } = {
         input.showPremiumBadge ? 1 : 0,
         input.theme,
         input.hideDemographics ? 1 : 0,
+        input.mentionNotificationsEnabled ? 1 : 0,
+        input.commentNotificationsEnabled ? 1 : 0,
       )
       .run();
     if (result.meta.changes !== 1)
@@ -1131,7 +1134,14 @@ const handlers: { [K in WorkerOperation]: Handler<K> } = {
               ), '[]') AS featured_audio_items,
               (SELECT COUNT(*) FROM questionnaires q WHERE q.user_id = up.user_id) AS questionnaire_count,
               (SELECT COUNT(*) FROM telegram_posts tp
-               WHERE tp.author_user_id = up.user_id AND tp.status = 'active') AS post_count
+               WHERE tp.author_user_id = up.user_id AND tp.status = 'active') AS post_count,
+              (SELECT COUNT(*) FROM public_profile_ratings ppr
+               WHERE ppr.profile_user_id = up.user_id AND ppr.value = 1) AS rating_likes,
+              (SELECT COUNT(*) FROM public_profile_ratings ppr
+               WHERE ppr.profile_user_id = up.user_id AND ppr.value = -1) AS rating_dislikes,
+              COALESCE((SELECT SUM(ppr.value) FROM public_profile_ratings ppr
+               WHERE ppr.profile_user_id = up.user_id), 0) AS rating_score,
+              NULL AS own_rating
        FROM user_profiles up
        JOIN users u ON u.id = up.user_id
        WHERE up.user_id = ?1`,
@@ -1185,7 +1195,16 @@ const handlers: { [K in WorkerOperation]: Handler<K> } = {
                WHERE q.user_id = up.user_id AND q.is_active = 1
                  AND q.moderation_status = 'approved') AS questionnaire_count,
               (SELECT COUNT(*) FROM telegram_posts tp
-               WHERE tp.author_user_id = up.user_id AND tp.status = 'active') AS post_count
+               WHERE tp.author_user_id = up.user_id AND tp.status = 'active') AS post_count,
+              (SELECT COUNT(*) FROM public_profile_ratings ppr
+               WHERE ppr.profile_user_id = up.user_id AND ppr.value = 1) AS rating_likes,
+              (SELECT COUNT(*) FROM public_profile_ratings ppr
+               WHERE ppr.profile_user_id = up.user_id AND ppr.value = -1) AS rating_dislikes,
+              COALESCE((SELECT SUM(ppr.value) FROM public_profile_ratings ppr
+               WHERE ppr.profile_user_id = up.user_id), 0) AS rating_score,
+              (SELECT ppr.value FROM public_profile_ratings ppr
+               WHERE ppr.profile_user_id = up.user_id
+                 AND ppr.rater_user_id = ?2) AS own_rating
        FROM user_profiles up
        JOIN users u ON u.id = up.user_id
        WHERE up.user_id = ?1 AND up.moderation_status = 'active'
@@ -1279,6 +1298,35 @@ const handlers: { [K in WorkerOperation]: Handler<K> } = {
         .bind(input.requesterUserId, normalizedQuery, pattern, input.limit)
         .all()
     ).results;
+  },
+  'publicProfiles.rate': async (env, input) => {
+    if (input.userId === input.profileUserId) {
+      throw new ApiError(400, 'SELF_PROFILE_RATING', 'A profile cannot rate itself');
+    }
+    const visible = await env.DB.prepare(
+      `SELECT 1 AS visible
+       FROM user_profiles up
+       JOIN users u ON u.id = up.user_id
+       WHERE up.user_id = ?1 AND up.moderation_status = 'active'
+         AND u.is_banned = 0 AND u.deleted_at IS NULL
+         AND NOT EXISTS (
+           SELECT 1 FROM blocks b
+           WHERE (b.blocker_user_id = ?2 AND b.blocked_user_id = up.user_id)
+              OR (b.blocker_user_id = up.user_id AND b.blocked_user_id = ?2)
+         )`,
+    )
+      .bind(input.profileUserId, input.userId)
+      .first();
+    if (!visible) throw new ApiError(404, 'PUBLIC_PROFILE_NOT_FOUND', 'Public profile not found');
+    await env.DB.prepare(
+      `INSERT INTO public_profile_ratings (profile_user_id, rater_user_id, value)
+       VALUES (?1, ?2, ?3)
+       ON CONFLICT(profile_user_id, rater_user_id) DO UPDATE SET
+         value = excluded.value, updated_at = CURRENT_TIMESTAMP`,
+    )
+      .bind(input.profileUserId, input.userId, input.value)
+      .run();
+    return { saved: true };
   },
   'publicProfiles.getByUsername': async (env, input) => {
     const alias = await env.DB.prepare(
@@ -1433,6 +1481,111 @@ const handlers: { [K in WorkerOperation]: Handler<K> } = {
       .bind(input.userId)
       .all();
     return { premium, limit: premium ? 5 : 1, questionnaires: rows.results };
+  },
+  'questionnaires.listPublic': async (env, input) => {
+    return (
+      await env.DB.prepare(
+        `SELECT q.id, q.user_id, q.display_name,
+                CASE WHEN EXISTS (
+                  SELECT 1 FROM premium_entitlements pe
+                  JOIN user_settings us ON us.user_id = q.user_id
+                  WHERE pe.user_id = q.user_id AND pe.status = 'active'
+                    AND pe.ends_at > CURRENT_TIMESTAMP AND us.hide_demographics = 1
+                ) THEN NULL ELSE q.age_group END AS age_group,
+                CASE WHEN EXISTS (
+                  SELECT 1 FROM premium_entitlements pe
+                  JOIN user_settings us ON us.user_id = q.user_id
+                  WHERE pe.user_id = q.user_id AND pe.status = 'active'
+                    AND pe.ends_at > CURRENT_TIMESTAMP AND us.hide_demographics = 1
+                ) THEN NULL ELSE q.gender END AS gender,
+                q.short_headline, q.about, q.roleplay_experience, q.preferred_role,
+                q.timezone, q.active_hours, q.languages, q.fandoms, q.genres, q.tags,
+                q.settings, q.plots, q.looking_for, q.boundaries,
+                q.adult_topics_allowed, q.contact_reveal_policy,
+                q.avatar_media_id, q.avatar_render_mode,
+                q.writing_style, q.average_post_length, q.activity_frequency,
+                u.last_activity_at,
+                (SELECT pu.username FROM profile_usernames pu
+                 WHERE pu.user_id = q.user_id
+                 ORDER BY pu.is_primary DESC, pu.created_at LIMIT 1) AS username,
+                CASE
+                  WHEN u.role = 'admin' AND u.telegram_user_id = 1040929628 THEN 'owner'
+                  WHEN EXISTS (
+                    SELECT 1 FROM moderator_assignments ma
+                    WHERE ma.user_id = q.user_id AND ma.is_active = 1
+                  ) THEN 'moderator'
+                  ELSE NULL
+                END AS verification_kind,
+                EXISTS (
+                  SELECT 1 FROM premium_entitlements pe
+                  WHERE pe.user_id = q.user_id AND pe.status = 'active'
+                    AND pe.ends_at > CURRENT_TIMESTAMP
+                ) AS has_premium,
+                CASE WHEN EXISTS (
+                  SELECT 1 FROM premium_entitlements pe
+                  JOIN user_settings us ON us.user_id = q.user_id
+                  WHERE pe.user_id = q.user_id AND pe.status = 'active'
+                    AND pe.ends_at > CURRENT_TIMESTAMP AND us.show_premium_badge = 1
+                ) THEN 1 ELSE 0 END AS is_premium,
+                (SELECT qm.id FROM questionnaire_media qm
+                 WHERE qm.questionnaire_id = q.id AND qm.moderation_status = 'approved'
+                 ORDER BY qm.sort_order, qm.created_at LIMIT 1) AS media_id,
+                (SELECT qm.media_type FROM questionnaire_media qm
+                 WHERE qm.questionnaire_id = q.id AND qm.moderation_status = 'approved'
+                 ORDER BY qm.sort_order, qm.created_at LIMIT 1) AS media_type,
+                COALESCE((
+                  SELECT json_group_array(json_object(
+                    'id', visible.id, 'media_type', visible.media_type,
+                    'track_title', visible.track_title,
+                    'track_performer', visible.track_performer,
+                    'has_thumbnail', visible.has_thumbnail
+                  ))
+                  FROM (
+                    SELECT qm.id, qm.media_type, qm.track_title, qm.track_performer,
+                           CASE WHEN qm.thumbnail_telegram_file_id IS NULL THEN 0 ELSE 1 END
+                             AS has_thumbnail
+                    FROM questionnaire_media qm
+                    WHERE qm.questionnaire_id = q.id AND qm.moderation_status = 'approved'
+                      AND (
+                        EXISTS (
+                          SELECT 1 FROM premium_entitlements pe
+                          WHERE pe.user_id = q.user_id AND pe.status = 'active'
+                            AND pe.ends_at > CURRENT_TIMESTAMP
+                        )
+                        OR qm.id IN (
+                          SELECT free.id FROM questionnaire_media free
+                          WHERE free.questionnaire_id = q.id
+                            AND free.moderation_status = 'approved'
+                            AND free.media_type IN ('photo', 'video')
+                          ORDER BY free.sort_order, free.created_at LIMIT 2
+                        )
+                      )
+                    ORDER BY qm.sort_order, qm.created_at LIMIT 8
+                  ) visible
+                ), '[]') AS media_items,
+                (SELECT COUNT(*) FROM questionnaire_ratings qr
+                 WHERE qr.questionnaire_id = q.id AND qr.value = 1) AS rating_likes,
+                (SELECT COUNT(*) FROM questionnaire_ratings qr
+                 WHERE qr.questionnaire_id = q.id AND qr.value = -1) AS rating_dislikes,
+                COALESCE((SELECT SUM(qr.value) FROM questionnaire_ratings qr
+                 WHERE qr.questionnaire_id = q.id), 0) AS rating_score,
+                0 AS compatibility
+         FROM questionnaires q
+         JOIN users u ON u.id = q.user_id
+         JOIN user_profiles up ON up.user_id = q.user_id
+         WHERE q.user_id = ?1 AND q.moderation_status = 'approved' AND q.is_active = 1
+           AND up.moderation_status = 'active'
+           AND u.is_banned = 0 AND u.deleted_at IS NULL
+           AND NOT EXISTS (
+             SELECT 1 FROM blocks b
+             WHERE (b.blocker_user_id = ?2 AND b.blocked_user_id = q.user_id)
+                OR (b.blocker_user_id = q.user_id AND b.blocked_user_id = ?2)
+           )
+         ORDER BY q.is_primary DESC, q.updated_at DESC LIMIT ?3`,
+      )
+        .bind(input.profileUserId, input.requesterUserId, input.limit)
+        .all()
+    ).results;
   },
   'questionnaires.getOwn': async (env, input) => {
     const questionnaire = await env.DB.prepare(
@@ -2261,6 +2414,17 @@ const handlers: { [K in WorkerOperation]: Handler<K> } = {
     if (input.action === 'rewind') {
       throw new ApiError(400, 'USE_REWIND_OPERATION', 'Use rewind operation');
     }
+    if (input.questionnaireId) {
+      const questionnaire = await env.DB.prepare(
+        `SELECT user_id FROM questionnaires
+         WHERE id = ?1 AND user_id = ?2 AND moderation_status = 'approved' AND is_active = 1`,
+      )
+        .bind(input.questionnaireId, input.targetUserId)
+        .first<{ user_id: string }>();
+      if (!questionnaire) {
+        throw new ApiError(404, 'QUESTIONNAIRE_NOT_FOUND', 'Questionnaire not found');
+      }
+    }
     if (input.action === 'super_like') {
       const premium = Boolean(await premiumEnd(env, input.userId));
       const used = await env.DB.prepare(
@@ -2284,8 +2448,8 @@ const handlers: { [K in WorkerOperation]: Handler<K> } = {
     const swipeId = crypto.randomUUID();
     const created = await env.DB.prepare(
       `INSERT OR IGNORE INTO swipes
-       (id, actor_user_id, target_user_id, action, source, idempotency_key)
-       VALUES (?1, ?2, ?3, ?4, ?5, ?6)`,
+       (id, actor_user_id, target_user_id, action, source, idempotency_key, questionnaire_id)
+       VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)`,
     )
       .bind(
         swipeId,
@@ -2294,8 +2458,19 @@ const handlers: { [K in WorkerOperation]: Handler<K> } = {
         input.action,
         input.source,
         input.idempotencyKey,
+        input.questionnaireId ?? null,
       )
       .run();
+    if (input.questionnaireId) {
+      await env.DB.prepare(
+        `INSERT INTO questionnaire_ratings (questionnaire_id, user_id, value)
+         VALUES (?1, ?2, ?3)
+         ON CONFLICT(questionnaire_id, user_id) DO UPDATE SET
+           value = excluded.value, updated_at = CURRENT_TIMESTAMP`,
+      )
+        .bind(input.questionnaireId, input.userId, input.action === 'skip' ? -1 : 1)
+        .run();
+    }
     if (!['like', 'super_like'].includes(input.action)) {
       return { created: created.meta.changes === 1, matched: false };
     }
@@ -2434,6 +2609,167 @@ const handlers: { [K in WorkerOperation]: Handler<K> } = {
       .bind(input.userId, input.kind)
       .first<{ telegram_user_id: number }>();
     return target ?? null;
+  },
+  'mentions.resolve': async (env, input) => {
+    const resolved: Array<{ username: string; user_id: string }> = [];
+    for (const username of [...new Set(input.usernames)]) {
+      const profile = await env.DB.prepare(
+        `SELECT pu.username, pu.user_id
+         FROM profile_usernames pu
+         JOIN user_profiles up ON up.user_id = pu.user_id
+         JOIN users u ON u.id = pu.user_id
+         WHERE pu.username = ?1 COLLATE NOCASE AND up.moderation_status = 'active'
+           AND u.is_banned = 0 AND u.deleted_at IS NULL
+           AND NOT EXISTS (
+             SELECT 1 FROM blocks b
+             WHERE (b.blocker_user_id = ?2 AND b.blocked_user_id = pu.user_id)
+                OR (b.blocker_user_id = pu.user_id AND b.blocked_user_id = ?2)
+           )`,
+      )
+        .bind(username, input.requesterUserId)
+        .first<{ username: string; user_id: string }>();
+      if (profile) resolved.push(profile);
+    }
+    return resolved;
+  },
+  'notifications.mentions.create': async (env, input) => {
+    const deliveries: Array<{
+      notification_id: string;
+      user_id: string;
+      username: string;
+      telegram_user_id: number | null;
+      open_path: string;
+    }> = [];
+    for (const username of [...new Set(input.usernames)]) {
+      const target = await env.DB.prepare(
+        `SELECT pu.user_id, pu.username,
+                CASE WHEN settings.notifications_enabled = 1
+                  AND settings.mention_notifications_enabled = 1
+                  AND NOT EXISTS (
+                    SELECT 1 FROM web_sessions session
+                    WHERE session.user_id = u.id AND session.revoked_at IS NULL
+                      AND session.expires_at > CURRENT_TIMESTAMP
+                      AND session.last_seen_at >= datetime('now', '-2 minutes')
+                  ) THEN u.telegram_user_id ELSE NULL END AS telegram_user_id
+         FROM profile_usernames pu
+         JOIN user_profiles up ON up.user_id = pu.user_id
+         JOIN users u ON u.id = pu.user_id
+         JOIN user_settings settings ON settings.user_id = pu.user_id
+         WHERE pu.username = ?1 COLLATE NOCASE AND pu.user_id <> ?2
+           AND up.moderation_status = 'active' AND u.is_banned = 0 AND u.deleted_at IS NULL
+           AND NOT EXISTS (
+             SELECT 1 FROM blocks b
+             WHERE (b.blocker_user_id = ?2 AND b.blocked_user_id = pu.user_id)
+                OR (b.blocker_user_id = pu.user_id AND b.blocked_user_id = ?2)
+           )`,
+      )
+        .bind(username, input.actorUserId)
+        .first<{ user_id: string; username: string; telegram_user_id: number | null }>();
+      if (!target) continue;
+      const notificationId = crypto.randomUUID();
+      const inserted = await env.DB.prepare(
+        `INSERT OR IGNORE INTO user_notifications (
+           id, user_id, actor_user_id, kind, context, entity_id, message, open_path, source_key
+         ) VALUES (?1, ?2, ?3, 'mention', ?4, ?5, ?6, ?7, ?8)`,
+      )
+        .bind(
+          notificationId,
+          target.user_id,
+          input.actorUserId,
+          input.context,
+          input.entityId ?? null,
+          input.message,
+          input.openPath,
+          `${input.sourceKey}:mention:${target.user_id}`,
+        )
+        .run();
+      if (inserted.meta.changes === 1) {
+        deliveries.push({
+          notification_id: notificationId,
+          user_id: target.user_id,
+          username: target.username,
+          telegram_user_id: target.telegram_user_id,
+          open_path: input.openPath,
+        });
+      }
+    }
+    return deliveries;
+  },
+  'notifications.activity.create': async (env, input) => {
+    if (input.actorUserId === input.targetUserId) return null;
+    const target = await env.DB.prepare(
+      `SELECT u.telegram_user_id,
+              CASE WHEN settings.notifications_enabled = 1
+                AND (
+                  (?3 = 'message' AND settings.message_notifications_enabled = 1)
+                  OR (?3 = 'comment' AND settings.comment_notifications_enabled = 1)
+                )
+                AND NOT EXISTS (
+                  SELECT 1 FROM web_sessions session
+                  WHERE session.user_id = u.id AND session.revoked_at IS NULL
+                    AND session.expires_at > CURRENT_TIMESTAMP
+                    AND session.last_seen_at >= datetime('now', '-2 minutes')
+                ) THEN 1 ELSE 0 END AS deliver
+       FROM users u
+       JOIN user_settings settings ON settings.user_id = u.id
+       WHERE u.id = ?1 AND u.is_banned = 0 AND u.deleted_at IS NULL
+         AND NOT EXISTS (
+           SELECT 1 FROM blocks b
+           WHERE (b.blocker_user_id = ?2 AND b.blocked_user_id = u.id)
+              OR (b.blocker_user_id = u.id AND b.blocked_user_id = ?2)
+         )`,
+    )
+      .bind(input.targetUserId, input.actorUserId, input.kind)
+      .first<{ telegram_user_id: number; deliver: number }>();
+    if (!target) return null;
+    const notificationId = crypto.randomUUID();
+    const inserted = await env.DB.prepare(
+      `INSERT OR IGNORE INTO user_notifications (
+         id, user_id, actor_user_id, kind, context, entity_id, message, open_path, source_key
+       ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)`,
+    )
+      .bind(
+        notificationId,
+        input.targetUserId,
+        input.actorUserId,
+        input.kind,
+        input.context,
+        input.entityId ?? null,
+        input.message,
+        input.openPath,
+        input.sourceKey,
+      )
+      .run();
+    if (inserted.meta.changes !== 1) return null;
+    return {
+      notification_id: notificationId,
+      telegram_user_id: target.deliver ? target.telegram_user_id : null,
+      open_path: input.openPath,
+    };
+  },
+  'notifications.list': async (env, input) => {
+    return (
+      await env.DB.prepare(
+        `SELECT id, actor_user_id, kind, context, entity_id, message, open_path,
+                read_at, created_at
+         FROM user_notifications
+         WHERE user_id = ?1
+         ORDER BY read_at IS NULL DESC, created_at DESC LIMIT ?2`,
+      )
+        .bind(input.userId, input.limit)
+        .all()
+    ).results;
+  },
+  'notifications.read': async (env, input) => {
+    const result = await env.DB.prepare(
+      `UPDATE user_notifications SET read_at = COALESCE(read_at, CURRENT_TIMESTAMP)
+       WHERE id = ?1 AND user_id = ?2`,
+    )
+      .bind(input.notificationId, input.userId)
+      .run();
+    if (result.meta.changes !== 1)
+      throw new ApiError(404, 'NOTIFICATION_NOT_FOUND', 'Notification not found');
+    return { read: true };
   },
   'premium.status': async (env, input) => {
     const endsAt = await premiumEnd(env, input.userId);
@@ -2904,6 +3240,7 @@ const handlers: { [K in WorkerOperation]: Handler<K> } = {
   'conversations.resolveRelay': async (env, input) => {
     const relay = await env.DB.prepare(
       `SELECT c.id AS conversation_id, sender.id AS sender_user_id,
+              recipient.id AS recipient_user_id,
               recipient.telegram_user_id AS destination_chat_id,
               other_cp.is_muted AS recipient_muted,
               CASE WHEN recipient_settings.notifications_enabled = 1
@@ -2939,6 +3276,7 @@ const handlers: { [K in WorkerOperation]: Handler<K> } = {
       .first<{
         conversation_id: string;
         sender_user_id: string;
+        recipient_user_id: string;
         destination_chat_id: number;
         recipient_muted: number;
         notify_message: number;
@@ -2951,6 +3289,7 @@ const handlers: { [K in WorkerOperation]: Handler<K> } = {
     const relay = await env.DB.prepare(
       `SELECT c.id AS conversation_id, sender.id AS sender_user_id,
               sender.telegram_user_id AS sender_chat_id,
+              recipient.id AS recipient_user_id,
               recipient.telegram_user_id AS destination_chat_id,
               other_cp.is_muted AS recipient_muted,
               CASE WHEN recipient_settings.notifications_enabled = 1
@@ -2981,6 +3320,7 @@ const handlers: { [K in WorkerOperation]: Handler<K> } = {
         conversation_id: string;
         sender_user_id: string;
         sender_chat_id: number;
+        recipient_user_id: string;
         destination_chat_id: number;
         recipient_muted: number;
         notify_message: number;
@@ -3367,14 +3707,48 @@ const handlers: { [K in WorkerOperation]: Handler<K> } = {
     if (!policy.allowed) {
       throw new ApiError(403, 'LINK_POLICY_VIOLATION', policy.reason);
     }
+    const draft = await env.DB.prepare(
+      `SELECT id FROM telegram_posts
+       WHERE author_user_id = ?1 AND status = 'draft'`,
+    )
+      .bind(input.userId)
+      .first<{ id: string }>();
+    if (!draft) throw new ApiError(409, 'POST_DRAFT_REQUIRED', 'Create a post draft first');
+    const mediaCount = await env.DB.prepare(
+      'SELECT COUNT(*) AS total FROM telegram_post_media WHERE post_id = ?1',
+    )
+      .bind(draft.id)
+      .first<{ total: number }>();
+    const existingMediaCount = Number(mediaCount?.total ?? 0);
+    if (input.mediaTelegramFileId && !premium && (input.mediaGroupId || existingMediaCount > 0)) {
+      await env.DB.prepare(
+        `UPDATE telegram_posts SET status = 'deleted', deleted_at = CURRENT_TIMESTAMP,
+           updated_at = CURRENT_TIMESTAMP WHERE id = ?1 AND status = 'draft'`,
+      )
+        .bind(draft.id)
+        .run();
+      throw new ApiError(
+        403,
+        'POST_SINGLE_MEDIA_ONLY',
+        'Choose only one file for the post; the post was rejected',
+      );
+    }
+    if (input.mediaTelegramFileId && existingMediaCount >= 10) {
+      throw new ApiError(409, 'POST_MEDIA_LIMIT', 'Up to ten media files are allowed');
+    }
     const result = await env.DB.prepare(
       `UPDATE telegram_posts
-       SET source_chat_id = ?2, source_message_id = ?3, content_type = ?4,
-           text_preview = ?5, media_telegram_file_id = ?6,
-           media_thumbnail_file_id = ?7, track_title = ?8, track_performer = ?9,
-           body_markdown = ?5,
+       SET source_chat_id = COALESCE(source_chat_id, ?2),
+           source_message_id = COALESCE(source_message_id, ?3),
+           content_type = CASE WHEN media_telegram_file_id IS NULL THEN ?4 ELSE content_type END,
+           text_preview = CASE WHEN ?5 <> '' THEN ?5 ELSE text_preview END,
+           media_telegram_file_id = COALESCE(media_telegram_file_id, ?6),
+           media_thumbnail_file_id = COALESCE(media_thumbnail_file_id, ?7),
+           track_title = COALESCE(track_title, ?8),
+           track_performer = COALESCE(track_performer, ?9),
+           body_markdown = CASE WHEN ?5 <> '' THEN ?5 ELSE body_markdown END,
            updated_at = CURRENT_TIMESTAMP
-       WHERE author_user_id = ?1 AND status = 'draft'`,
+       WHERE id = ?10 AND author_user_id = ?1 AND status = 'draft'`,
     )
       .bind(
         input.userId,
@@ -3386,17 +3760,38 @@ const handlers: { [K in WorkerOperation]: Handler<K> } = {
         input.mediaThumbnailFileId ?? null,
         input.trackTitle ?? null,
         input.trackPerformer ?? null,
+        draft.id,
       )
       .run();
     if (result.meta.changes !== 1) {
       throw new ApiError(409, 'POST_DRAFT_REQUIRED', 'Create a post draft first');
     }
-    const draft = await env.DB.prepare(
-      `SELECT id FROM telegram_posts WHERE author_user_id = ?1 AND status = 'draft'`,
-    )
-      .bind(input.userId)
-      .first<{ id: string }>();
-    return { postId: draft?.id };
+    if (input.mediaTelegramFileId) {
+      await env.DB.prepare(
+        `INSERT OR IGNORE INTO telegram_post_media (
+           id, post_id, source_chat_id, source_message_id, media_type, telegram_file_id,
+           thumbnail_telegram_file_id, track_title, track_performer, media_group_id, sort_order
+         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)`,
+      )
+        .bind(
+          crypto.randomUUID(),
+          draft.id,
+          input.sourceChatId,
+          input.sourceMessageId,
+          input.contentType,
+          input.mediaTelegramFileId,
+          input.mediaThumbnailFileId ?? null,
+          input.trackTitle ?? null,
+          input.trackPerformer ?? null,
+          input.mediaGroupId ?? null,
+          existingMediaCount,
+        )
+        .run();
+    }
+    return {
+      postId: draft.id,
+      mediaCount: existingMediaCount + (input.mediaTelegramFileId ? 1 : 0),
+    };
   },
   'posts.draft.publish': async (env, input) => {
     const result = await env.DB.prepare(
@@ -3413,14 +3808,14 @@ const handlers: { [K in WorkerOperation]: Handler<K> } = {
     return { published: true };
   },
   'posts.draft.cancel': async (env, input) => {
-    await env.DB.prepare(
+    const result = await env.DB.prepare(
       `UPDATE telegram_posts SET status = 'deleted', deleted_at = CURRENT_TIMESTAMP,
          updated_at = CURRENT_TIMESTAMP
        WHERE author_user_id = ?1 AND status = 'draft'`,
     )
       .bind(input.userId)
       .run();
-    return { cancelled: true };
+    return { cancelled: result.meta.changes === 1 };
   },
   'posts.updateOwn': async (env, input) => {
     const premium = Boolean(await premiumEnd(env, input.userId));
@@ -3431,10 +3826,19 @@ const handlers: { [K in WorkerOperation]: Handler<K> } = {
     const result = await env.DB.prepare(
       `UPDATE telegram_posts
        SET title = ?3, body_markdown = ?4, text_preview = substr(?4, 1, 500),
+           tags = ?5, fandoms = ?6, hashtags = ?7,
            updated_at = CURRENT_TIMESTAMP
        WHERE id = ?1 AND author_user_id = ?2 AND status = 'active'`,
     )
-      .bind(input.postId, input.userId, input.title, input.bodyMarkdown)
+      .bind(
+        input.postId,
+        input.userId,
+        input.title,
+        input.bodyMarkdown,
+        json([...new Set(input.tags)]),
+        json([...new Set(input.fandoms)]),
+        json([...new Set(input.hashtags.map((value) => value.replace(/^#/, '')))]),
+      )
       .run();
     if (result.meta.changes !== 1) {
       throw new ApiError(404, 'POST_NOT_FOUND', 'Post not found');
@@ -3454,15 +3858,18 @@ const handlers: { [K in WorkerOperation]: Handler<K> } = {
     if (result.meta.changes !== 1) {
       throw new ApiError(404, 'POST_NOT_FOUND', 'Post not found');
     }
+    await env.DB.prepare('DELETE FROM telegram_post_media WHERE post_id = ?1')
+      .bind(input.postId)
+      .run();
     return { removed: true };
   },
   'posts.mediaEdit.start': async (env, input) => {
     const post = await env.DB.prepare(
       `SELECT id FROM telegram_posts
-       WHERE id = ?1 AND author_user_id = ?2 AND status = 'active'`,
+      WHERE id = ?1 AND author_user_id = ?2 AND status = 'active'`,
     )
       .bind(input.postId, input.userId)
-      .first();
+      .first<{ id: string }>();
     if (!post) throw new ApiError(404, 'POST_NOT_FOUND', 'Post not found');
     await env.DB.prepare(
       `INSERT INTO telegram_post_edit_sessions (user_id, post_id, expires_at)
@@ -3534,6 +3941,7 @@ const handlers: { [K in WorkerOperation]: Handler<K> } = {
     const post = await env.DB.prepare(
       `SELECT tp.id, tp.author_user_id, tp.source_chat_id, tp.source_message_id,
               tp.content_type, tp.text_preview, tp.published_at,
+              tp.tags, tp.fandoms, tp.hashtags, tp.reach_status,
               p.display_name,
               CASE WHEN EXISTS (
                 SELECT 1 FROM premium_entitlements hidden_pe
@@ -3549,13 +3957,43 @@ const handlers: { [K in WorkerOperation]: Handler<K> } = {
                   AND hidden_pe.ends_at > CURRENT_TIMESTAMP
                   AND hidden_settings.hide_demographics = 1
               ) THEN NULL ELSE p.gender END AS gender,
-              COALESCE(SUM(CASE WHEN cr.value = 1 THEN 1 ELSE 0 END), 0) AS likes,
-              COALESCE(SUM(CASE WHEN cr.value = -1 THEN 1 ELSE 0 END), 0) AS dislikes
+              (
+                (SELECT COUNT(*) FROM post_ratings pr
+                 WHERE pr.post_id = tp.id AND pr.value = 1)
+                + (SELECT COUNT(*) FROM conversation_ratings cr
+                   WHERE cr.rated_user_id = tp.author_user_id AND cr.value = 1)
+              ) AS likes,
+              (
+                (SELECT COUNT(*) FROM post_ratings pr
+                 WHERE pr.post_id = tp.id AND pr.value = -1)
+                + (SELECT COUNT(*) FROM conversation_ratings cr
+                   WHERE cr.rated_user_id = tp.author_user_id AND cr.value = -1)
+              ) AS dislikes,
+              (SELECT COUNT(*) FROM post_comments pc
+               WHERE pc.post_id = tp.id AND pc.status = 'active') AS comment_count,
+              (
+                (SELECT COUNT(DISTINCT candidate.value) FROM json_each(tp.tags) candidate
+                 WHERE candidate.value IN (
+                   SELECT preference.value
+                   FROM questionnaires questionnaire,
+                        json_each(questionnaire.tags) preference
+                   WHERE questionnaire.user_id = ?1 AND questionnaire.is_active = 1
+                 )) * 8
+                + (SELECT COUNT(DISTINCT candidate.value) FROM json_each(tp.fandoms) candidate
+                   WHERE candidate.value IN (
+                     SELECT preference.value
+                     FROM questionnaires questionnaire,
+                          json_each(questionnaire.fandoms) preference
+                     WHERE questionnaire.user_id = ?1 AND questionnaire.is_active = 1
+                   )) * 12
+              ) AS affinity_score,
+              (SELECT COALESCE(SUM(pr.value), 0) FROM post_ratings pr
+               WHERE pr.post_id = tp.id) AS rating_score
        FROM telegram_posts tp
        JOIN profiles p ON p.user_id = tp.author_user_id
        JOIN users u ON u.id = tp.author_user_id
-       LEFT JOIN conversation_ratings cr ON cr.rated_user_id = tp.author_user_id
        WHERE tp.status = 'active' AND tp.author_user_id <> ?1
+         AND tp.reach_status <> 'shadow_banned'
          AND p.moderation_status = 'approved' AND p.is_active = 1
          AND u.is_banned = 0 AND u.deleted_at IS NULL
          AND NOT EXISTS (
@@ -3567,8 +4005,10 @@ const handlers: { [K in WorkerOperation]: Handler<K> } = {
            WHERE (b.blocker_user_id = ?1 AND b.blocked_user_id = tp.author_user_id)
               OR (b.blocker_user_id = tp.author_user_id AND b.blocked_user_id = ?1)
          )
-       GROUP BY tp.id
-       ORDER BY (COALESCE(SUM(cr.value), 0)) DESC, tp.published_at DESC
+       ORDER BY CASE tp.reach_status WHEN 'normal' THEN 0 ELSE 1 END,
+                affinity_score DESC,
+                (rating_score * 4 + comment_count * 6) DESC,
+                tp.published_at DESC
        LIMIT 1`,
     )
       .bind(input.userId)
@@ -3584,7 +4024,8 @@ const handlers: { [K in WorkerOperation]: Handler<K> } = {
   'posts.get': async (env, input) => {
     const post = await env.DB.prepare(
       `SELECT tp.id, tp.author_user_id, tp.source_chat_id, tp.source_message_id,
-              tp.content_type, tp.text_preview, tp.status, p.display_name, p.age_group
+              tp.content_type, tp.title, tp.body_markdown, tp.text_preview, tp.status,
+              p.display_name, p.age_group
        FROM telegram_posts tp
        JOIN profiles p ON p.user_id = tp.author_user_id
        WHERE tp.id = ?1
@@ -3627,6 +4068,29 @@ const handlers: { [K in WorkerOperation]: Handler<K> } = {
     if (!post) throw new ApiError(404, 'POST_MEDIA_NOT_FOUND', 'Post media not found');
     return post;
   },
+  'posts.media.resolveItem': async (env, input) => {
+    const media = await env.DB.prepare(
+      `SELECT tpm.telegram_file_id, tpm.media_type AS content_type
+       FROM telegram_post_media tpm
+       JOIN telegram_posts tp ON tp.id = tpm.post_id
+       WHERE tpm.id = ?1 AND tpm.post_id = ?2
+         AND (
+           tp.author_user_id = ?3
+           OR (
+             tp.status = 'active'
+             AND NOT EXISTS (
+               SELECT 1 FROM blocks b
+               WHERE (b.blocker_user_id = ?3 AND b.blocked_user_id = tp.author_user_id)
+                  OR (b.blocker_user_id = tp.author_user_id AND b.blocked_user_id = ?3)
+             )
+           )
+         )`,
+    )
+      .bind(input.mediaId, input.postId, input.userId)
+      .first();
+    if (!media) throw new ApiError(404, 'POST_MEDIA_NOT_FOUND', 'Post media not found');
+    return media;
+  },
   'posts.own.list': async (env, input) => {
     return (
       await env.DB.prepare(
@@ -3635,6 +4099,23 @@ const handlers: { [K in WorkerOperation]: Handler<K> } = {
                 tp.status, tp.published_at, tp.created_at,
                 tp.media_telegram_file_id, tp.media_thumbnail_file_id,
                 tp.track_title, tp.track_performer,
+                tp.tags, tp.fandoms, tp.hashtags, tp.reach_status,
+                COALESCE((
+                  SELECT json_group_array(json_object(
+                    'id', media.id, 'media_type', media.media_type,
+                    'track_title', media.track_title,
+                    'track_performer', media.track_performer,
+                    'has_thumbnail', media.has_thumbnail
+                  ))
+                  FROM (
+                    SELECT tpm.id, tpm.media_type, tpm.track_title, tpm.track_performer,
+                           CASE WHEN tpm.thumbnail_telegram_file_id IS NULL THEN 0 ELSE 1 END
+                             AS has_thumbnail
+                    FROM telegram_post_media tpm
+                    WHERE tpm.post_id = tp.id
+                    ORDER BY tpm.sort_order, tpm.created_at
+                  ) media
+                ), '[]') AS media_items,
                 up.display_name, up.avatar_media_id, up.avatar_render_mode,
                 COALESCE(SUM(CASE WHEN pr.value = 1 THEN 1 ELSE 0 END), 0) AS likes,
                 COALESCE(SUM(CASE WHEN pr.value = -1 THEN 1 ELSE 0 END), 0) AS dislikes,
@@ -3642,7 +4123,25 @@ const handlers: { [K in WorkerOperation]: Handler<K> } = {
                 (SELECT COUNT(*) FROM post_comments pc
                  WHERE pc.post_id = tp.id AND pc.status = 'active') AS comment_count,
                 (SELECT own.value FROM post_ratings own
-                 WHERE own.post_id = tp.id AND own.user_id = ?1) AS own_rating
+                 WHERE own.post_id = tp.id AND own.user_id = ?1) AS own_rating,
+                (
+                  (SELECT COUNT(DISTINCT candidate.value) FROM json_each(tp.tags) candidate
+                   WHERE candidate.value IN (
+                     SELECT preference.value
+                     FROM questionnaires questionnaire,
+                          json_each(questionnaire.tags) preference
+                     WHERE questionnaire.user_id = ?1
+                       AND questionnaire.is_active = 1
+                   )) * 8
+                  + (SELECT COUNT(DISTINCT candidate.value) FROM json_each(tp.fandoms) candidate
+                     WHERE candidate.value IN (
+                       SELECT preference.value
+                       FROM questionnaires questionnaire,
+                            json_each(questionnaire.fandoms) preference
+                       WHERE questionnaire.user_id = ?1
+                         AND questionnaire.is_active = 1
+                     )) * 12
+                ) AS affinity_score
          FROM telegram_posts tp
          JOIN user_profiles up ON up.user_id = tp.author_user_id
          LEFT JOIN post_ratings pr ON pr.post_id = tp.id
@@ -3661,6 +4160,96 @@ const handlers: { [K in WorkerOperation]: Handler<K> } = {
                 tp.content_type, tp.title, tp.body_markdown, tp.text_preview, tp.published_at,
                 tp.media_telegram_file_id, tp.media_thumbnail_file_id,
                 tp.track_title, tp.track_performer,
+                tp.tags, tp.fandoms, tp.hashtags, tp.reach_status,
+                COALESCE((
+                  SELECT json_group_array(json_object(
+                    'id', media.id, 'media_type', media.media_type,
+                    'track_title', media.track_title,
+                    'track_performer', media.track_performer,
+                    'has_thumbnail', media.has_thumbnail
+                  ))
+                  FROM (
+                    SELECT tpm.id, tpm.media_type, tpm.track_title, tpm.track_performer,
+                           CASE WHEN tpm.thumbnail_telegram_file_id IS NULL THEN 0 ELSE 1 END
+                             AS has_thumbnail
+                    FROM telegram_post_media tpm
+                    WHERE tpm.post_id = tp.id
+                    ORDER BY tpm.sort_order, tpm.created_at
+                  ) media
+                ), '[]') AS media_items,
+                up.display_name, up.avatar_media_id, up.avatar_render_mode,
+                COALESCE(SUM(CASE WHEN pr.value = 1 THEN 1 ELSE 0 END), 0) AS likes,
+                COALESCE(SUM(CASE WHEN pr.value = -1 THEN 1 ELSE 0 END), 0) AS dislikes,
+                COALESCE(SUM(pr.value), 0) AS rating_score,
+                (SELECT COUNT(*) FROM post_comments pc
+                 WHERE pc.post_id = tp.id AND pc.status = 'active') AS comment_count,
+                (SELECT own.value FROM post_ratings own
+                 WHERE own.post_id = tp.id AND own.user_id = ?1) AS own_rating,
+                (
+                  (SELECT COUNT(DISTINCT candidate.value) FROM json_each(tp.tags) candidate
+                   WHERE candidate.value IN (
+                     SELECT preference.value
+                     FROM questionnaires questionnaire,
+                          json_each(questionnaire.tags) preference
+                     WHERE questionnaire.user_id = ?1
+                       AND questionnaire.is_active = 1
+                   )) * 8
+                  + (SELECT COUNT(DISTINCT candidate.value) FROM json_each(tp.fandoms) candidate
+                     WHERE candidate.value IN (
+                       SELECT preference.value
+                       FROM questionnaires questionnaire,
+                            json_each(questionnaire.fandoms) preference
+                       WHERE questionnaire.user_id = ?1
+                         AND questionnaire.is_active = 1
+                     )) * 12
+                ) AS affinity_score
+         FROM telegram_posts tp
+         JOIN user_profiles up ON up.user_id = tp.author_user_id
+         JOIN users u ON u.id = tp.author_user_id
+         LEFT JOIN post_ratings pr ON pr.post_id = tp.id
+         WHERE tp.status = 'active' AND up.moderation_status = 'active'
+           AND (tp.reach_status <> 'shadow_banned' OR tp.author_user_id = ?1)
+           AND u.is_banned = 0 AND u.deleted_at IS NULL
+           AND NOT EXISTS (
+             SELECT 1 FROM blocks b
+             WHERE (b.blocker_user_id = ?1 AND b.blocked_user_id = tp.author_user_id)
+                OR (b.blocker_user_id = tp.author_user_id AND b.blocked_user_id = ?1)
+           )
+         GROUP BY tp.id
+         ORDER BY CASE tp.reach_status WHEN 'normal' THEN 0 WHEN 'limited' THEN 1 ELSE 2 END,
+                  affinity_score DESC,
+                  (rating_score * 4 + comment_count * 6) DESC,
+                  tp.published_at DESC
+         LIMIT ?2`,
+      )
+        .bind(input.userId, input.limit)
+        .all()
+    ).results;
+  },
+  'posts.author.list': async (env, input) => {
+    return (
+      await env.DB.prepare(
+        `SELECT tp.id, tp.author_user_id, tp.source_chat_id, tp.source_message_id,
+                tp.content_type, tp.title, tp.body_markdown, tp.text_preview, tp.published_at,
+                tp.media_telegram_file_id, tp.media_thumbnail_file_id,
+                tp.track_title, tp.track_performer,
+                tp.tags, tp.fandoms, tp.hashtags, tp.reach_status,
+                COALESCE((
+                  SELECT json_group_array(json_object(
+                    'id', media.id, 'media_type', media.media_type,
+                    'track_title', media.track_title,
+                    'track_performer', media.track_performer,
+                    'has_thumbnail', media.has_thumbnail
+                  ))
+                  FROM (
+                    SELECT tpm.id, tpm.media_type, tpm.track_title, tpm.track_performer,
+                           CASE WHEN tpm.thumbnail_telegram_file_id IS NULL THEN 0 ELSE 1 END
+                             AS has_thumbnail
+                    FROM telegram_post_media tpm
+                    WHERE tpm.post_id = tp.id
+                    ORDER BY tpm.sort_order, tpm.created_at
+                  ) media
+                ), '[]') AS media_items,
                 up.display_name, up.avatar_media_id, up.avatar_render_mode,
                 COALESCE(SUM(CASE WHEN pr.value = 1 THEN 1 ELSE 0 END), 0) AS likes,
                 COALESCE(SUM(CASE WHEN pr.value = -1 THEN 1 ELSE 0 END), 0) AS dislikes,
@@ -3673,7 +4262,9 @@ const handlers: { [K in WorkerOperation]: Handler<K> } = {
          JOIN user_profiles up ON up.user_id = tp.author_user_id
          JOIN users u ON u.id = tp.author_user_id
          LEFT JOIN post_ratings pr ON pr.post_id = tp.id
-         WHERE tp.status = 'active' AND up.moderation_status = 'active'
+         WHERE tp.author_user_id = ?2 AND tp.status = 'active'
+           AND (tp.reach_status <> 'shadow_banned' OR tp.author_user_id = ?1)
+           AND up.moderation_status = 'active'
            AND u.is_banned = 0 AND u.deleted_at IS NULL
            AND NOT EXISTS (
              SELECT 1 FROM blocks b
@@ -3681,10 +4272,9 @@ const handlers: { [K in WorkerOperation]: Handler<K> } = {
                 OR (b.blocker_user_id = tp.author_user_id AND b.blocked_user_id = ?1)
            )
          GROUP BY tp.id
-         ORDER BY rating_score DESC, tp.published_at DESC
-         LIMIT ?2`,
+         ORDER BY tp.published_at DESC LIMIT ?3`,
       )
-        .bind(input.userId, input.limit)
+        .bind(input.userId, input.authorUserId, input.limit)
         .all()
     ).results;
   },
@@ -3696,6 +4286,23 @@ const handlers: { [K in WorkerOperation]: Handler<K> } = {
                 tp.content_type, tp.title, tp.body_markdown, tp.text_preview, tp.published_at,
                 tp.media_telegram_file_id, tp.media_thumbnail_file_id,
                 tp.track_title, tp.track_performer,
+                tp.tags, tp.fandoms, tp.hashtags, tp.reach_status,
+                COALESCE((
+                  SELECT json_group_array(json_object(
+                    'id', media.id, 'media_type', media.media_type,
+                    'track_title', media.track_title,
+                    'track_performer', media.track_performer,
+                    'has_thumbnail', media.has_thumbnail
+                  ))
+                  FROM (
+                    SELECT tpm.id, tpm.media_type, tpm.track_title, tpm.track_performer,
+                           CASE WHEN tpm.thumbnail_telegram_file_id IS NULL THEN 0 ELSE 1 END
+                             AS has_thumbnail
+                    FROM telegram_post_media tpm
+                    WHERE tpm.post_id = tp.id
+                    ORDER BY tpm.sort_order, tpm.created_at
+                  ) media
+                ), '[]') AS media_items,
                 up.display_name, up.avatar_media_id, up.avatar_render_mode,
                 COALESCE(SUM(CASE WHEN pr.value = 1 THEN 1 ELSE 0 END), 0) AS likes,
                 COALESCE(SUM(CASE WHEN pr.value = -1 THEN 1 ELSE 0 END), 0) AS dislikes,
@@ -3709,6 +4316,7 @@ const handlers: { [K in WorkerOperation]: Handler<K> } = {
          JOIN users u ON u.id = tp.author_user_id
          LEFT JOIN post_ratings pr ON pr.post_id = tp.id
          WHERE tp.status = 'active' AND up.moderation_status = 'active'
+           AND (tp.reach_status <> 'shadow_banned' OR tp.author_user_id = ?1)
            AND u.is_banned = 0 AND u.deleted_at IS NULL
            AND NOT EXISTS (
              SELECT 1 FROM blocks b
@@ -3742,10 +4350,26 @@ const handlers: { [K in WorkerOperation]: Handler<K> } = {
     if (!visible) throw new ApiError(404, 'POST_NOT_FOUND', 'Post not found');
     return (
       await env.DB.prepare(
-        `SELECT pc.id, pc.post_id, pc.author_user_id, pc.body, pc.created_at,
-                up.display_name, up.avatar_media_id, up.avatar_render_mode
+        `SELECT pc.id, pc.post_id, pc.author_user_id, pc.parent_comment_id,
+                pc.body, pc.created_at,
+                up.display_name, up.avatar_media_id, up.avatar_render_mode,
+                CASE
+                  WHEN u.role = 'admin' AND u.telegram_user_id = 1040929628 THEN 'owner'
+                  WHEN EXISTS (
+                    SELECT 1 FROM moderator_assignments ma
+                    WHERE ma.user_id = pc.author_user_id AND ma.is_active = 1
+                  ) THEN 'moderator'
+                  ELSE NULL
+                END AS verification_kind,
+                (SELECT COUNT(*) FROM post_comment_ratings pcr
+                 WHERE pcr.comment_id = pc.id AND pcr.value = 1) AS likes,
+                (SELECT COUNT(*) FROM post_comment_ratings pcr
+                 WHERE pcr.comment_id = pc.id AND pcr.value = -1) AS dislikes,
+                (SELECT own.value FROM post_comment_ratings own
+                 WHERE own.comment_id = pc.id AND own.user_id = ?2) AS own_rating
          FROM post_comments pc
          JOIN user_profiles up ON up.user_id = pc.author_user_id
+         JOIN users u ON u.id = pc.author_user_id
          WHERE pc.post_id = ?1 AND pc.status = 'active'
            AND up.moderation_status = 'active'
            AND NOT EXISTS (
@@ -3753,7 +4377,11 @@ const handlers: { [K in WorkerOperation]: Handler<K> } = {
              WHERE (b.blocker_user_id = ?2 AND b.blocked_user_id = pc.author_user_id)
                 OR (b.blocker_user_id = pc.author_user_id AND b.blocked_user_id = ?2)
            )
-         ORDER BY pc.created_at ASC LIMIT ?3`,
+         ORDER BY COALESCE((
+                    SELECT root.created_at FROM post_comments root
+                    WHERE root.id = pc.parent_comment_id
+                  ), pc.created_at) ASC,
+                  pc.parent_comment_id IS NOT NULL ASC, pc.created_at ASC LIMIT ?3`,
       )
         .bind(input.postId, input.userId, input.limit)
         .all()
@@ -3770,19 +4398,58 @@ const handlers: { [K in WorkerOperation]: Handler<K> } = {
          )`,
     )
       .bind(input.postId, input.userId)
-      .first();
+      .first<{ author_user_id: string }>();
     if (!post) throw new ApiError(404, 'POST_NOT_FOUND', 'Post not found');
     const premium = Boolean(await premiumEnd(env, input.userId));
     const policy = checkContentLinkPolicy(input.body, premium);
     if (!policy.allowed) throw new ApiError(403, 'LINK_POLICY_VIOLATION', policy.reason);
+    const parent = input.parentCommentId
+      ? await env.DB.prepare(
+          `SELECT author_user_id, COALESCE(parent_comment_id, id) AS root_id
+           FROM post_comments
+           WHERE id = ?1 AND post_id = ?2 AND status = 'active'`,
+        )
+          .bind(input.parentCommentId, input.postId)
+          .first<{ author_user_id: string; root_id: string }>()
+      : null;
+    if (input.parentCommentId && !parent) {
+      throw new ApiError(404, 'PARENT_COMMENT_NOT_FOUND', 'Parent comment not found');
+    }
     const id = crypto.randomUUID();
     await env.DB.prepare(
-      `INSERT INTO post_comments (id, post_id, author_user_id, body)
-       VALUES (?1, ?2, ?3, ?4)`,
+      `INSERT INTO post_comments (id, post_id, author_user_id, body, parent_comment_id)
+       VALUES (?1, ?2, ?3, ?4, ?5)`,
     )
-      .bind(id, input.postId, input.userId, input.body)
+      .bind(id, input.postId, input.userId, input.body, parent?.root_id ?? null)
       .run();
-    return { id, created: true };
+    return {
+      id,
+      created: true,
+      authorUserId: post.author_user_id,
+      replyTargetUserId: parent?.author_user_id ?? null,
+    };
+  },
+  'posts.comments.rate': async (env, input) => {
+    const comment = await env.DB.prepare(
+      `SELECT pc.author_user_id
+       FROM post_comments pc
+       JOIN telegram_posts tp ON tp.id = pc.post_id
+       WHERE pc.id = ?1 AND pc.status = 'active' AND tp.status = 'active'`,
+    )
+      .bind(input.commentId)
+      .first<{ author_user_id: string }>();
+    if (!comment) throw new ApiError(404, 'COMMENT_NOT_FOUND', 'Comment not found');
+    if (comment.author_user_id === input.userId)
+      throw new ApiError(400, 'SELF_RATING', 'Self rating is not allowed');
+    await env.DB.prepare(
+      `INSERT INTO post_comment_ratings (comment_id, user_id, value)
+       VALUES (?1, ?2, ?3)
+       ON CONFLICT(comment_id, user_id) DO UPDATE SET
+         value = excluded.value, updated_at = CURRENT_TIMESTAMP`,
+    )
+      .bind(input.commentId, input.userId, input.value)
+      .run();
+    return { saved: true };
   },
   'posts.rate': async (env, input) => {
     const post = await env.DB.prepare(
@@ -3961,12 +4628,61 @@ const handlers: { [K in WorkerOperation]: Handler<K> } = {
     return { blocked: true };
   },
   'reports.create': async (env, input) => {
+    const targetIds = [
+      input.conversationId,
+      input.postId,
+      input.questionnaireId,
+      input.commentId,
+    ].filter(Boolean);
+    if (targetIds.length > 1) {
+      throw new ApiError(400, 'REPORT_TARGET_INVALID', 'Only one report target is allowed');
+    }
+    let reportedUserId = input.reportedUserId;
+    if (input.questionnaireId) {
+      const target = await env.DB.prepare('SELECT user_id FROM questionnaires WHERE id = ?1')
+        .bind(input.questionnaireId)
+        .first<{ user_id: string }>();
+      if (!target) throw new ApiError(404, 'QUESTIONNAIRE_NOT_FOUND', 'Questionnaire not found');
+      reportedUserId = target.user_id;
+    } else if (input.commentId) {
+      const target = await env.DB.prepare(
+        `SELECT author_user_id FROM post_comments WHERE id = ?1 AND status = 'active'`,
+      )
+        .bind(input.commentId)
+        .first<{ author_user_id: string }>();
+      if (!target) throw new ApiError(404, 'COMMENT_NOT_FOUND', 'Comment not found');
+      reportedUserId = target.author_user_id;
+    } else if (input.postId) {
+      const target = await env.DB.prepare('SELECT author_user_id FROM telegram_posts WHERE id = ?1')
+        .bind(input.postId)
+        .first<{ author_user_id: string }>();
+      if (!target) throw new ApiError(404, 'POST_NOT_FOUND', 'Post not found');
+      reportedUserId = target.author_user_id;
+    } else if (input.conversationId) {
+      const target = await env.DB.prepare(
+        `SELECT other.user_id
+         FROM conversation_participants self
+         JOIN conversation_participants other
+           ON other.conversation_id = self.conversation_id AND other.user_id <> self.user_id
+         WHERE self.conversation_id = ?1 AND self.user_id = ?2`,
+      )
+        .bind(input.conversationId, input.reporterUserId)
+        .first<{ user_id: string }>();
+      if (!target) throw new ApiError(404, 'CONVERSATION_NOT_FOUND', 'Conversation not found');
+      reportedUserId = target.user_id;
+    }
+    if (reportedUserId !== input.reportedUserId) {
+      throw new ApiError(400, 'REPORT_TARGET_MISMATCH', 'Reported user does not own target');
+    }
+    if (reportedUserId === input.reporterUserId) {
+      throw new ApiError(400, 'SELF_REPORT', 'Self report is not allowed');
+    }
     const id = crypto.randomUUID();
     await env.DB.prepare(
       `INSERT INTO reports (
         id, reporter_user_id, reported_user_id, conversation_id, post_id,
-        category, description, evidence_snapshot
-      ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)`,
+        questionnaire_id, comment_id, category, description, evidence_snapshot
+      ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)`,
     )
       .bind(
         id,
@@ -3974,6 +4690,8 @@ const handlers: { [K in WorkerOperation]: Handler<K> } = {
         input.reportedUserId,
         input.conversationId ?? null,
         input.postId ?? null,
+        input.questionnaireId ?? null,
+        input.commentId ?? null,
         input.category,
         input.description,
         json(input.evidenceSnapshot),
@@ -5171,6 +5889,7 @@ const handlers: { [K in WorkerOperation]: Handler<K> } = {
     return (
       await env.DB.prepare(
         `SELECT tp.id, tp.author_user_id, tp.content_type, tp.text_preview, tp.status,
+                tp.reach_status,
                 tp.published_at, tp.created_at, up.display_name,
                 u.telegram_user_id, u.telegram_username
          FROM telegram_posts tp
@@ -5204,18 +5923,24 @@ const handlers: { [K in WorkerOperation]: Handler<K> } = {
   'admin.post.moderate': async (env, input, requestId) => {
     await assertModerationAccess(env, input.adminUserId);
     const post = await env.DB.prepare(
-      `SELECT author_user_id, status FROM telegram_posts WHERE id = ?1`,
+      `SELECT author_user_id, status, reach_status FROM telegram_posts WHERE id = ?1`,
     )
       .bind(input.postId)
-      .first<{ author_user_id: string; status: string }>();
+      .first<{ author_user_id: string; status: string; reach_status: string }>();
     if (!post) throw new ApiError(404, 'POST_NOT_FOUND', 'Post not found');
     await assertMayModerateTarget(env, input.adminUserId, post.author_user_id);
     await env.DB.batch([
       env.DB.prepare(
-        `UPDATE telegram_posts SET status = ?2, moderation_reason = ?3,
+        `UPDATE telegram_posts
+         SET status = ?2, reach_status = ?3, moderation_reason = ?4,
            updated_at = CURRENT_TIMESTAMP
          WHERE id = ?1`,
-      ).bind(input.postId, input.status, input.reason),
+      ).bind(
+        input.postId,
+        input.status === 'blocked' ? 'blocked' : 'active',
+        input.status === 'limited' || input.status === 'shadow_banned' ? input.status : 'normal',
+        input.reason,
+      ),
       env.DB.prepare(
         `INSERT INTO admin_audit_logs (
            id, admin_user_id, target_user_id, action, reason,
@@ -5226,8 +5951,14 @@ const handlers: { [K in WorkerOperation]: Handler<K> } = {
         input.adminUserId,
         post.author_user_id,
         input.reason,
-        json({ status: post.status }),
-        json({ status: input.status }),
+        json({ status: post.status, reachStatus: post.reach_status }),
+        json({
+          status: input.status === 'blocked' ? 'blocked' : 'active',
+          reachStatus:
+            input.status === 'limited' || input.status === 'shadow_banned'
+              ? input.status
+              : 'normal',
+        }),
         requestId,
       ),
     ]);
@@ -5271,11 +6002,73 @@ const handlers: { [K in WorkerOperation]: Handler<K> } = {
       await env.DB.prepare(
         `SELECT r.*, reporter.telegram_user_id AS reporter_telegram_id,
                 reported.telegram_user_id AS reported_telegram_id,
-                p.display_name AS reported_display_name
+                up.display_name AS reported_display_name,
+                CASE
+                  WHEN r.comment_id IS NOT NULL THEN 'comment'
+                  WHEN r.post_id IS NOT NULL THEN 'post'
+                  WHEN r.questionnaire_id IS NOT NULL THEN 'questionnaire'
+                  WHEN r.conversation_id IS NOT NULL THEN 'conversation'
+                  ELSE 'user'
+                END AS target_type,
+                COALESCE(pc.body, tp.title, q.title, up.display_name) AS target_title,
+                CASE
+                  WHEN q.id IS NOT NULL THEN printf(
+                    '%s\n\n%s\n\nО себе: %s\nФандомы: %s\nЖанры: %s\nТеги: %s\nГраницы: %s',
+                    q.title, q.short_headline, q.about, q.fandoms, q.genres, q.tags, q.boundaries
+                  )
+                  ELSE COALESCE(tp.body_markdown, pc.body, '')
+                END AS target_body,
+                CASE
+                  WHEN r.post_id IS NOT NULL OR r.comment_id IS NOT NULL THEN COALESCE((
+                    SELECT json_group_array(json_object(
+                      'id', branch.id,
+                      'parent_comment_id', branch.parent_comment_id,
+                      'body', branch.body,
+                      'display_name', branch.display_name,
+                      'verification_kind', branch.verification_kind,
+                      'created_at', branch.created_at
+                    ))
+                    FROM (
+                      SELECT thread.id, thread.parent_comment_id, thread.body,
+                             thread.created_at, author.display_name,
+                             CASE
+                               WHEN thread_user.telegram_user_id = 1040929628 THEN 'owner'
+                               WHEN EXISTS (
+                                 SELECT 1 FROM moderator_assignments ma
+                                 WHERE ma.user_id = thread.author_user_id AND ma.is_active = 1
+                               ) THEN 'moderator'
+                               ELSE NULL
+                             END AS verification_kind
+                      FROM post_comments thread
+                      JOIN user_profiles author ON author.user_id = thread.author_user_id
+                      JOIN users thread_user ON thread_user.id = thread.author_user_id
+                      WHERE thread.post_id = COALESCE(r.post_id, pc.post_id)
+                        AND thread.status = 'active'
+                      ORDER BY thread.created_at
+                    ) branch
+                  ), '[]')
+                  WHEN r.conversation_id IS NOT NULL THEN COALESCE((
+                    SELECT json_group_array(json_object(
+                      'message_type', event.message_type,
+                      'created_at', event.created_at,
+                      'moderation_status', event.moderation_status
+                    ))
+                    FROM (
+                      SELECT message_type, created_at, moderation_status
+                      FROM relay_messages
+                      WHERE conversation_id = r.conversation_id
+                      ORDER BY created_at DESC LIMIT 20
+                    ) event
+                  ), '[]')
+                  ELSE '[]'
+                END AS context_items
          FROM reports r
          JOIN users reporter ON reporter.id = r.reporter_user_id
          JOIN users reported ON reported.id = r.reported_user_id
-         LEFT JOIN profiles p ON p.user_id = reported.id
+         LEFT JOIN user_profiles up ON up.user_id = reported.id
+         LEFT JOIN questionnaires q ON q.id = r.questionnaire_id
+         LEFT JOIN post_comments pc ON pc.id = r.comment_id
+         LEFT JOIN telegram_posts tp ON tp.id = COALESCE(r.post_id, pc.post_id)
          WHERE (?2 = 'all' OR r.status = ?2)
            AND (
              EXISTS (

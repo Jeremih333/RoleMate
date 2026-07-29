@@ -154,6 +154,50 @@ export function createBot(
     maintenanceText: string;
     expiresAt: number;
   } | null = null;
+  const extractMentions = (text: string): string[] =>
+    [
+      ...new Set(
+        [...text.matchAll(/(^|[^\p{L}\p{N}_])@([a-z][a-z0-9_]{3,31})/giu)].map((match) =>
+          match[2]!.toLowerCase(),
+        ),
+      ),
+    ].slice(0, 20);
+  const notifyPostMentions = async (
+    actorUserId: string,
+    postId: string,
+    text: string,
+  ): Promise<void> => {
+    const usernames = extractMentions(text);
+    if (!usernames.length) return;
+    const message = ru.bot.mentionNotification(ru.bot.mentionPlaces.post);
+    const openPath = `/posts?post=${encodeURIComponent(postId)}`;
+    const deliveries = await dataApi.execute<
+      Array<{ telegram_user_id: number | null; open_path: string }>
+    >('notifications.mentions.create', {
+      actorUserId,
+      usernames,
+      context: 'post',
+      entityId: postId,
+      openPath,
+      sourceKey: `post:${postId}:${await sha256(text)}`,
+      message,
+    });
+    await Promise.all(
+      deliveries.flatMap((delivery) =>
+        delivery.telegram_user_id
+          ? [
+              bot.api.sendMessage(delivery.telegram_user_id, message, {
+                protect_content: true,
+                reply_markup: new InlineKeyboard().webApp(
+                  ru.bot.openNotification,
+                  `${env.MINI_APP_URL}${delivery.open_path}`,
+                ),
+              }),
+            ]
+          : [],
+      ),
+    );
+  };
 
   function styledEntities(text: string) {
     const entities: Array<{
@@ -255,6 +299,7 @@ export function createBot(
     return dataApi.execute<{
       conversation_id: string;
       sender_user_id: string;
+      recipient_user_id: string;
       destination_chat_id: number;
       recipient_muted: number;
       notify_message: number;
@@ -941,10 +986,21 @@ export function createBot(
   });
   bot.callbackQuery(/^postpublish:([0-9a-f-]{36})$/, async (context) => {
     const user = await upsertUser(context, dataApi);
+    const postId = context.match?.[1] ?? '';
     await dataApi.execute('posts.draft.publish', {
       userId: user.userId,
-      postId: context.match?.[1] ?? '',
+      postId,
     });
+    const post = await dataApi.execute<{
+      title?: string;
+      body_markdown?: string;
+      text_preview: string;
+    }>('posts.get', { userId: user.userId, postId });
+    await notifyPostMentions(
+      user.userId,
+      postId,
+      [post.title ?? '', post.body_markdown ?? '', post.text_preview].join('\n'),
+    );
     await context.answerCallbackQuery(ru.bot.postPublished);
     await context.editMessageReplyMarkup();
     await context.reply(ru.bot.postPublished);
@@ -1401,6 +1457,47 @@ export function createBot(
         delivered.message_id,
         'text',
       );
+      await dataApi.execute('notifications.activity.create', {
+        actorUserId: target.sender_user_id,
+        targetUserId: target.recipient_user_id,
+        kind: 'message',
+        context: 'chat',
+        entityId: target.conversation_id,
+        openPath: `/chats?conversation=${encodeURIComponent(target.conversation_id)}`,
+        sourceKey: `chat:${target.conversation_id}:${delivered.message_id}`,
+        message: ru.bot.newMessageNotification,
+      });
+      const usernames = extractMentions(text);
+      if (usernames.length) {
+        const message = ru.bot.mentionNotification(ru.bot.mentionPlaces.chat);
+        const openPath = `/chats?conversation=${encodeURIComponent(target.conversation_id)}`;
+        const deliveries = await dataApi.execute<
+          Array<{ telegram_user_id: number | null; open_path: string }>
+        >('notifications.mentions.create', {
+          actorUserId: target.sender_user_id,
+          usernames,
+          context: 'chat',
+          entityId: target.conversation_id,
+          openPath,
+          sourceKey: `chat:${target.conversation_id}:${delivered.message_id}`,
+          message,
+        });
+        await Promise.all(
+          deliveries.flatMap((delivery) =>
+            delivery.telegram_user_id
+              ? [
+                  bot.api.sendMessage(delivery.telegram_user_id, message, {
+                    protect_content: true,
+                    reply_markup: new InlineKeyboard().webApp(
+                      ru.bot.openNotification,
+                      `${env.MINI_APP_URL}${delivery.open_path}`,
+                    ),
+                  }),
+                ]
+              : [],
+          ),
+        );
+      }
     } catch (error) {
       if (error instanceof DataApiError && error.code === 'ACTIVE_CHAT_NOT_FOUND') {
         await context.reply(ru.bot.chooseChatFirst);
@@ -1594,10 +1691,19 @@ export function createBot(
           return;
         }
       }
+      const mediaGroupId =
+        'media_group_id' in context.message ? context.message.media_group_id : undefined;
       const draft = await dataApi.execute<{ id: string } | null>('posts.draft.get', {
         userId: user.userId,
       });
       if (draft) {
+        if (mediaGroupId && !(await premiumActive(user.userId))) {
+          const cancelled = await dataApi.execute<{ cancelled: boolean }>('posts.draft.cancel', {
+            userId: user.userId,
+          });
+          if (cancelled.cancelled) await context.reply(ru.bot.postSingleMediaOnly);
+          return;
+        }
         if (messageType === 'sticker') {
           await context.reply(ru.bot.postUnsupportedMedia);
           return;
@@ -1629,6 +1735,7 @@ export function createBot(
           ...(mediaThumbnailFileId ? { mediaThumbnailFileId } : {}),
           ...(trackTitle ? { trackTitle } : {}),
           ...(trackPerformer ? { trackPerformer } : {}),
+          ...(mediaGroupId ? { mediaGroupId } : {}),
         });
         await context.reply(ru.bot.postDraftReady, {
           reply_markup: new InlineKeyboard()
@@ -1637,6 +1744,7 @@ export function createBot(
         });
         return;
       }
+      if (mediaGroupId && !(await premiumActive(user.userId))) return;
       const postEdit = await dataApi.execute<{ post_id: string } | null>('posts.mediaEdit.get', {
         userId: user.userId,
       });

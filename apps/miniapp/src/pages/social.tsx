@@ -1,9 +1,13 @@
 import { useEffect, useRef, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
+  ChevronLeft,
+  ChevronRight,
   FileText,
+  Flag,
   Heart,
   ImagePlus,
+  Maximize2,
   MessageCircle,
   Pencil,
   Plus,
@@ -11,15 +15,18 @@ import {
   Settings2,
   ThumbsDown,
   Trash2,
+  X,
 } from 'lucide-react';
 import { ru } from '@rolemate/shared';
 import { api, type SocialPost } from '../api.js';
 import { ProfileAvatar } from '../components/profile-avatar.js';
+import { CompactAudio } from '../components/compact-audio.js';
 import { ProfileMarkdown } from '../components/markdown.js';
 import { VerificationBadge } from '../components/verification-badge.js';
 import { Button, Card, EmptyState, SectionTitle, Skeleton } from '../components/ui.js';
 import { getTelegram } from '../telegram.js';
-import { useRoute } from 'wouter';
+import { ProfileCard } from './search.js';
+import { useLocation, useRoute } from 'wouter';
 
 export function PublicProfilePage() {
   const queryClient = useQueryClient();
@@ -148,7 +155,7 @@ export function PublicProfilePage() {
         </p>
         {featuredAudio.length ? (
           <div className="profile-audio-list">
-            {featuredAudio.map((track) => (
+            {featuredAudio.map((track, index) => (
               <div className="profile-track" key={track.id}>
                 <div className="profile-track-cover">
                   {track.has_thumbnail ? (
@@ -160,7 +167,10 @@ export function PublicProfilePage() {
                 <div className="profile-track-content">
                   <strong>{track.track_title || ru.miniApp.search.trackUnknown}</strong>
                   <span>{track.track_performer || ru.miniApp.search.performerUnknown}</span>
-                  <audio src={`/api/profile-media/${track.id}`} controls preload="metadata" />
+                  <CompactAudio
+                    src={`/api/profile-media/${track.id}`}
+                    label={ru.miniApp.search.profileAudio(index + 1)}
+                  />
                 </div>
               </div>
             ))}
@@ -305,6 +315,7 @@ export function PublicProfilePage() {
           </div>
         ) : null}
       </Card>
+      <QuestionnairesPage />
       <SectionTitle
         eyebrow={ru.miniApp.social.ownPostsEyebrow}
         action={
@@ -343,6 +354,17 @@ function parseStringArray(value: string): string[] {
   }
 }
 
+function parseCommaList(value: string): string[] {
+  return [
+    ...new Set(
+      value
+        .split(',')
+        .map((item) => item.trim())
+        .filter(Boolean),
+    ),
+  ];
+}
+
 function parseFeaturedAudio(value: string): Array<{
   id: string;
   track_title: string | null;
@@ -371,6 +393,8 @@ function parseFeaturedAudio(value: string): Array<{
 }
 
 export function PublicProfileViewerPage() {
+  const queryClient = useQueryClient();
+  const [, navigate] = useLocation();
   const [idMatch, idParams] = useRoute('/profiles/:userId');
   const [, usernameParams] = useRoute('/u/:username');
   const userId = idMatch ? idParams?.userId : undefined;
@@ -380,6 +404,28 @@ export function PublicProfileViewerPage() {
     queryFn: () =>
       userId ? api.publicProfileByUserId(userId) : api.publicProfileByUsername(username ?? ''),
     enabled: Boolean(userId || username),
+  });
+  const resolvedUserId = profile.data?.id;
+  const questionnaires = useQuery({
+    queryKey: ['public-profile-questionnaires', resolvedUserId],
+    queryFn: () => api.publicQuestionnaires(resolvedUserId ?? ''),
+    enabled: Boolean(resolvedUserId),
+  });
+  const posts = useQuery({
+    queryKey: ['public-profile-posts', resolvedUserId],
+    queryFn: () => api.publicPosts(resolvedUserId ?? ''),
+    enabled: Boolean(resolvedUserId),
+  });
+  const directChat = useMutation({
+    mutationFn: () => api.startDirectConversation(resolvedUserId ?? ''),
+    onSuccess: () => navigate('/chats'),
+  });
+  const rate = useMutation({
+    mutationFn: (value: -1 | 1) => api.ratePublicProfile(resolvedUserId ?? '', value),
+    onSuccess: () =>
+      void queryClient.invalidateQueries({
+        queryKey: ['public-profile-view', userId ?? username],
+      }),
   });
   if (profile.isLoading) return <Skeleton className="h-80" />;
   if (profile.isError) return <div className="error-box">{profile.error.message}</div>;
@@ -418,7 +464,65 @@ export function PublicProfileViewerPage() {
         <p className="mt-3 break-words text-xs text-muted">
           {ru.miniApp.social.internalId}: {profile.data.id}
         </p>
+        <div className="mt-5 flex flex-wrap gap-2">
+          <Button loading={directChat.isPending} onClick={() => directChat.mutate()}>
+            <MessageCircle className="h-4 w-4" /> {ru.miniApp.social.writeToProfile}
+          </Button>
+          <Button
+            variant={profile.data.own_rating === 1 ? 'primary' : 'secondary'}
+            loading={rate.isPending}
+            onClick={() => rate.mutate(1)}
+          >
+            <Heart className="h-4 w-4" /> {profile.data.rating_likes}
+          </Button>
+          <Button
+            variant={profile.data.own_rating === -1 ? 'danger' : 'secondary'}
+            loading={rate.isPending}
+            onClick={() => rate.mutate(-1)}
+          >
+            <ThumbsDown className="h-4 w-4" /> {profile.data.rating_dislikes}
+          </Button>
+        </div>
+        {directChat.isError ? (
+          <div className="error-box mt-3">{ru.miniApp.social.directChatError}</div>
+        ) : null}
       </Card>
+      <SectionTitle eyebrow={ru.miniApp.social.profileEyebrow}>
+        {ru.miniApp.social.activeQuestionnaires}
+      </SectionTitle>
+      <div className="space-y-4">
+        {questionnaires.data?.map((questionnaire) => (
+          <ProfileCard
+            key={questionnaire.id}
+            profile={questionnaire}
+            expanded
+            messagePending={directChat.isPending}
+            onMessage={() => directChat.mutate()}
+          />
+        ))}
+        {!questionnaires.isLoading && !questionnaires.data?.length ? (
+          <EmptyState
+            icon={<FileText className="h-7 w-7" />}
+            title={ru.miniApp.social.activeQuestionnaires}
+            description={ru.miniApp.social.activeQuestionnairesEmpty}
+          />
+        ) : null}
+      </div>
+      <SectionTitle eyebrow={ru.miniApp.social.profileEyebrow}>
+        {ru.miniApp.social.profilePosts}
+      </SectionTitle>
+      <div className="space-y-4">
+        {posts.data?.map((post) => (
+          <PostCard key={post.id} post={post} />
+        ))}
+        {!posts.isLoading && !posts.data?.length ? (
+          <EmptyState
+            icon={<FileText className="h-7 w-7" />}
+            title={ru.miniApp.social.profilePosts}
+            description={ru.miniApp.social.profilePostsEmpty}
+          />
+        ) : null}
+      </div>
     </div>
   );
 }
@@ -518,13 +622,31 @@ export function QuestionnairesPage() {
   );
 }
 
-function PostCard({ post, own = false }: { post: SocialPost; own?: boolean }) {
+export function PostCard({
+  post,
+  own = false,
+  canModerate = false,
+}: {
+  post: SocialPost;
+  own?: boolean;
+  canModerate?: boolean;
+}) {
   const queryClient = useQueryClient();
+  const [mediaIndex, setMediaIndex] = useState(0);
+  const [mediaFullscreen, setMediaFullscreen] = useState(false);
   const [open, setOpen] = useState(false);
   const [body, setBody] = useState('');
+  const [replyTo, setReplyTo] = useState<{ id: string; name: string } | null>(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [postTitle, setPostTitle] = useState(post.title ?? '');
   const [postBody, setPostBody] = useState(post.body_markdown || post.text_preview);
+  const [postTags, setPostTags] = useState(parseStringArray(post.tags || '[]').join(', '));
+  const [postFandoms, setPostFandoms] = useState(parseStringArray(post.fandoms || '[]').join(', '));
+  const [postHashtags, setPostHashtags] = useState(
+    parseStringArray(post.hashtags || '[]')
+      .map((item) => `#${item}`)
+      .join(', '),
+  );
   const comments = useQuery({
     queryKey: ['post-comments', post.id],
     queryFn: () => api.postComments(post.id),
@@ -535,16 +657,39 @@ function PostCard({ post, own = false }: { post: SocialPost; own?: boolean }) {
     onSuccess: () => void queryClient.invalidateQueries({ queryKey: ['posts'] }),
   });
   const comment = useMutation({
-    mutationFn: () => api.addPostComment(post.id, body),
+    mutationFn: () => api.addPostComment(post.id, body, replyTo?.id),
     onSuccess: () => {
       setBody('');
+      setReplyTo(null);
       void queryClient.invalidateQueries({ queryKey: ['post-comments', post.id] });
       void queryClient.invalidateQueries({ queryKey: ['posts'] });
     },
   });
+  const rateComment = useMutation({
+    mutationFn: ({ id, value }: { id: string; value: -1 | 1 }) => api.ratePostComment(id, value),
+    onSuccess: () => void queryClient.invalidateQueries({ queryKey: ['post-comments', post.id] }),
+  });
+  const report = useMutation({
+    mutationFn: (input: {
+      reportedUserId: string;
+      postId?: string;
+      commentId?: string;
+      description: string;
+    }) =>
+      api.report({
+        ...input,
+        category: 'other',
+      }),
+  });
   const updatePost = useMutation({
     mutationFn: () =>
-      api.updateOwnPost(post.id, { title: postTitle.trim(), bodyMarkdown: postBody.trim() }),
+      api.updateOwnPost(post.id, {
+        title: postTitle.trim(),
+        bodyMarkdown: postBody.trim(),
+        tags: parseCommaList(postTags),
+        fandoms: parseCommaList(postFandoms),
+        hashtags: parseCommaList(postHashtags),
+      }),
     onSuccess: () => {
       setSettingsOpen(false);
       void queryClient.invalidateQueries({ queryKey: ['own-posts'] });
@@ -558,11 +703,75 @@ function PostCard({ post, own = false }: { post: SocialPost; own?: boolean }) {
       void queryClient.invalidateQueries({ queryKey: ['posts'] });
     },
   });
+  const moderatePost = useMutation({
+    mutationFn: (status: 'active' | 'blocked' | 'limited' | 'shadow_banned') =>
+      api.adminModeratePost(
+        post.id,
+        status,
+        status === 'limited'
+          ? ru.miniApp.admin.limitPostReason
+          : status === 'shadow_banned'
+            ? ru.miniApp.admin.shadowBanPostReason
+            : status === 'blocked'
+              ? ru.miniApp.admin.blockPostPrompt
+              : ru.miniApp.admin.restorePostReachReason,
+      ),
+    onSuccess: () => void queryClient.invalidateQueries({ queryKey: ['posts'] }),
+  });
   const addMedia = () => {
     const link = `https://t.me/r0lemate_bot?start=post_media_${post.id}`;
     const telegram = getTelegram();
     if (telegram) telegram.openTelegramLink(link);
     else window.open(link, '_blank', 'noopener,noreferrer');
+  };
+  const mediaItems = parsePostMedia(post);
+  const currentMedia = mediaItems[mediaIndex] ?? mediaItems[0];
+  const currentMediaUrl = currentMedia
+    ? currentMedia.id
+      ? `/api/posts/${post.id}/media/${currentMedia.id}`
+      : `/api/posts/${post.id}/media`
+    : '';
+  const renderCurrentMedia = (fullscreen = false) => {
+    if (!currentMedia) return null;
+    if (currentMedia.media_type === 'photo' || currentMedia.media_type === 'animation') {
+      return (
+        <img
+          className={fullscreen ? 'media-lightbox-content' : 'post-media-content'}
+          src={currentMediaUrl}
+          alt=""
+          loading="lazy"
+        />
+      );
+    }
+    if (currentMedia.media_type === 'video' || currentMedia.media_type === 'video_note') {
+      return (
+        <video
+          className={fullscreen ? 'media-lightbox-content' : 'post-media-content'}
+          src={currentMediaUrl}
+          controls
+          playsInline
+          preload="metadata"
+        />
+      );
+    }
+    if (currentMedia.media_type === 'audio' || currentMedia.media_type === 'voice') {
+      return (
+        <div className={fullscreen ? 'post-audio-fullscreen' : 'p-4'}>
+          {currentMedia.track_title || currentMedia.track_performer ? (
+            <p className="mb-2 break-words text-sm">
+              {currentMedia.track_title ?? ru.miniApp.social.postsTitle}
+              {currentMedia.track_performer ? ` — ${currentMedia.track_performer}` : ''}
+            </p>
+          ) : null}
+          <audio className="w-full" src={currentMediaUrl} controls preload="none" />
+        </div>
+      );
+    }
+    return (
+      <a className="button button-secondary m-4" href={currentMediaUrl}>
+        {ru.miniApp.profile.openMedia}
+      </a>
+    );
   };
   return (
     <Card className="overflow-hidden">
@@ -587,45 +796,92 @@ function PostCard({ post, own = false }: { post: SocialPost; own?: boolean }) {
           {post.body_markdown || post.text_preview}
         </ProfileMarkdown>
       </div>
-      {post.media_telegram_file_id ? (
-        <div className="border-y border-white/10 bg-black/20">
-          {post.content_type === 'photo' || post.content_type === 'animation' ? (
-            <img
-              className="max-h-[70vh] w-full object-contain"
-              src={`/api/posts/${post.id}/media`}
-              alt=""
-              loading="lazy"
-            />
-          ) : post.content_type === 'video' || post.content_type === 'video_note' ? (
-            <video
-              className="max-h-[70vh] w-full"
-              src={`/api/posts/${post.id}/media`}
-              controls
-              playsInline
-              preload="metadata"
-            />
-          ) : post.content_type === 'audio' || post.content_type === 'voice' ? (
-            <div className="p-4">
-              {post.track_title || post.track_performer ? (
-                <p className="mb-2 break-words text-sm">
-                  {post.track_title ?? ru.miniApp.social.postsTitle}
-                  {post.track_performer ? ` — ${post.track_performer}` : ''}
-                </p>
-              ) : null}
-              <audio
-                className="w-full"
-                src={`/api/posts/${post.id}/media`}
-                controls
-                preload="none"
-              />
-            </div>
-          ) : (
-            <a className="button button-secondary m-4" href={`/api/posts/${post.id}/media`}>
-              {ru.miniApp.profile.openMedia}
-            </a>
-          )}
+      {currentMedia ? (
+        <div className="post-media-carousel border-y border-white/10 bg-black/20">
+          {renderCurrentMedia()}
+          <button
+            className="post-media-fullscreen"
+            type="button"
+            aria-label={ru.miniApp.search.openMediaFullscreen}
+            onClick={() => setMediaFullscreen(true)}
+          >
+            <Maximize2 className="h-5 w-5" />
+          </button>
+          {mediaItems.length > 1 ? (
+            <>
+              <button
+                className="profile-media-arrow profile-media-arrow-left"
+                type="button"
+                aria-label={ru.miniApp.search.previousMedia}
+                onClick={() =>
+                  setMediaIndex((index) => (index - 1 + mediaItems.length) % mediaItems.length)
+                }
+              >
+                <ChevronLeft />
+              </button>
+              <button
+                className="profile-media-arrow profile-media-arrow-right"
+                type="button"
+                aria-label={ru.miniApp.search.nextMedia}
+                onClick={() => setMediaIndex((index) => (index + 1) % mediaItems.length)}
+              >
+                <ChevronRight />
+              </button>
+              <div className="profile-media-dots" aria-hidden>
+                {mediaItems.map((item, index) => (
+                  <span className={index === mediaIndex ? 'active' : ''} key={item.id ?? index} />
+                ))}
+              </div>
+            </>
+          ) : null}
         </div>
       ) : null}
+      {mediaFullscreen && currentMedia ? (
+        <div className="media-lightbox" role="dialog" aria-modal="true">
+          <button
+            className="media-lightbox-close"
+            type="button"
+            aria-label={ru.miniApp.search.closeMediaFullscreen}
+            onClick={() => setMediaFullscreen(false)}
+          >
+            <X />
+          </button>
+          {renderCurrentMedia(true)}
+          {mediaItems.length > 1 ? (
+            <>
+              <button
+                className="media-lightbox-arrow media-lightbox-arrow-left"
+                type="button"
+                aria-label={ru.miniApp.search.previousMedia}
+                onClick={() =>
+                  setMediaIndex((index) => (index - 1 + mediaItems.length) % mediaItems.length)
+                }
+              >
+                <ChevronLeft />
+              </button>
+              <button
+                className="media-lightbox-arrow media-lightbox-arrow-right"
+                type="button"
+                aria-label={ru.miniApp.search.nextMedia}
+                onClick={() => setMediaIndex((index) => (index + 1) % mediaItems.length)}
+              >
+                <ChevronRight />
+              </button>
+            </>
+          ) : null}
+        </div>
+      ) : null}
+      <div className="flex flex-wrap gap-2 px-5 pb-5">
+        {[
+          ...parseStringArray(post.tags || '[]'),
+          ...parseStringArray(post.fandoms || '[]'),
+          ...parseStringArray(post.hashtags || '[]').map((item) => `#${item}`),
+        ].map((item) => (
+          <span className="status-pill" key={item}>
+            {item}
+          </span>
+        ))}
+      </div>
       <div className="flex flex-wrap gap-2 px-5 pb-5">
         {own ? (
           <>
@@ -655,10 +911,52 @@ function PostCard({ post, own = false }: { post: SocialPost; own?: boolean }) {
         <Button variant="secondary" onClick={() => setOpen((value) => !value)}>
           <MessageCircle className="h-4 w-4" /> {post.comment_count}
         </Button>
+        {!own ? (
+          <Button
+            variant="secondary"
+            onClick={() => {
+              const description = window.prompt(ru.miniApp.social.reportPostPrompt)?.trim();
+              if (description) {
+                report.mutate({
+                  reportedUserId: post.author_user_id,
+                  postId: post.id,
+                  description,
+                });
+              }
+            }}
+          >
+            <Flag className="h-4 w-4" /> {ru.miniApp.social.report}
+          </Button>
+        ) : null}
         {own ? (
           <Button variant="secondary" onClick={() => setSettingsOpen((value) => !value)}>
             <Settings2 className="h-4 w-4" /> {ru.miniApp.social.postSettings}
           </Button>
+        ) : null}
+        {canModerate ? (
+          <>
+            <Button
+              variant="secondary"
+              loading={moderatePost.isPending}
+              onClick={() => moderatePost.mutate('limited')}
+            >
+              {ru.miniApp.admin.limitPost}
+            </Button>
+            <Button
+              variant="secondary"
+              loading={moderatePost.isPending}
+              onClick={() => moderatePost.mutate('shadow_banned')}
+            >
+              {ru.miniApp.admin.shadowBanPost}
+            </Button>
+            <Button
+              variant="danger"
+              loading={moderatePost.isPending}
+              onClick={() => moderatePost.mutate('blocked')}
+            >
+              {ru.miniApp.admin.blockPost}
+            </Button>
+          </>
         ) : null}
       </div>
       {own && settingsOpen ? (
@@ -684,6 +982,34 @@ function PostCard({ post, own = false }: { post: SocialPost; own?: boolean }) {
             onChange={(event) => setPostBody(event.target.value)}
           />
           <p className="mt-2 text-xs text-muted">{ru.miniApp.social.postMarkdownHint}</p>
+          <label className="field-label mt-4" htmlFor={`post-tags-${post.id}`}>
+            {ru.miniApp.social.postTags}
+          </label>
+          <input
+            id={`post-tags-${post.id}`}
+            className="input"
+            value={postTags}
+            onChange={(event) => setPostTags(event.target.value)}
+          />
+          <label className="field-label mt-4" htmlFor={`post-fandoms-${post.id}`}>
+            {ru.miniApp.social.postFandoms}
+          </label>
+          <input
+            id={`post-fandoms-${post.id}`}
+            className="input"
+            value={postFandoms}
+            onChange={(event) => setPostFandoms(event.target.value)}
+          />
+          <label className="field-label mt-4" htmlFor={`post-hashtags-${post.id}`}>
+            {ru.miniApp.social.postHashtags}
+          </label>
+          <input
+            id={`post-hashtags-${post.id}`}
+            className="input"
+            value={postHashtags}
+            onChange={(event) => setPostHashtags(event.target.value)}
+          />
+          <p className="mt-2 text-xs text-muted">{ru.miniApp.social.postMetadataHint}</p>
           <div className="mt-4 flex flex-wrap gap-2">
             <Button
               loading={updatePost.isPending}
@@ -695,7 +1021,7 @@ function PostCard({ post, own = false }: { post: SocialPost; own?: boolean }) {
             <Button variant="secondary" onClick={addMedia}>
               <ImagePlus className="h-4 w-4" /> {ru.miniApp.social.addPostMedia}
             </Button>
-            {post.media_telegram_file_id ? (
+            {mediaItems.length ? (
               <Button
                 variant="danger"
                 loading={removeMedia.isPending}
@@ -721,23 +1047,83 @@ function PostCard({ post, own = false }: { post: SocialPost; own?: boolean }) {
         <div className="border-t border-white/10 p-5">
           <div className="space-y-3">
             {comments.data?.map((item) => (
-              <div key={item.id} className="flex gap-3">
+              <div
+                key={item.id}
+                className={`comment-thread-item flex gap-3 ${item.parent_comment_id ? 'reply' : ''}`}
+              >
                 <ProfileAvatar
                   mediaId={item.avatar_media_id}
                   renderMode={item.avatar_render_mode}
                   name={item.display_name}
                 />
                 <div className="min-w-0">
-                  <strong className="text-sm">{item.display_name}</strong>
-                  <p className="whitespace-pre-wrap break-words text-sm text-soft">{item.body}</p>
+                  <strong className="inline-flex items-center gap-1 text-sm">
+                    {item.display_name}
+                    <VerificationBadge kind={item.verification_kind} />
+                  </strong>
+                  <ProfileMarkdown
+                    className="whitespace-pre-wrap break-words text-sm text-soft"
+                    allowLinks
+                  >
+                    {item.body}
+                  </ProfileMarkdown>
+                  <div className="mt-2 flex flex-wrap gap-2">
+                    <Button
+                      variant={item.own_rating === 1 ? 'primary' : 'ghost'}
+                      onClick={() => rateComment.mutate({ id: item.id, value: 1 })}
+                    >
+                      <Heart className="h-3.5 w-3.5" /> {item.likes}
+                    </Button>
+                    <Button
+                      variant={item.own_rating === -1 ? 'danger' : 'ghost'}
+                      onClick={() => rateComment.mutate({ id: item.id, value: -1 })}
+                    >
+                      <ThumbsDown className="h-3.5 w-3.5" /> {item.dislikes}
+                    </Button>
+                    <Button
+                      variant="ghost"
+                      onClick={() => setReplyTo({ id: item.id, name: item.display_name })}
+                    >
+                      {ru.miniApp.social.replyToComment}
+                    </Button>
+                    <Button
+                      variant="ghost"
+                      onClick={() => {
+                        const description = window
+                          .prompt(ru.miniApp.social.reportCommentPrompt)
+                          ?.trim();
+                        if (description) {
+                          report.mutate({
+                            reportedUserId: item.author_user_id,
+                            commentId: item.id,
+                            description,
+                          });
+                        }
+                      }}
+                    >
+                      <Flag className="h-3.5 w-3.5" /> {ru.miniApp.social.report}
+                    </Button>
+                  </div>
                 </div>
               </div>
             ))}
           </div>
+          {replyTo ? (
+            <div className="mt-4 flex items-center justify-between gap-3 rounded-xl bg-white/5 px-3 py-2 text-xs">
+              <span>{ru.miniApp.social.replyPlaceholder(replyTo.name)}</span>
+              <button type="button" onClick={() => setReplyTo(null)}>
+                {ru.miniApp.social.cancelReply}
+              </button>
+            </div>
+          ) : null}
           <textarea
             className="input mt-4 min-h-20"
             maxLength={1000}
-            placeholder={ru.miniApp.social.commentPlaceholder}
+            placeholder={
+              replyTo
+                ? ru.miniApp.social.replyPlaceholder(replyTo.name)
+                : ru.miniApp.social.commentPlaceholder
+            }
             value={body}
             onChange={(event) => setBody(event.target.value)}
           />
@@ -755,8 +1141,49 @@ function PostCard({ post, own = false }: { post: SocialPost; own?: boolean }) {
   );
 }
 
+function parsePostMedia(post: SocialPost): Array<{
+  id: string | null;
+  media_type: string;
+  track_title: string | null;
+  track_performer: string | null;
+}> {
+  try {
+    const parsed: unknown = JSON.parse(post.media_items || '[]');
+    if (Array.isArray(parsed)) {
+      const items = parsed.filter(
+        (
+          item,
+        ): item is {
+          id: string;
+          media_type: string;
+          track_title: string | null;
+          track_performer: string | null;
+        } =>
+          typeof item === 'object' &&
+          item !== null &&
+          typeof (item as Record<string, unknown>).id === 'string' &&
+          typeof (item as Record<string, unknown>).media_type === 'string',
+      );
+      if (items.length) return items;
+    }
+  } catch {
+    // Legacy posts use their original single-media columns.
+  }
+  return post.media_telegram_file_id
+    ? [
+        {
+          id: null,
+          media_type: post.content_type,
+          track_title: post.track_title,
+          track_performer: post.track_performer,
+        },
+      ]
+    : [];
+}
+
 export function PostsPage() {
   const posts = useQuery({ queryKey: ['posts'], queryFn: api.posts });
+  const me = useQuery({ queryKey: ['me'], queryFn: api.me });
   if (posts.isLoading) return <Skeleton className="h-80" />;
   return (
     <div>
@@ -766,7 +1193,7 @@ export function PostsPage() {
       <p className="mb-4 text-sm text-muted">{ru.miniApp.social.createPostHint}</p>
       <div className="space-y-4">
         {posts.data?.map((post) => (
-          <PostCard key={post.id} post={post} />
+          <PostCard key={post.id} post={post} canModerate={Boolean(me.data?.isAdmin)} />
         ))}
         {!posts.data?.length ? (
           <EmptyState

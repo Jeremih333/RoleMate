@@ -53,6 +53,12 @@ describe('D1 migrations', () => {
       '0023_public_profile_moderation.sql',
       '0024_profile_usernames.sql',
       '0025_post_editor.sql',
+      '0026_public_profile_ratings.sql',
+      '0027_post_media_carousel.sql',
+      '0028_notification_center.sql',
+      '0029_comment_threads.sql',
+      '0030_post_recommendations.sql',
+      '0031_contextual_reports_and_swipe_targets.sql',
     ]);
     expect(() => applyMigrations()).not.toThrow();
     const tables = database
@@ -91,6 +97,10 @@ describe('D1 migrations', () => {
         'post_ratings',
         'profile_usernames',
         'telegram_post_edit_sessions',
+        'public_profile_ratings',
+        'telegram_post_media',
+        'user_notifications',
+        'post_comment_ratings',
       ]),
     );
     expect(tables.length).toBeGreaterThanOrEqual(35);

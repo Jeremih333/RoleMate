@@ -29,6 +29,7 @@ import {
 } from '../api.js';
 import { Button, Card, EmptyState, Skeleton } from '../components/ui.js';
 import { ProfileMarkdown } from '../components/markdown.js';
+import { CompactAudio } from '../components/compact-audio.js';
 import { ProfileAvatar } from '../components/profile-avatar.js';
 import { VerificationBadge } from '../components/verification-badge.js';
 import { haptic } from '../telegram.js';
@@ -175,7 +176,9 @@ export function ProfileCard({
           ) : null}
           {currentMedia ? (
             <button
-              className="profile-media-fullscreen"
+              className={`profile-media-fullscreen ${
+                expanded ? 'profile-media-fullscreen-expanded' : ''
+              }`}
               type="button"
               aria-label={ru.miniApp.search.openMediaFullscreen}
               onClick={() => setFullscreenMediaOpen(true)}
@@ -277,19 +280,9 @@ export function ProfileCard({
                   <div className="profile-track-content">
                     <strong>{item.track_title || ru.miniApp.search.trackUnknown}</strong>
                     <span>{item.track_performer || ru.miniApp.search.performerUnknown}</span>
-                    <audio
-                      className="w-full"
+                    <CompactAudio
                       src={`/api/profile-media/${item.id}`}
-                      controls
-                      preload="metadata"
-                      onPlay={(event) => {
-                        document
-                          .querySelectorAll<HTMLAudioElement>('.profile-track audio')
-                          .forEach((audio) => {
-                            if (audio !== event.currentTarget) audio.pause();
-                          });
-                      }}
-                      aria-label={ru.miniApp.search.profileAudio(index + 1)}
+                      label={ru.miniApp.search.profileAudio(index + 1)}
                     />
                   </div>
                 </div>
@@ -577,7 +570,7 @@ export function SearchPage() {
     }: {
       action: 'like' | 'skip' | 'super_like';
       profile: SearchProfile;
-    }) => api.swipe(profile.user_id, action),
+    }) => api.swipe(profile.user_id, action, profile.id),
     onSuccess: (result) => {
       haptic(result.matched ? 'heavy' : 'light');
       void queryClient.invalidateQueries({ queryKey: ['search'] });
@@ -879,6 +872,7 @@ export function SearchPage() {
                   if (!description) return;
                   report.mutate({
                     reportedUserId: profile.user_id,
+                    questionnaireId: profile.id,
                     category: 'other',
                     description,
                   });

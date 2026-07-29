@@ -112,6 +112,28 @@ function createPostButtonUpdate(updateId: number) {
   };
 }
 
+function mediaGroupPhotoUpdate(updateId: number) {
+  return {
+    update_id: updateId,
+    message: {
+      message_id: updateId,
+      media_group_id: 'album-free-1',
+      date: 1_753_000_000,
+      chat: { id: 42, type: 'private' as const, first_name: 'Тест' },
+      from: { id: 42, is_bot: false, first_name: 'Тест', language_code: 'ru' },
+      photo: [
+        {
+          file_id: 'photo-file-id',
+          file_unique_id: 'photo-unique-id',
+          width: 640,
+          height: 640,
+          file_size: 1000,
+        },
+      ],
+    },
+  };
+}
+
 function successfulPaymentUpdate(updateId: number) {
   return {
     update_id: updateId,
@@ -142,6 +164,7 @@ interface FetchOptions {
     giftRecipientTelegramUserId?: number;
   };
   adminSession?: { csrfHash: string };
+  postDraft?: boolean;
 }
 
 function telegramAndDataFetch(options: FetchOptions = {}) {
@@ -207,24 +230,28 @@ function telegramAndDataFetch(options: FetchOptions = {}) {
                               ? { written: true }
                               : operation === 'premium.status'
                                 ? { premium: false }
-                                : operation === 'search.list'
-                                  ? [
-                                      {
-                                        user_id: '00000000-0000-4000-8000-000000000099',
-                                        display_name: 'Ночной автор',
-                                        short_headline: 'Ищу сюжет',
-                                        compatibility: 88,
-                                      },
-                                    ]
-                                  : operation === 'conversations.resolveMiniAppRelay'
-                                    ? {
-                                        destination_chat_id: 777,
-                                        recipient_muted: 0,
-                                        notify_message: 0,
-                                      }
-                                    : operation === 'conversations.recordMiniAppMessage'
-                                      ? { recorded: true }
-                                      : null;
+                                : operation === 'posts.draft.get' && options.postDraft
+                                  ? { id: '00000000-0000-4000-8000-000000000810' }
+                                  : operation === 'posts.draft.cancel' && options.postDraft
+                                    ? { cancelled: true }
+                                    : operation === 'search.list'
+                                      ? [
+                                          {
+                                            user_id: '00000000-0000-4000-8000-000000000099',
+                                            display_name: 'Ночной автор',
+                                            short_headline: 'Ищу сюжет',
+                                            compatibility: 88,
+                                          },
+                                        ]
+                                      : operation === 'conversations.resolveMiniAppRelay'
+                                        ? {
+                                            destination_chat_id: 777,
+                                            recipient_muted: 0,
+                                            notify_message: 0,
+                                          }
+                                        : operation === 'conversations.recordMiniAppMessage'
+                                          ? { recorded: true }
+                                          : null;
       return Promise.resolve(
         new Response(JSON.stringify({ ok: true, data, requestId: 'request' }), {
           status: 200,
@@ -416,6 +443,28 @@ describe('Telegram webhook integration', () => {
           request.url.endsWith('/sendMessage') && request.body.text === ru.bot.postPrompt,
       ),
     ).toBe(true);
+    await app.close();
+  });
+
+  it('rejects a free Telegram media group as one invalid multi-file post', async () => {
+    const { fetchMock, requests } = telegramAndDataFetch({ postDraft: true });
+    vi.stubGlobal('fetch', fetchMock);
+    const app = await buildServer(testEnv());
+    const response = await app.inject({
+      method: 'POST',
+      url: '/telegram/webhook',
+      headers: { 'x-telegram-bot-api-secret-token': 'test-webhook-secret-value' },
+      payload: mediaGroupPhotoUpdate(107),
+    });
+    expect(response.statusCode, response.body).toBe(200);
+    expect(requests.some((request) => request.body.operation === 'posts.draft.cancel')).toBe(true);
+    expect(
+      requests.some(
+        (request) =>
+          request.url.endsWith('/sendMessage') && request.body.text === ru.bot.postSingleMediaOnly,
+      ),
+    ).toBe(true);
+    expect(requests.some((request) => request.body.operation === 'posts.draft.attach')).toBe(false);
     await app.close();
   });
 

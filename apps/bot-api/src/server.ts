@@ -41,6 +41,7 @@ const profileUsernameSchema = z
   .regex(/^[a-z][a-z0-9_]*$/);
 const swipeBodySchema = z.object({
   targetUserId: z.string().uuid(),
+  questionnaireId: z.string().uuid().optional(),
   action: z.enum(['like', 'skip', 'super_like', 'rewind']),
 });
 const deleteBodySchema = z.object({ confirmation: z.literal(ru.api.deleteConfirmation) });
@@ -55,6 +56,9 @@ const blockBodySchema = z.object({
 const reportBodySchema = z.object({
   reportedUserId: z.string().uuid(),
   conversationId: z.string().uuid().optional(),
+  postId: z.string().uuid().optional(),
+  questionnaireId: z.string().uuid().optional(),
+  commentId: z.string().uuid().optional(),
   category: z.enum([
     'spam',
     'advertising',
@@ -74,6 +78,8 @@ const settingsBodySchema = z.object({
   notificationsEnabled: z.boolean(),
   matchNotificationsEnabled: z.boolean(),
   messageNotificationsEnabled: z.boolean(),
+  mentionNotificationsEnabled: z.boolean(),
+  commentNotificationsEnabled: z.boolean(),
   referralNotificationsEnabled: z.boolean(),
   premiumNotificationsEnabled: z.boolean(),
   privacyShieldEnabled: z.boolean(),
@@ -151,6 +157,52 @@ export async function buildServer(
   });
   const bot = createBot(env, dataApi, options.telegramFetch, options.syncBotCommands);
   if (env.TELEGRAM_BOT_TOKEN) await bot.init();
+  const extractMentions = (text: string): string[] =>
+    [
+      ...new Set(
+        [...text.matchAll(/(^|[^\p{L}\p{N}_])@([a-z][a-z0-9_]{3,31})/giu)].map((match) =>
+          match[2]!.toLowerCase(),
+        ),
+      ),
+    ].slice(0, 20);
+  const notifyMentions = async (input: {
+    actorUserId: string;
+    text: string;
+    context: 'chat' | 'questionnaire' | 'post' | 'comment';
+    entityId?: string;
+    openPath: string;
+    sourceKey: string;
+  }): Promise<void> => {
+    const usernames = extractMentions(input.text);
+    if (!usernames.length) return;
+    const message = ru.bot.mentionNotification(ru.bot.mentionPlaces[input.context]);
+    const deliveries = await dataApi.execute<
+      Array<{ telegram_user_id: number | null; open_path: string }>
+    >('notifications.mentions.create', {
+      actorUserId: input.actorUserId,
+      usernames,
+      context: input.context,
+      ...(input.entityId ? { entityId: input.entityId } : {}),
+      openPath: input.openPath,
+      sourceKey: input.sourceKey,
+      message,
+    });
+    await Promise.all(
+      deliveries.flatMap((delivery) =>
+        delivery.telegram_user_id
+          ? [
+              bot.api.sendMessage(delivery.telegram_user_id, message, {
+                protect_content: true,
+                reply_markup: new InlineKeyboard().webApp(
+                  ru.bot.openNotification,
+                  `${env.MINI_APP_URL}${delivery.open_path}`,
+                ),
+              }),
+            ]
+          : [],
+      ),
+    );
+  };
   const stars = new TelegramStarsProvider(bot);
   let broadcastTimer: NodeJS.Timeout | undefined;
   let broadcastDispatching = false;
@@ -464,6 +516,38 @@ export async function buildServer(
       riskScore: session.riskScore,
     };
   });
+  app.get('/api/notifications', async (request) => {
+    const session = await authenticate(request);
+    return dataApi.execute('notifications.list', { userId: session.userId, limit: 50 });
+  });
+  app.put('/api/notifications/:notificationId/read', async (request) => {
+    const session = await mutateSafe(request);
+    const { notificationId } = z
+      .object({ notificationId: z.string().uuid() })
+      .parse(request.params);
+    return dataApi.execute('notifications.read', {
+      userId: session.userId,
+      notificationId,
+    });
+  });
+  app.get('/api/mentions/resolve', async (request) => {
+    const session = await authenticate(request);
+    const { usernames } = z
+      .object({ usernames: z.string().max(700).default('') })
+      .parse(request.query);
+    const aliases = [
+      ...new Set(
+        usernames
+          .split(',')
+          .map((value) => value.trim().toLowerCase())
+          .filter((value) => profileUsernameSchema.safeParse(value).success),
+      ),
+    ].slice(0, 20);
+    return dataApi.execute('mentions.resolve', {
+      requesterUserId: session.userId,
+      usernames: aliases,
+    });
+  });
 
   app.get('/api/profile', async (request) => {
     const session = await authenticate(request);
@@ -519,6 +603,42 @@ export async function buildServer(
       profileUserId: userId,
     });
   });
+  app.put('/api/users/:userId/profile/rating', async (request) => {
+    const session = await mutateSafe(request);
+    const { userId } = z.object({ userId: z.string().uuid() }).parse(request.params);
+    const { value } = z
+      .object({ value: z.union([z.literal(-1), z.literal(1)]) })
+      .parse(request.body);
+    return dataApi.execute('publicProfiles.rate', {
+      userId: session.userId,
+      profileUserId: userId,
+      value,
+    });
+  });
+  app.get('/api/users/:userId/questionnaires', async (request) => {
+    const session = await authenticate(request);
+    const { userId } = z.object({ userId: z.string().uuid() }).parse(request.params);
+    const { limit } = z
+      .object({ limit: z.coerce.number().int().min(1).max(5).default(5) })
+      .parse(request.query);
+    return dataApi.execute('questionnaires.listPublic', {
+      requesterUserId: session.userId,
+      profileUserId: userId,
+      limit,
+    });
+  });
+  app.get('/api/users/:userId/posts', async (request) => {
+    const session = await authenticate(request);
+    const { userId } = z.object({ userId: z.string().uuid() }).parse(request.params);
+    const { limit } = z
+      .object({ limit: z.coerce.number().int().min(1).max(50).default(30) })
+      .parse(request.query);
+    return dataApi.execute('posts.author.list', {
+      userId: session.userId,
+      authorUserId: userId,
+      limit,
+    });
+  });
   app.get('/api/questionnaires', async (request) => {
     const session = await authenticate(request);
     return dataApi.execute('questionnaires.listOwn', { userId: session.userId });
@@ -538,7 +658,19 @@ export async function buildServer(
     const body = z
       .object({ title: z.string().trim().min(2).max(80), profile: profileSchema })
       .parse(request.body);
-    return dataApi.execute('questionnaires.create', { userId: session.userId, ...body });
+    const created = await dataApi.execute<{ id: string }>('questionnaires.create', {
+      userId: session.userId,
+      ...body,
+    });
+    await notifyMentions({
+      actorUserId: session.userId,
+      text: JSON.stringify(body.profile),
+      context: 'questionnaire',
+      entityId: created.id,
+      openPath: `/profiles/${session.userId}`,
+      sourceKey: `questionnaire:${created.id}:${await sha256(JSON.stringify(body.profile))}`,
+    });
+    return created;
   });
   app.post('/api/questionnaires/clone', async (request) => {
     const session = await mutateSafe(request);
@@ -553,11 +685,20 @@ export async function buildServer(
     const body = z
       .object({ title: z.string().trim().min(2).max(80), profile: profileSchema })
       .parse(request.body);
-    return dataApi.execute('questionnaires.update', {
+    const updated = await dataApi.execute('questionnaires.update', {
       userId: session.userId,
       questionnaireId,
       ...body,
     });
+    await notifyMentions({
+      actorUserId: session.userId,
+      text: JSON.stringify(body.profile),
+      context: 'questionnaire',
+      entityId: questionnaireId,
+      openPath: `/profiles/${session.userId}`,
+      sourceKey: `questionnaire:${questionnaireId}:${await sha256(JSON.stringify(body.profile))}`,
+    });
+    return updated;
   });
   app.put('/api/questionnaires/:questionnaireId/state', async (request) => {
     const session = await mutateSafe(request);
@@ -622,7 +763,19 @@ export async function buildServer(
         403,
       );
     }
-    return dataApi.execute('profiles.upsert', { userId: session.userId, profile });
+    const saved = await dataApi.execute<{ profileId: string }>('profiles.upsert', {
+      userId: session.userId,
+      profile,
+    });
+    await notifyMentions({
+      actorUserId: session.userId,
+      text: JSON.stringify(profile),
+      context: 'questionnaire',
+      entityId: saved.profileId,
+      openPath: `/profiles/${session.userId}`,
+      sourceKey: `questionnaire:${saved.profileId}:${await sha256(JSON.stringify(profile))}`,
+    });
+    return saved;
   });
   app.put('/api/profile/state', async (request) => {
     const session = await mutateSafe(request);
@@ -851,6 +1004,7 @@ export async function buildServer(
       action: body.action,
       source: 'miniapp',
       idempotencyKey: request.id,
+      ...(body.questionnaireId ? { questionnaireId: body.questionnaireId } : {}),
     });
   });
   app.post('/api/swipes/rewind', async (request) => {
@@ -960,6 +1114,7 @@ export async function buildServer(
         );
       }
       const relay = await dataApi.execute<{
+        recipient_user_id: string;
         destination_chat_id: number;
         recipient_muted: number;
         notify_message: number;
@@ -985,6 +1140,24 @@ export async function buildServer(
         conversationId,
         destinationMessageId: delivered.message_id,
         messageType: 'text',
+      });
+      await dataApi.execute('notifications.activity.create', {
+        actorUserId: session.userId,
+        targetUserId: relay.recipient_user_id,
+        kind: 'message',
+        context: 'chat',
+        entityId: conversationId,
+        openPath: `/chats?conversation=${encodeURIComponent(conversationId)}`,
+        sourceKey: `chat:${conversationId}:${delivered.message_id}`,
+        message: ru.bot.newMessageNotification,
+      });
+      await notifyMentions({
+        actorUserId: session.userId,
+        text,
+        context: 'chat',
+        entityId: conversationId,
+        openPath: `/chats?conversation=${encodeURIComponent(conversationId)}`,
+        sourceKey: `chat:${conversationId}:${delivered.message_id}`,
       });
       return { sent: true };
     },
@@ -1290,6 +1463,9 @@ export async function buildServer(
       .object({
         title: z.string().trim().max(120),
         bodyMarkdown: z.string().trim().min(1).max(8_000),
+        tags: z.array(z.string().trim().min(1).max(60)).max(20).default([]),
+        fandoms: z.array(z.string().trim().min(1).max(100)).max(20).default([]),
+        hashtags: z.array(z.string().trim().min(1).max(60)).max(20).default([]),
       })
       .parse(request.body);
     return dataApi.execute('posts.updateOwn', {
@@ -1333,14 +1509,115 @@ export async function buildServer(
     reply.header('Cache-Control', 'private, max-age=300');
     return reply.send(Buffer.from(await response.arrayBuffer()));
   });
+  app.get('/api/posts/:postId/media/:mediaId', async (request, reply) => {
+    const session = await authenticate(request);
+    const { postId, mediaId } = z
+      .object({ postId: z.string().uuid(), mediaId: z.string().uuid() })
+      .parse(request.params);
+    const media = await dataApi.execute<{ telegram_file_id: string; content_type: string }>(
+      'posts.media.resolveItem',
+      { userId: session.userId, postId, mediaId },
+    );
+    const file = await bot.api.getFile(media.telegram_file_id);
+    if (!file.file_path) throw new DataApiError('MEDIA_UNAVAILABLE', ru.api.mediaUnavailable, 404);
+    const response = await fetch(
+      `https://api.telegram.org/file/bot${env.TELEGRAM_BOT_TOKEN}/${file.file_path}`,
+      { signal: AbortSignal.timeout(20_000) },
+    );
+    if (!response.ok) throw new DataApiError('MEDIA_UNAVAILABLE', ru.api.mediaUnavailable, 502);
+    reply.header(
+      'Content-Type',
+      response.headers.get('content-type') ?? 'application/octet-stream',
+    );
+    reply.header('Cache-Control', 'private, max-age=300');
+    return reply.send(Buffer.from(await response.arrayBuffer()));
+  });
   app.post('/api/posts/:postId/comments', async (request) => {
     const session = await mutateSafe(request);
     const { postId } = z.object({ postId: z.string().uuid() }).parse(request.params);
-    const { body } = z.object({ body: z.string().trim().min(1).max(1_000) }).parse(request.body);
-    return dataApi.execute('posts.comments.create', {
+    const { body, parentCommentId } = z
+      .object({
+        body: z.string().trim().min(1).max(1_000),
+        parentCommentId: z.string().uuid().optional(),
+      })
+      .parse(request.body);
+    const created = await dataApi.execute<{
+      id: string;
+      created: true;
+      authorUserId: string;
+      replyTargetUserId: string | null;
+    }>('posts.comments.create', {
       userId: session.userId,
       postId,
       body,
+      ...(parentCommentId ? { parentCommentId } : {}),
+    });
+    const activity = await dataApi.execute<{
+      telegram_user_id: number | null;
+      open_path: string;
+    } | null>('notifications.activity.create', {
+      actorUserId: session.userId,
+      targetUserId: created.authorUserId,
+      kind: 'comment',
+      context: 'comment',
+      entityId: postId,
+      openPath: `/posts?post=${encodeURIComponent(postId)}`,
+      sourceKey: `comment:${created.id}:author`,
+      message: ru.bot.commentNotification,
+    });
+    if (activity?.telegram_user_id) {
+      await bot.api.sendMessage(activity.telegram_user_id, ru.bot.commentNotification, {
+        protect_content: true,
+        reply_markup: new InlineKeyboard().webApp(
+          ru.bot.openNotification,
+          `${env.MINI_APP_URL}${activity.open_path}`,
+        ),
+      });
+    }
+    if (created.replyTargetUserId && created.replyTargetUserId !== created.authorUserId) {
+      const replyActivity = await dataApi.execute<{
+        telegram_user_id: number | null;
+        open_path: string;
+      } | null>('notifications.activity.create', {
+        actorUserId: session.userId,
+        targetUserId: created.replyTargetUserId,
+        kind: 'comment',
+        context: 'comment',
+        entityId: postId,
+        openPath: `/posts?post=${encodeURIComponent(postId)}`,
+        sourceKey: `comment:${created.id}:reply`,
+        message: ru.bot.commentNotification,
+      });
+      if (replyActivity?.telegram_user_id) {
+        await bot.api.sendMessage(replyActivity.telegram_user_id, ru.bot.commentNotification, {
+          protect_content: true,
+          reply_markup: new InlineKeyboard().webApp(
+            ru.bot.openNotification,
+            `${env.MINI_APP_URL}${replyActivity.open_path}`,
+          ),
+        });
+      }
+    }
+    await notifyMentions({
+      actorUserId: session.userId,
+      text: body,
+      context: 'comment',
+      entityId: postId,
+      openPath: `/posts?post=${encodeURIComponent(postId)}`,
+      sourceKey: `comment:${created.id}`,
+    });
+    return created;
+  });
+  app.put('/api/comments/:commentId/rating', async (request) => {
+    const session = await mutateSafe(request);
+    const { commentId } = z.object({ commentId: z.string().uuid() }).parse(request.params);
+    const { value } = z
+      .object({ value: z.union([z.literal(-1), z.literal(1)]) })
+      .parse(request.body);
+    return dataApi.execute('posts.comments.rate', {
+      userId: session.userId,
+      commentId,
+      value,
     });
   });
   app.put('/api/posts/:postId/rating', async (request) => {
@@ -1376,6 +1653,9 @@ export async function buildServer(
       reporterUserId: session.userId,
       reportedUserId: body.reportedUserId,
       ...(body.conversationId ? { conversationId: body.conversationId } : {}),
+      ...(body.postId ? { postId: body.postId } : {}),
+      ...(body.questionnaireId ? { questionnaireId: body.questionnaireId } : {}),
+      ...(body.commentId ? { commentId: body.commentId } : {}),
       category: body.category,
       description: body.description,
       evidenceSnapshot: [],
@@ -1981,7 +2261,7 @@ export async function buildServer(
     const { profileUserId } = z.object({ profileUserId: z.string().uuid() }).parse(request.params);
     const body = z
       .object({
-        status: z.enum(['active', 'blocked']),
+        status: z.enum(['active', 'blocked', 'limited', 'shadow_banned']),
         reason: z.string().min(3).max(1_000),
       })
       .parse(request.body);

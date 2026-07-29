@@ -3505,4 +3505,476 @@ describe('D1 domain operations', () => {
       ),
     ).rejects.toMatchObject({ code: 'FORBIDDEN' });
   });
+
+  it('shows public profile content, starts independent profile ratings and finds every alias', async () => {
+    const requesterId = await onboard(2091);
+    const ownerId = await onboard(1_040_929_628);
+    sqlite.prepare("UPDATE users SET role = 'admin' WHERE id = ?").run(ownerId);
+    sqlite
+      .prepare(
+        `INSERT INTO profile_usernames
+           (username, user_id, created_by_user_id, is_primary)
+         VALUES ('nuar', ?, ?, 1), ('night_owner', ?, ?, 0)`,
+      )
+      .run(ownerId, ownerId, ownerId, ownerId);
+    const postId = crypto.randomUUID();
+    sqlite
+      .prepare(
+        `INSERT INTO telegram_posts
+           (id, author_user_id, source_chat_id, source_message_id, content_type,
+            text_preview, body_markdown, status, published_at)
+         VALUES (?, ?, 1, 1, 'text', 'Публичный пост', 'Публичный пост', 'active',
+                 CURRENT_TIMESTAMP)`,
+      )
+      .run(postId, ownerId);
+
+    for (const query of ['nuar', '@night_owner']) {
+      const found = (await executeOperation(
+        env,
+        'publicProfiles.search',
+        { requesterUserId: requesterId, query, limit: 20 },
+        crypto.randomUUID(),
+      )) as Array<{ id: string }>;
+      expect(found).toContainEqual(expect.objectContaining({ id: ownerId }));
+    }
+
+    const questionnaires = (await executeOperation(
+      env,
+      'questionnaires.listPublic',
+      { requesterUserId: requesterId, profileUserId: ownerId, limit: 5 },
+      crypto.randomUUID(),
+    )) as Array<{ user_id: string }>;
+    expect(questionnaires).toHaveLength(1);
+    expect(questionnaires[0]?.user_id).toBe(ownerId);
+    const posts = (await executeOperation(
+      env,
+      'posts.author.list',
+      { userId: requesterId, authorUserId: ownerId, limit: 30 },
+      crypto.randomUUID(),
+    )) as Array<{ id: string }>;
+    expect(posts).toContainEqual(expect.objectContaining({ id: postId }));
+
+    await executeOperation(
+      env,
+      'publicProfiles.rate',
+      { userId: requesterId, profileUserId: ownerId, value: 1 },
+      crypto.randomUUID(),
+    );
+    await executeOperation(
+      env,
+      'publicProfiles.rate',
+      { userId: requesterId, profileUserId: ownerId, value: -1 },
+      crypto.randomUUID(),
+    );
+    await expect(
+      executeOperation(
+        env,
+        'publicProfiles.get',
+        { requesterUserId: requesterId, profileUserId: ownerId },
+        crypto.randomUUID(),
+      ),
+    ).resolves.toMatchObject({
+      rating_likes: 0,
+      rating_dislikes: 1,
+      rating_score: -1,
+      own_rating: -1,
+    });
+    await expect(
+      executeOperation(
+        env,
+        'publicProfiles.rate',
+        { userId: ownerId, profileUserId: ownerId, value: 1 },
+        crypto.randomUUID(),
+      ),
+    ).rejects.toMatchObject({ code: 'SELF_PROFILE_RATING' });
+  });
+
+  it('keeps a Premium media group in one post and rejects a free multi-file post', async () => {
+    const premiumAuthorId = await onboard(2092);
+    sqlite
+      .prepare(
+        `INSERT INTO premium_entitlements
+           (id, user_id, source, status, starts_at, ends_at)
+         VALUES (?, ?, 'admin', 'active', CURRENT_TIMESTAMP, datetime('now', '+7 days'))`,
+      )
+      .run(crypto.randomUUID(), premiumAuthorId);
+    const draft = (await executeOperation(
+      env,
+      'posts.draft.start',
+      { userId: premiumAuthorId },
+      crypto.randomUUID(),
+    )) as { postId: string };
+    for (const [index, type] of (['photo', 'video'] as const).entries()) {
+      await executeOperation(
+        env,
+        'posts.draft.attach',
+        {
+          userId: premiumAuthorId,
+          sourceChatId: 10,
+          sourceMessageId: 100 + index,
+          contentType: type,
+          textPreview: index === 0 ? 'Один пост с альбомом' : '',
+          mediaTelegramFileId: `file-${index}`,
+          mediaGroupId: 'album-1',
+        },
+        crypto.randomUUID(),
+      );
+    }
+    await executeOperation(
+      env,
+      'posts.draft.publish',
+      { userId: premiumAuthorId, postId: draft.postId },
+      crypto.randomUUID(),
+    );
+    expect(
+      sqlite.prepare('SELECT COUNT(*) FROM telegram_posts WHERE id = ?').pluck().get(draft.postId),
+    ).toBe(1);
+    expect(
+      sqlite
+        .prepare('SELECT COUNT(*) FROM telegram_post_media WHERE post_id = ?')
+        .pluck()
+        .get(draft.postId),
+    ).toBe(2);
+    const ownPosts = (await executeOperation(
+      env,
+      'posts.own.list',
+      { userId: premiumAuthorId, limit: 10 },
+      crypto.randomUUID(),
+    )) as Array<{ media_items: string }>;
+    expect(JSON.parse(ownPosts[0]?.media_items ?? '[]')).toHaveLength(2);
+
+    const freeAuthorId = await onboard(2093);
+    const freeDraft = (await executeOperation(
+      env,
+      'posts.draft.start',
+      { userId: freeAuthorId },
+      crypto.randomUUID(),
+    )) as { postId: string };
+    await expect(
+      executeOperation(
+        env,
+        'posts.draft.attach',
+        {
+          userId: freeAuthorId,
+          sourceChatId: 11,
+          sourceMessageId: 201,
+          contentType: 'photo',
+          textPreview: '',
+          mediaTelegramFileId: 'free-file',
+          mediaGroupId: 'free-album',
+        },
+        crypto.randomUUID(),
+      ),
+    ).rejects.toMatchObject({ code: 'POST_SINGLE_MEDIA_ONLY' });
+    expect(
+      sqlite
+        .prepare('SELECT status FROM telegram_posts WHERE id = ?')
+        .pluck()
+        .get(freeDraft.postId),
+    ).toBe('deleted');
+  });
+
+  it('binds feed reactions to questionnaires and ranks posts by affinity and engagement', async () => {
+    const viewerId = await onboard(2094);
+    const relevantAuthorId = await onboard(2095);
+    const otherAuthorId = await onboard(2096);
+    const viewerQuestionnaireId = sqlite
+      .prepare('SELECT id FROM questionnaires WHERE user_id = ? AND is_primary = 1')
+      .pluck()
+      .get(viewerId) as string;
+    const relevantQuestionnaireId = sqlite
+      .prepare('SELECT id FROM questionnaires WHERE user_id = ? AND is_primary = 1')
+      .pluck()
+      .get(relevantAuthorId) as string;
+    sqlite
+      .prepare(
+        'UPDATE questionnaires SET tags = \'["slowburn"]\', fandoms = \'["Arcane"]\' WHERE id = ?',
+      )
+      .run(viewerQuestionnaireId);
+
+    await executeOperation(
+      env,
+      'swipes.create',
+      {
+        userId: viewerId,
+        targetUserId: relevantAuthorId,
+        questionnaireId: relevantQuestionnaireId,
+        action: 'skip',
+        source: 'miniapp',
+        idempotencyKey: 'questionnaire-skip-2094',
+      },
+      crypto.randomUUID(),
+    );
+    expect(
+      sqlite
+        .prepare(
+          'SELECT value FROM questionnaire_ratings WHERE questionnaire_id = ? AND user_id = ?',
+        )
+        .pluck()
+        .get(relevantQuestionnaireId, viewerId),
+    ).toBe(-1);
+    await executeOperation(
+      env,
+      'swipes.create',
+      {
+        userId: viewerId,
+        targetUserId: relevantAuthorId,
+        questionnaireId: relevantQuestionnaireId,
+        action: 'super_like',
+        source: 'miniapp',
+        idempotencyKey: 'questionnaire-super-2094',
+      },
+      crypto.randomUUID(),
+    );
+    expect(
+      sqlite
+        .prepare(
+          'SELECT value FROM questionnaire_ratings WHERE questionnaire_id = ? AND user_id = ?',
+        )
+        .pluck()
+        .get(relevantQuestionnaireId, viewerId),
+    ).toBe(1);
+
+    const relevantPostId = crypto.randomUUID();
+    const ordinaryPostId = crypto.randomUUID();
+    const shadowPostId = crypto.randomUUID();
+    const insertPost = sqlite.prepare(
+      `INSERT INTO telegram_posts (
+         id, author_user_id, source_chat_id, source_message_id, content_type,
+         text_preview, body_markdown, status, published_at, tags, fandoms, hashtags,
+         reach_status
+       ) VALUES (?, ?, 1, ?, 'text', ?, ?, 'active', CURRENT_TIMESTAMP, ?, ?, ?, ?)`,
+    );
+    insertPost.run(
+      relevantPostId,
+      relevantAuthorId,
+      301,
+      'Релевантный пост',
+      'Релевантный пост',
+      '["slowburn"]',
+      '["Arcane"]',
+      '["roleplay"]',
+      'normal',
+    );
+    insertPost.run(
+      ordinaryPostId,
+      otherAuthorId,
+      302,
+      'Обычный пост',
+      'Обычный пост',
+      '[]',
+      '[]',
+      '[]',
+      'normal',
+    );
+    insertPost.run(
+      shadowPostId,
+      otherAuthorId,
+      303,
+      'Скрытый пост',
+      'Скрытый пост',
+      '["slowburn"]',
+      '["Arcane"]',
+      '[]',
+      'shadow_banned',
+    );
+    const fanId = await onboard(2097);
+    sqlite
+      .prepare('INSERT INTO post_ratings (post_id, user_id, value) VALUES (?, ?, 1)')
+      .run(relevantPostId, fanId);
+    sqlite
+      .prepare(
+        `INSERT INTO post_comments (id, post_id, author_user_id, body)
+         VALUES (?, ?, ?, 'Поддерживаю обсуждение')`,
+      )
+      .run(crypto.randomUUID(), relevantPostId, fanId);
+
+    const feed = (await executeOperation(
+      env,
+      'posts.feed.list',
+      { userId: viewerId, limit: 20 },
+      crypto.randomUUID(),
+    )) as Array<{ id: string; affinity_score: number; comment_count: number }>;
+    expect(feed[0]).toMatchObject({
+      id: relevantPostId,
+      affinity_score: 20,
+      comment_count: 1,
+    });
+    expect(feed.map((post) => post.id)).not.toContain(shadowPostId);
+  });
+
+  it('queues exact post and comment reports with a moderator-readable thread context', async () => {
+    const reporterId = await onboard(2098);
+    const authorId = await onboard(2099);
+    const ownerId = await onboard(1_040_929_628);
+    sqlite.prepare("UPDATE users SET role = 'admin' WHERE id = ?").run(ownerId);
+    const postId = crypto.randomUUID();
+    const rootCommentId = crypto.randomUUID();
+    const replyId = crypto.randomUUID();
+    sqlite
+      .prepare(
+        `INSERT INTO telegram_posts (
+           id, author_user_id, source_chat_id, source_message_id, content_type,
+           title, text_preview, body_markdown, status, published_at
+         ) VALUES (?, ?, 1, 401, 'text', 'Проверяемый пост', 'Текст поста',
+                   'Полный текст поста', 'active', CURRENT_TIMESTAMP)`,
+      )
+      .run(postId, authorId);
+    sqlite
+      .prepare(
+        `INSERT INTO post_comments (id, post_id, author_user_id, body)
+         VALUES (?, ?, ?, 'Корневой комментарий')`,
+      )
+      .run(rootCommentId, postId, authorId);
+    sqlite
+      .prepare(
+        `INSERT INTO post_comments (id, post_id, author_user_id, parent_comment_id, body)
+         VALUES (?, ?, ?, ?, 'Ответ в ветке')`,
+      )
+      .run(replyId, postId, authorId, rootCommentId);
+
+    const report = (await executeOperation(
+      env,
+      'reports.create',
+      {
+        reporterUserId: reporterId,
+        reportedUserId: authorId,
+        commentId: replyId,
+        category: 'harassment',
+        description: 'Нарушение находится в ответе',
+        evidenceSnapshot: [],
+      },
+      crypto.randomUUID(),
+    )) as { reportId: string };
+    const queue = (await executeOperation(
+      env,
+      'admin.reports.list',
+      { adminUserId: ownerId, status: 'all', limit: 20 },
+      crypto.randomUUID(),
+    )) as Array<{
+      id: string;
+      target_type: string;
+      target_title: string;
+      context_items: string;
+    }>;
+    const queued = queue.find((item) => item.id === report.reportId);
+    expect(queued).toMatchObject({
+      target_type: 'comment',
+      target_title: 'Ответ в ветке',
+    });
+    expect(JSON.parse(queued?.context_items ?? '[]')).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ id: rootCommentId, body: 'Корневой комментарий' }),
+        expect.objectContaining({
+          id: replyId,
+          parent_comment_id: rootCommentId,
+          body: 'Ответ в ветке',
+        }),
+      ]),
+    );
+  });
+
+  it('creates idempotent mention notifications and supports rated comment replies', async () => {
+    const actorId = await onboard(2100);
+    const targetId = await onboard(2101);
+    sqlite
+      .prepare(
+        `INSERT INTO profile_usernames (username, user_id, created_by_user_id, is_primary)
+         VALUES ('target_writer', ?, ?, 1)`,
+      )
+      .run(targetId, targetId);
+    await expect(
+      executeOperation(
+        env,
+        'mentions.resolve',
+        { requesterUserId: actorId, usernames: ['target_writer', 'missing_writer'] },
+        crypto.randomUUID(),
+      ),
+    ).resolves.toEqual([{ username: 'target_writer', user_id: targetId }]);
+
+    const mentionInput = {
+      actorUserId: actorId,
+      usernames: ['target_writer'],
+      context: 'post' as const,
+      openPath: '/posts',
+      sourceKey: 'post:mention:2100',
+      message: 'Вас упомянули в посте',
+    };
+    const deliveries = (await executeOperation(
+      env,
+      'notifications.mentions.create',
+      mentionInput,
+      crypto.randomUUID(),
+    )) as Array<{ notification_id: string; telegram_user_id: number }>;
+    expect(deliveries).toHaveLength(1);
+    expect(deliveries[0]?.telegram_user_id).toBe(2101);
+    await expect(
+      executeOperation(env, 'notifications.mentions.create', mentionInput, crypto.randomUUID()),
+    ).resolves.toEqual([]);
+    const inbox = (await executeOperation(
+      env,
+      'notifications.list',
+      { userId: targetId, limit: 20 },
+      crypto.randomUUID(),
+    )) as Array<{ id: string; read_at: string | null; message: string }>;
+    expect(inbox).toHaveLength(1);
+    expect(inbox[0]).toMatchObject({ read_at: null, message: 'Вас упомянули в посте' });
+    await executeOperation(
+      env,
+      'notifications.read',
+      { userId: targetId, notificationId: inbox[0]?.id },
+      crypto.randomUUID(),
+    );
+
+    const postId = crypto.randomUUID();
+    sqlite
+      .prepare(
+        `INSERT INTO telegram_posts (
+           id, author_user_id, source_chat_id, source_message_id, content_type,
+           text_preview, body_markdown, status, published_at
+         ) VALUES (?, ?, 1, 501, 'text', 'Пост', 'Пост', 'active', CURRENT_TIMESTAMP)`,
+      )
+      .run(postId, targetId);
+    const root = (await executeOperation(
+      env,
+      'posts.comments.create',
+      { userId: actorId, postId, body: 'Корневой комментарий' },
+      crypto.randomUUID(),
+    )) as { id: string };
+    const replyAuthorId = await onboard(2102);
+    const reply = (await executeOperation(
+      env,
+      'posts.comments.create',
+      {
+        userId: replyAuthorId,
+        postId,
+        parentCommentId: root.id,
+        body: 'Ответ на комментарий',
+      },
+      crypto.randomUUID(),
+    )) as { id: string; replyTargetUserId: string };
+    expect(reply.replyTargetUserId).toBe(actorId);
+    await executeOperation(
+      env,
+      'posts.comments.rate',
+      { userId: targetId, commentId: reply.id, value: 1 },
+      crypto.randomUUID(),
+    );
+    const comments = (await executeOperation(
+      env,
+      'posts.comments.list',
+      { userId: targetId, postId, limit: 20 },
+      crypto.randomUUID(),
+    )) as Array<{
+      id: string;
+      parent_comment_id: string | null;
+      likes: number;
+      own_rating: number | null;
+    }>;
+    expect(comments.find((comment) => comment.id === reply.id)).toMatchObject({
+      parent_comment_id: root.id,
+      likes: 1,
+      own_rating: 1,
+    });
+  });
 });

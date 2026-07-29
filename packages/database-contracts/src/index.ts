@@ -83,6 +83,8 @@ export const workerOperations = {
     notificationsEnabled: z.boolean(),
     matchNotificationsEnabled: z.boolean(),
     messageNotificationsEnabled: z.boolean(),
+    mentionNotificationsEnabled: z.boolean().default(true),
+    commentNotificationsEnabled: z.boolean().default(true),
     referralNotificationsEnabled: z.boolean(),
     premiumNotificationsEnabled: z.boolean(),
     privacyShieldEnabled: z.boolean(),
@@ -142,6 +144,11 @@ export const workerOperations = {
       query: z.string().trim().max(80).default(''),
     })
     .merge(paginationSchema),
+  'publicProfiles.rate': z.object({
+    userId: z.string().uuid(),
+    profileUserId: z.string().uuid(),
+    value: z.union([z.literal(-1), z.literal(1)]),
+  }),
   'publicProfiles.update': z.object({
     userId: z.string().uuid(),
     displayName: z.string().trim().min(2).max(80),
@@ -162,6 +169,12 @@ export const workerOperations = {
     username: profileUsernameSchema,
   }),
   'questionnaires.listOwn': z.object({ userId: z.string().uuid() }),
+  'questionnaires.listPublic': z
+    .object({
+      requesterUserId: z.string().uuid(),
+      profileUserId: z.string().uuid(),
+    })
+    .merge(paginationSchema),
   'questionnaires.getOwn': z.object({
     userId: z.string().uuid(),
     questionnaireId: z.string().uuid(),
@@ -244,12 +257,41 @@ export const workerOperations = {
     action: swipeActionSchema,
     source: z.enum(['bot', 'miniapp']),
     idempotencyKey: z.string().min(16).max(128),
+    questionnaireId: z.string().uuid().optional(),
   }),
   'swipes.rewind': z.object({ userId: z.string().uuid() }),
   'swipes.incoming': z.object({ userId: z.string().uuid() }).merge(paginationSchema),
   'notifications.deliveryTarget': z.object({
     userId: z.string().uuid(),
     kind: z.enum(['like', 'message']),
+  }),
+  'notifications.mentions.create': z.object({
+    actorUserId: z.string().uuid(),
+    usernames: z.array(profileUsernameSchema).max(20),
+    context: z.enum(['chat', 'questionnaire', 'post', 'comment']),
+    entityId: z.string().uuid().optional(),
+    openPath: z.string().startsWith('/').max(300),
+    sourceKey: z.string().min(8).max(200),
+    message: z.string().trim().min(1).max(300),
+  }),
+  'notifications.activity.create': z.object({
+    actorUserId: z.string().uuid(),
+    targetUserId: z.string().uuid(),
+    kind: z.enum(['comment', 'message']),
+    context: z.enum(['chat', 'post', 'comment']),
+    entityId: z.string().uuid().optional(),
+    openPath: z.string().startsWith('/').max(300),
+    sourceKey: z.string().min(8).max(200),
+    message: z.string().trim().min(1).max(300),
+  }),
+  'notifications.list': z.object({ userId: z.string().uuid() }).merge(paginationSchema),
+  'notifications.read': z.object({
+    userId: z.string().uuid(),
+    notificationId: z.string().uuid(),
+  }),
+  'mentions.resolve': z.object({
+    requesterUserId: z.string().uuid(),
+    usernames: z.array(profileUsernameSchema).max(20),
   }),
   'premium.status': z.object({ userId: z.string().uuid() }),
   'promotions.apply': z.object({
@@ -370,6 +412,7 @@ export const workerOperations = {
     mediaThumbnailFileId: z.string().min(1).max(512).optional(),
     trackTitle: z.string().trim().min(1).max(160).optional(),
     trackPerformer: z.string().trim().min(1).max(160).optional(),
+    mediaGroupId: z.string().min(1).max(128).optional(),
   }),
   'posts.draft.publish': z.object({ userId: z.string().uuid(), postId: z.string().uuid() }),
   'posts.draft.cancel': z.object({ userId: z.string().uuid() }),
@@ -378,6 +421,9 @@ export const workerOperations = {
     postId: z.string().uuid(),
     title: z.string().trim().max(120),
     bodyMarkdown: z.string().trim().min(1).max(8_000),
+    tags: z.array(z.string().trim().min(1).max(60)).max(20).default([]),
+    fandoms: z.array(z.string().trim().min(1).max(100)).max(20).default([]),
+    hashtags: z.array(z.string().trim().min(1).max(60)).max(20).default([]),
   }),
   'posts.media.removeOwn': z.object({
     userId: z.string().uuid(),
@@ -409,8 +455,19 @@ export const workerOperations = {
   'posts.feed.next': z.object({ userId: z.string().uuid() }),
   'posts.get': z.object({ userId: z.string().uuid(), postId: z.string().uuid() }),
   'posts.media.resolve': z.object({ userId: z.string().uuid(), postId: z.string().uuid() }),
+  'posts.media.resolveItem': z.object({
+    userId: z.string().uuid(),
+    postId: z.string().uuid(),
+    mediaId: z.string().uuid(),
+  }),
   'posts.own.list': z.object({ userId: z.string().uuid() }).merge(paginationSchema),
   'posts.feed.list': z.object({ userId: z.string().uuid() }).merge(paginationSchema),
+  'posts.author.list': z
+    .object({
+      userId: z.string().uuid(),
+      authorUserId: z.string().uuid(),
+    })
+    .merge(paginationSchema),
   'posts.search': z
     .object({ userId: z.string().uuid(), query: z.string().trim().max(80).default('') })
     .merge(paginationSchema),
@@ -421,6 +478,12 @@ export const workerOperations = {
     userId: z.string().uuid(),
     postId: z.string().uuid(),
     body: z.string().trim().min(1).max(1_000),
+    parentCommentId: z.string().uuid().optional(),
+  }),
+  'posts.comments.rate': z.object({
+    userId: z.string().uuid(),
+    commentId: z.string().uuid(),
+    value: z.union([z.literal(-1), z.literal(1)]),
   }),
   'posts.rate': z.object({
     userId: z.string().uuid(),
@@ -453,6 +516,8 @@ export const workerOperations = {
     reportedUserId: z.string().uuid(),
     conversationId: z.string().uuid().optional(),
     postId: z.string().uuid().optional(),
+    questionnaireId: z.string().uuid().optional(),
+    commentId: z.string().uuid().optional(),
     category: reportCategorySchema,
     description: z.string().max(1_500),
     evidenceSnapshot: z.array(z.record(z.unknown())).max(20),
@@ -562,7 +627,7 @@ export const workerOperations = {
   'admin.publicProfile.moderate': z.object({
     adminUserId: z.string().uuid(),
     profileUserId: z.string().uuid(),
-    status: z.enum(['active', 'blocked']),
+    status: z.enum(['active', 'blocked', 'limited', 'shadow_banned']),
     reason: z.string().min(3).max(1_000),
   }),
   'admin.profileUsernames.replace': z.object({
@@ -595,7 +660,7 @@ export const workerOperations = {
   'admin.post.moderate': z.object({
     adminUserId: z.string().uuid(),
     postId: z.string().uuid(),
-    status: z.enum(['active', 'blocked']),
+    status: z.enum(['active', 'blocked', 'limited', 'shadow_banned']),
     reason: z.string().min(3).max(1_000),
   }),
   'admin.media.list': z

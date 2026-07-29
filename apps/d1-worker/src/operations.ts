@@ -1410,7 +1410,7 @@ const handlers: { [K in WorkerOperation]: Handler<K> } = {
          AND NOT EXISTS (
            SELECT 1 FROM swipes s
            WHERE s.actor_user_id = ?1 AND s.target_user_id = p.user_id
-             AND s.action IN ('like', 'skip', 'super_like')
+             AND s.action = 'skip'
          )
          AND (json_array_length(?4) = 0 OR p.age_group IN (SELECT value FROM json_each(?4)))
          AND (json_array_length(?5) = 0 OR EXISTS (
@@ -1436,11 +1436,6 @@ const handlers: { [K in WorkerOperation]: Handler<K> } = {
            SELECT 1 FROM profile_media pm
            WHERE pm.profile_id = p.id AND pm.moderation_status = 'approved'
          ))
-         AND (
-           (?12 IN ('under_16', '16_17') AND p.age_group IN ('under_16', '16_17'))
-           OR (?12 IN ('18_20', '21_25', '26_plus')
-             AND p.age_group IN ('18_20', '21_25', '26_plus'))
-         )
          AND (
            ?13 = ''
            OR p.display_name LIKE ?14 ESCAPE '~'
@@ -1530,7 +1525,6 @@ const handlers: { [K in WorkerOperation]: Handler<K> } = {
     if (!profileViewer && !acceptedAge) {
       throw new ApiError(409, 'PROFILE_REQUIRED', 'Confirm age or create a profile first');
     }
-    const viewerAgeGroup = profileViewer?.age_group ?? acceptedAge?.value ?? '';
     const row = await env.DB.prepare(
       `SELECT
          SUM(CASE WHEN p.user_id <> ?1 THEN 1 ELSE 0 END) AS other_profiles,
@@ -1541,11 +1535,6 @@ const handlers: { [K in WorkerOperation]: Handler<K> } = {
          SUM(CASE WHEN p.user_id <> ?1
            AND p.moderation_status = 'approved' AND p.is_active = 1
            AND u.is_banned = 0 AND u.is_search_enabled = 1 AND u.deleted_at IS NULL
-           AND (
-             (?2 IN ('under_16', '16_17') AND p.age_group IN ('under_16', '16_17'))
-             OR (?2 IN ('18_20', '21_25', '26_plus')
-               AND p.age_group IN ('18_20', '21_25', '26_plus'))
-           )
            AND NOT EXISTS (
              SELECT 1 FROM blocks b WHERE
                (b.blocker_user_id = ?1 AND b.blocked_user_id = p.user_id)
@@ -1554,7 +1543,7 @@ const handlers: { [K in WorkerOperation]: Handler<K> } = {
            THEN 1 ELSE 0 END) AS safe_candidates
        FROM profiles p JOIN users u ON u.id = p.user_id`,
     )
-      .bind(input.userId, viewerAgeGroup)
+      .bind(input.userId)
       .first<{
         other_profiles: number | null;
         other_searchable: number | null;

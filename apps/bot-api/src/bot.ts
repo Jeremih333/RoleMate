@@ -7,6 +7,7 @@ import {
   NEWS_CHANNEL_URL,
   PROMO_CHAT_URL,
   STARS_SUBSCRIPTION_PERIOD_SECONDS,
+  createMenuLaunchPath,
   createMenuLaunchToken,
   ru,
   sha256,
@@ -22,15 +23,12 @@ async function menuLaunchUrl(
   route: MenuLaunchRoute,
 ): Promise<string> {
   const url = new URL(env.MINI_APP_URL);
-  url.pathname = route;
-  url.searchParams.set(
-    'rm_launch',
-    await createMenuLaunchToken({
-      telegramUserId,
-      route,
-      secret: env.SESSION_SECRET,
-    }),
-  );
+  const token = await createMenuLaunchToken({
+    telegramUserId,
+    route,
+    secret: env.SESSION_SECRET,
+  });
+  url.pathname = createMenuLaunchPath(route, token);
   return url.toString();
 }
 

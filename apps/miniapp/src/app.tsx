@@ -1,6 +1,6 @@
 import { type ReactNode, useEffect } from 'react';
 import { useQuery } from '@tanstack/react-query';
-import { menuLaunchRouteSchema, ru } from '@rolemate/shared';
+import { menuLaunchRouteSchema, parseMenuLaunchPath, ru } from '@rolemate/shared';
 import { Redirect, Route, Switch } from 'wouter';
 import { api, ApiError } from './api.js';
 import { Layout } from './components/layout.js';
@@ -25,6 +25,24 @@ function AuthGate({ children }: { children: ReactNode }) {
   const auth = useQuery({
     queryKey: ['auth'],
     queryFn: async () => {
+      const launchUrl = new URL(window.location.href);
+      const pathLaunch = parseMenuLaunchPath(launchUrl.pathname);
+      const legacyRoute = menuLaunchRouteSchema.safeParse(launchUrl.pathname);
+      const legacyToken = launchUrl.searchParams.get('rm_launch');
+      const launch =
+        pathLaunch ??
+        (legacyToken && legacyRoute.success
+          ? { route: legacyRoute.data, token: legacyToken }
+          : undefined);
+      if (launch) {
+        launchUrl.pathname = launch.route;
+        launchUrl.searchParams.delete('rm_launch');
+        window.history.replaceState(
+          window.history.state,
+          '',
+          `${launchUrl.pathname}${launchUrl.search}${launchUrl.hash}`,
+        );
+      }
       const currentUser = async () => {
         const me = await api.me();
         return {
@@ -40,19 +58,10 @@ function AuthGate({ children }: { children: ReactNode }) {
       } catch (error) {
         if (!(error instanceof ApiError) || error.status !== 401) throw error;
       }
-      const launchUrl = new URL(window.location.href);
-      const launchToken = launchUrl.searchParams.get('rm_launch');
-      const launchRoute = menuLaunchRouteSchema.safeParse(window.location.pathname);
       let launchError: unknown;
-      if (launchToken && launchRoute.success) {
+      if (launch) {
         try {
-          await api.authenticateMenu(launchToken, launchRoute.data);
-          launchUrl.searchParams.delete('rm_launch');
-          window.history.replaceState(
-            window.history.state,
-            '',
-            `${launchUrl.pathname}${launchUrl.search}${launchUrl.hash}`,
-          );
+          await api.authenticateMenu(launch.token, launch.route);
           return await currentUser();
         } catch (error) {
           launchError = error;

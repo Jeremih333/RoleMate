@@ -2,10 +2,10 @@ import { webcrypto } from 'node:crypto';
 import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import {
   createMenuLaunchToken,
+  parseMenuLaunchPath,
   ru,
   sha256,
   verifyMenuLaunchToken,
-  type MenuLaunchRoute,
 } from '@rolemate/shared';
 import { DataApiClient } from '../src/d1-client.js';
 import { readEnv } from '../src/env.js';
@@ -331,16 +331,16 @@ describe('Telegram webhook integration', () => {
     expect(links).toHaveLength(7);
     for (const link of links) {
       const url = new URL(link);
-      const route = url.pathname as MenuLaunchRoute;
-      const token = url.searchParams.get('rm_launch');
-      expect(token).toBeTruthy();
+      const launch = parseMenuLaunchPath(url.pathname);
+      expect(link.length).toBeLessThan(256);
+      expect(launch).toBeDefined();
       await expect(
         verifyMenuLaunchToken({
-          token: token!,
-          route,
+          token: launch!.token,
+          route: launch!.route,
           secret: env.SESSION_SECRET,
         }),
-      ).resolves.toMatchObject({ telegramUserId: 42, route });
+      ).resolves.toMatchObject({ telegramUserId: 42, route: launch!.route });
     }
     await app.close();
   });

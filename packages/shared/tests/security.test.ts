@@ -2,8 +2,10 @@ import { webcrypto } from 'node:crypto';
 import { beforeAll, describe, expect, it } from 'vitest';
 import {
   assertAdmin,
+  createMenuLaunchPath,
   createMenuLaunchToken,
   createInvoicePayload,
+  parseMenuLaunchPath,
   signInternalRequest,
   validateTelegramInitData,
   verifyMenuLaunchToken,
@@ -41,7 +43,7 @@ describe('security contracts', () => {
     ).resolves.toBe(false);
   });
 
-  it('binds a short-lived menu launch token to Telegram identity and route', async () => {
+  it('binds a compact expiring menu launch token to Telegram identity and route', async () => {
     const secret = 'menu-session-secret-that-is-at-least-32-characters';
     const now = new Date('2026-07-29T16:00:00Z');
     const token = await createMenuLaunchToken({
@@ -51,6 +53,9 @@ describe('security contracts', () => {
       now,
       ttlSeconds: 60,
     });
+    const path = createMenuLaunchPath('/matches', token);
+    expect(path.length).toBeLessThan(200);
+    expect(parseMenuLaunchPath(path)).toEqual({ route: '/matches', token });
     await expect(
       verifyMenuLaunchToken({ token, route: '/matches', secret, now }),
     ).resolves.toMatchObject({ telegramUserId: 42, route: '/matches' });

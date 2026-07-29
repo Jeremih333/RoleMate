@@ -330,14 +330,14 @@ describe('D1 domain operations', () => {
     ).resolves.toMatchObject({ otherSearchable: 1, safeCandidates: 1 });
   });
 
-  it('ranks more relevant profiles first without exact adult age isolation', async () => {
+  it('ranks more relevant profiles first without hiding another age group', async () => {
     const viewerId = await onboard(2_021);
     const relevantId = await onboard(2_022);
     const lessRelevantId = await upsert(2_023);
     await executeOperation(
       env,
       'users.acceptRules',
-      { userId: lessRelevantId, ageGroup: '26_plus' },
+      { userId: lessRelevantId, ageGroup: '16_17' },
       crypto.randomUUID(),
     );
     await executeOperation(
@@ -347,7 +347,7 @@ describe('D1 domain operations', () => {
         userId: lessRelevantId,
         profile: {
           ...profile,
-          ageGroup: '26_plus',
+          ageGroup: '16_17',
           fandoms: ['Другой фандом'],
           genres: ['Ужасы'],
           languages: ['English'],
@@ -365,6 +365,40 @@ describe('D1 domain operations', () => {
     )) as Array<{ user_id: string; relevance_score: number }>;
     expect(results.map((item) => item.user_id)).toEqual([relevantId, lessRelevantId]);
     expect(results[0]?.relevance_score).toBeGreaterThan(results[1]?.relevance_score ?? 0);
+  });
+
+  it('keeps a searchable profile visible after the viewer likes it', async () => {
+    const viewerId = await onboard(2_026);
+    const candidateId = await onboard(2_027);
+
+    const beforeLike = (await executeOperation(
+      env,
+      'search.list',
+      { userId: viewerId, query: '', limit: 20 },
+      crypto.randomUUID(),
+    )) as Array<{ user_id: string }>;
+    expect(beforeLike).toContainEqual(expect.objectContaining({ user_id: candidateId }));
+
+    await executeOperation(
+      env,
+      'swipes.create',
+      {
+        userId: viewerId,
+        targetUserId: candidateId,
+        action: 'like',
+        source: 'miniapp',
+        idempotencyKey: 'search-repeat-after-like-001',
+      },
+      crypto.randomUUID(),
+    );
+
+    const afterLike = (await executeOperation(
+      env,
+      'search.list',
+      { userId: viewerId, query: '', limit: 20 },
+      crypto.randomUUID(),
+    )) as Array<{ user_id: string }>;
+    expect(afterLike).toContainEqual(expect.objectContaining({ user_id: candidateId }));
   });
 
   it('starts an anonymous chat from a searchable profile without reciprocal approval', async () => {

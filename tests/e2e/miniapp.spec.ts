@@ -452,8 +452,8 @@ test('every MiniApp menu destination authenticates with its signed fallback with
     authenticated = false;
     receivedRoute = '';
     receivedToken = '';
-    const token = `signed-menu-token-${path.slice(1)}`;
-    await page.goto(`${path}?rm_launch=${token}`);
+    const token = `${path.slice(1)}-${'x'.repeat(80)}`;
+    await page.goto(`${path}/_rm/${token}`);
     await expect(page.getByRole('button', { name: 'Повторить вход' })).toHaveCount(0);
     await expect(page.locator('main')).toBeVisible();
     await expect.poll(() => receivedRoute).toBe(path);

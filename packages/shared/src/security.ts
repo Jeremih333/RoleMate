@@ -29,6 +29,43 @@ const menuLaunchPayloadSchema = z.object({
   nonce: z.string().regex(/^[a-f\d]{32}$/),
 });
 
+const menuLaunchRouteCodeSchema = z.enum(['s', 'p', 'm', 'c', 'u', 'r', 't', 'a']);
+type MenuLaunchRouteCode = z.infer<typeof menuLaunchRouteCodeSchema>;
+
+const menuLaunchRouteCodes: Record<MenuLaunchRoute, MenuLaunchRouteCode> = {
+  '/search': 's',
+  '/profile': 'p',
+  '/matches': 'm',
+  '/chats': 'c',
+  '/premium': 'u',
+  '/referrals': 'r',
+  '/settings': 't',
+  '/admin': 'a',
+};
+
+const compactMenuLaunchPayloadSchema = z.object({
+  v: z.literal(2),
+  u: z.number().int().positive().safe(),
+  r: menuLaunchRouteCodeSchema,
+  e: z.number().int().positive(),
+  n: z.string().regex(/^[a-f\d]{16}$/),
+});
+
+export function parseMenuLaunchPath(
+  pathname: string,
+): { route: MenuLaunchRoute; token: string } | undefined {
+  const parts = pathname.split('/');
+  if (parts.length !== 4 || parts[0] !== '' || parts[2] !== '_rm') return undefined;
+  const route = menuLaunchRouteSchema.safeParse(`/${parts[1] ?? ''}`);
+  const token = parts[3] ?? '';
+  if (!route.success || !/^[A-Za-z\d_.-]{80,512}$/.test(token)) return undefined;
+  return { route: route.data, token };
+}
+
+export function createMenuLaunchPath(route: MenuLaunchRoute, token: string): string {
+  return `${route}/_rm/${token}`;
+}
+
 function bytesToHex(bytes: Uint8Array): string {
   return Array.from(bytes, (byte) => byte.toString(16).padStart(2, '0')).join('');
 }
@@ -92,20 +129,19 @@ export async function createMenuLaunchToken(input: {
   now?: Date;
   ttlSeconds?: number;
 }): Promise<string> {
-  const ttlSeconds = input.ttlSeconds ?? 180;
-  if (!Number.isInteger(ttlSeconds) || ttlSeconds < 30 || ttlSeconds > 300) {
+  const ttlSeconds = input.ttlSeconds ?? 30 * 24 * 60 * 60;
+  if (!Number.isInteger(ttlSeconds) || ttlSeconds < 30 || ttlSeconds > 31 * 24 * 60 * 60) {
     throw new Error('Invalid menu launch TTL');
   }
-  const nonce = bytesToHex(crypto.getRandomValues(new Uint8Array(16)));
-  const payload = menuLaunchPayloadSchema.parse({
-    version: 1,
-    telegramUserId: input.telegramUserId,
-    route: input.route,
-    expiresAt: Math.floor((input.now ?? new Date()).getTime() / 1_000) + ttlSeconds,
-    nonce,
+  const payload = compactMenuLaunchPayloadSchema.parse({
+    v: 2,
+    u: input.telegramUserId,
+    r: menuLaunchRouteCodes[input.route],
+    e: Math.floor((input.now ?? new Date()).getTime() / 1_000) + ttlSeconds,
+    n: bytesToHex(crypto.getRandomValues(new Uint8Array(8))),
   });
   const encoded = bytesToBase64Url(encoder.encode(JSON.stringify(payload)));
-  const signature = bytesToHex(await hmac(encoder.encode(input.secret), encoded));
+  const signature = bytesToHex((await hmac(encoder.encode(input.secret), encoded)).slice(0, 16));
   return `${encoded}.${signature}`;
 }
 
@@ -119,10 +155,13 @@ export async function verifyMenuLaunchToken(input: {
   const parts = input.token.split('.');
   const encoded = parts[0] ?? '';
   const receivedSignature = parts[1] ?? '';
-  if (parts.length !== 2 || !/^[a-f\d]{64}$/i.test(receivedSignature)) {
+  if (parts.length !== 2 || !/^(?:[a-f\d]{32}|[a-f\d]{64})$/i.test(receivedSignature)) {
     throw new Error('Invalid menu launch token');
   }
-  const expectedSignature = await hmac(encoder.encode(input.secret), encoded);
+  const expectedSignature = (await hmac(encoder.encode(input.secret), encoded)).slice(
+    0,
+    receivedSignature.length / 2,
+  );
   if (!constantTimeEqual(expectedSignature, hexToBytes(receivedSignature))) {
     throw new Error('Invalid menu launch signature');
   }
@@ -132,8 +171,22 @@ export async function verifyMenuLaunchToken(input: {
   } catch {
     throw new Error('Invalid menu launch payload');
   }
-  const payload = menuLaunchPayloadSchema.parse(rawPayload);
   const now = Math.floor((input.now ?? new Date()).getTime() / 1_000);
+  const compactPayload = compactMenuLaunchPayloadSchema.safeParse(rawPayload);
+  if (compactPayload.success) {
+    const route = menuLaunchRouteSchema.options.find(
+      (candidate) => menuLaunchRouteCodes[candidate] === compactPayload.data.r,
+    );
+    if (route !== input.route || compactPayload.data.e < now) {
+      throw new Error('Expired or mismatched menu launch token');
+    }
+    return {
+      telegramUserId: compactPayload.data.u,
+      route,
+      expiresAt: compactPayload.data.e,
+    };
+  }
+  const payload = menuLaunchPayloadSchema.parse(rawPayload);
   if (payload.route !== input.route || payload.expiresAt < now) {
     throw new Error('Expired or mismatched menu launch token');
   }

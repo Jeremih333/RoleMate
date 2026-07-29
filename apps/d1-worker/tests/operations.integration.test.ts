@@ -212,6 +212,143 @@ describe('D1 domain operations', () => {
     expect(results).toContainEqual(expect.objectContaining({ user_id: otherUserId }));
   });
 
+  it('separates the stable public profile and enforces one or five questionnaires', async () => {
+    const userId = await onboard(2013);
+    const publicProfile = (await executeOperation(
+      env,
+      'publicProfiles.getOwn',
+      { userId },
+      crypto.randomUUID(),
+    )) as { id: string; questionnaire_count: number };
+    expect(publicProfile.id).toBe(userId);
+    expect(publicProfile.questionnaire_count).toBe(1);
+
+    await executeOperation(
+      env,
+      'publicProfiles.update',
+      {
+        userId,
+        displayName: 'Публичное имя',
+        bio: 'Описание отдельного профиля',
+        avatarMediaId: null,
+      },
+      crypto.randomUUID(),
+    );
+    expect(
+      sqlite
+        .prepare('SELECT display_name FROM user_profiles WHERE user_id = ?')
+        .pluck()
+        .get(userId),
+    ).toBe('Публичное имя');
+    await expect(
+      executeOperation(
+        env,
+        'questionnaires.clonePrimary',
+        { userId, title: 'Вторая анкета' },
+        crypto.randomUUID(),
+      ),
+    ).rejects.toMatchObject<ApiError>({ code: 'PREMIUM_REQUIRED' });
+
+    sqlite
+      .prepare(
+        `INSERT INTO premium_entitlements
+           (id, user_id, source, status, starts_at, ends_at)
+         VALUES (?, ?, 'admin', 'active', CURRENT_TIMESTAMP, datetime('now', '+7 days'))`,
+      )
+      .run(crypto.randomUUID(), userId);
+    for (let index = 2; index <= 5; index += 1) {
+      await executeOperation(
+        env,
+        'questionnaires.clonePrimary',
+        { userId, title: `Анкета ${index}` },
+        crypto.randomUUID(),
+      );
+    }
+    const collection = (await executeOperation(
+      env,
+      'questionnaires.listOwn',
+      { userId },
+      crypto.randomUUID(),
+    )) as { premium: boolean; limit: number; questionnaires: unknown[] };
+    expect(collection).toMatchObject({ premium: true, limit: 5 });
+    expect(collection.questionnaires).toHaveLength(5);
+    await expect(
+      executeOperation(
+        env,
+        'questionnaires.clonePrimary',
+        { userId, title: 'Шестая анкета' },
+        crypto.randomUUID(),
+      ),
+    ).rejects.toMatchObject<ApiError>({ code: 'QUESTIONNAIRE_LIMIT' });
+
+    sqlite
+      .prepare(
+        `UPDATE premium_entitlements SET ends_at = datetime('now', '-1 minute')
+         WHERE user_id = ?`,
+      )
+      .run(userId);
+    await executeOperation(env, 'questionnaires.listOwn', { userId }, crypto.randomUUID());
+    expect(
+      sqlite
+        .prepare(
+          `SELECT COUNT(*) FROM questionnaires
+           WHERE user_id = ? AND is_primary = 0 AND is_active = 1`,
+        )
+        .pluck()
+        .get(userId),
+    ).toBe(0);
+  });
+
+  it('supports post comments and independent post ratings', async () => {
+    const authorUserId = await onboard(2014);
+    const readerUserId = await onboard(2015);
+    const postId = crypto.randomUUID();
+    sqlite
+      .prepare(
+        `INSERT INTO telegram_posts
+           (id, author_user_id, content_type, text_preview, status, published_at)
+         VALUES (?, ?, 'text', 'Тестовый пост', 'active', CURRENT_TIMESTAMP)`,
+      )
+      .run(postId, authorUserId);
+
+    await executeOperation(
+      env,
+      'posts.comments.create',
+      { userId: readerUserId, postId, body: 'Комментарий к посту' },
+      crypto.randomUUID(),
+    );
+    await executeOperation(
+      env,
+      'posts.rate',
+      { userId: readerUserId, postId, value: 1 },
+      crypto.randomUUID(),
+    );
+    const feed = (await executeOperation(
+      env,
+      'posts.feed.list',
+      { userId: readerUserId, limit: 20 },
+      crypto.randomUUID(),
+    )) as Array<{ id: string; likes: number; comment_count: number; own_rating: number }>;
+    expect(feed).toContainEqual(
+      expect.objectContaining({ id: postId, likes: 1, comment_count: 1, own_rating: 1 }),
+    );
+    const comments = (await executeOperation(
+      env,
+      'posts.comments.list',
+      { userId: readerUserId, postId, limit: 20 },
+      crypto.randomUUID(),
+    )) as Array<{ body: string }>;
+    expect(comments).toEqual([expect.objectContaining({ body: 'Комментарий к посту' })]);
+    await expect(
+      executeOperation(
+        env,
+        'posts.rate',
+        { userId: authorUserId, postId, value: 1 },
+        crypto.randomUUID(),
+      ),
+    ).rejects.toMatchObject<ApiError>({ code: 'SELF_RATING' });
+  });
+
   it('builds own preview with the same Premium privacy and media rules as discovery', async () => {
     const userId = await onboard(2_013);
     const adminId = await upsert(1_040_929_628);
@@ -404,6 +541,21 @@ describe('D1 domain operations', () => {
   it('starts an anonymous chat from a searchable profile without reciprocal approval', async () => {
     const senderId = await onboard(2_024);
     const recipientId = await onboard(2_025);
+    sqlite
+      .prepare(
+        `UPDATE profiles SET is_active = 0, moderation_status = 'paused'
+         WHERE user_id = ?`,
+      )
+      .run(recipientId);
+    expect(
+      sqlite
+        .prepare(
+          `SELECT COUNT(*) FROM questionnaires
+           WHERE user_id = ? AND is_active = 1 AND moderation_status = 'approved'`,
+        )
+        .pluck()
+        .get(recipientId),
+    ).toBe(1);
     const first = (await executeOperation(
       env,
       'conversations.startDirect',

@@ -15,6 +15,7 @@ import {
 } from './pages/community.js';
 import { HomePage } from './pages/home.js';
 import { ProfileEditorPage, ProfilePage } from './pages/profile.js';
+import { PostsPage, PublicProfilePage, QuestionnairesPage } from './pages/social.js';
 import { SearchPage } from './pages/search.js';
 import { useUserStore } from './store.js';
 import { waitForTelegramInitData } from './telegram.js';
@@ -123,8 +124,15 @@ export function App() {
         <Route path="/search" component={SearchPage} />
         <Route path="/matches" component={MatchesPage} />
         <Route path="/chats" component={ChatsPage} />
-        <Route path="/profile" component={ProfilePage} />
-        <Route path="/profile/edit" component={ProfileEditorPage} />
+        <Route path="/profile" component={PublicProfilePage} />
+        <Route path="/questionnaires" component={QuestionnairesPage} />
+        <Route path="/questionnaires/edit" component={ProfileEditorPage} />
+        <Route path="/questionnaires/:questionnaireId/edit" component={ProfileEditorPage} />
+        <Route path="/profile/edit">
+          <Redirect to="/questionnaires/edit" replace />
+        </Route>
+        <Route path="/profile/legacy" component={ProfilePage} />
+        <Route path="/posts" component={PostsPage} />
         <Route path="/premium" component={PremiumPage} />
         <Route path="/referrals" component={ReferralsPage} />
         <Route path="/settings" component={SettingsPage} />

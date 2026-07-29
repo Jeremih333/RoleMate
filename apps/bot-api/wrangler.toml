@@ -1,4 +1,5 @@
 name = "rolemate-app"
+account_id = "9d1b271d6aec48ab5d8f595d1d3fac61"
 main = "src/cloudflare.ts"
 compatibility_date = "2026-07-28"
 compatibility_flags = ["nodejs_compat"]

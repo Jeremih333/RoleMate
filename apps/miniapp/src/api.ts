@@ -69,6 +69,30 @@ export const api = {
       riskScore: number;
     }>('/me'),
   profile: () => request<UserProfileSummary>('/profile'),
+  publicProfile: () => request<PublicUserProfile>('/public-profile'),
+  savePublicProfile: (input: { displayName: string; bio: string; avatarMediaId: string | null }) =>
+    request<{ updated: true }>('/public-profile', {
+      method: 'PUT',
+      body: JSON.stringify(input),
+    }),
+  questionnaires: () => request<QuestionnaireCollection>('/questionnaires'),
+  questionnaire: (questionnaireId: string) =>
+    request<QuestionnaireSummary>(`/questionnaires/${questionnaireId}`),
+  saveQuestionnaire: (questionnaireId: string, title: string, profile: ProfileInput) =>
+    request<{ updated: true }>(`/questionnaires/${questionnaireId}`, {
+      method: 'PUT',
+      body: JSON.stringify({ title, profile }),
+    }),
+  cloneQuestionnaire: (title: string) =>
+    request<{ id: string; cloned: true }>('/questionnaires/clone', {
+      method: 'POST',
+      body: JSON.stringify({ title }),
+    }),
+  setQuestionnaireActive: (questionnaireId: string, active: boolean) =>
+    request<{ active: boolean }>(`/questionnaires/${questionnaireId}/state`, {
+      method: 'PUT',
+      body: JSON.stringify({ active }),
+    }),
   profilePreview: () => request<SearchProfile>('/profile/preview'),
   saveProfile: (profile: ProfileInput) =>
     request<{ profileId: string; moderationStatus: string; completion: number }>('/profile', {
@@ -129,6 +153,18 @@ export const api = {
       body: '{}',
     }),
   incomingLikes: () => request<IncomingLike[]>('/swipes/incoming'),
+  posts: () => request<SocialPost[]>('/posts?limit=30'),
+  postComments: (postId: string) => request<PostComment[]>(`/posts/${postId}/comments`),
+  addPostComment: (postId: string, body: string) =>
+    request<{ id: string; created: true }>(`/posts/${postId}/comments`, {
+      method: 'POST',
+      body: JSON.stringify({ body }),
+    }),
+  ratePost: (postId: string, value: -1 | 1) =>
+    request<{ saved: true }>(`/posts/${postId}/rating`, {
+      method: 'PUT',
+      body: JSON.stringify({ value }),
+    }),
   premiumStatus: () => request<PremiumStatus>('/premium/status'),
   applyPromotion: (code: string) =>
     request<{
@@ -478,6 +514,69 @@ export interface UserProfileSummary extends Record<string, unknown> {
   in_search_pool: number;
   is_active: number;
   moderation_status: string;
+}
+
+export interface PublicUserProfile {
+  id: string;
+  display_name: string;
+  bio: string;
+  avatar_media_id: string | null;
+  avatar_render_mode: 'photo' | 'animation' | null;
+  questionnaire_count: number;
+  post_count: number;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface QuestionnaireSummary extends UserProfileSummary {
+  id: string;
+  title: string;
+  display_name: string;
+  short_headline: string;
+  is_primary: number;
+  media_count: number;
+  rating_likes: number;
+  rating_dislikes: number;
+  rating_score: number;
+}
+
+export interface QuestionnaireCollection {
+  premium: boolean;
+  limit: number;
+  questionnaires: QuestionnaireSummary[];
+}
+
+export interface SocialPost {
+  id: string;
+  author_user_id: string;
+  source_chat_id: number | null;
+  source_message_id: number | null;
+  content_type: string;
+  text_preview: string;
+  media_telegram_file_id: string | null;
+  media_thumbnail_file_id: string | null;
+  track_title: string | null;
+  track_performer: string | null;
+  published_at: string;
+  display_name: string;
+  avatar_media_id: string | null;
+  avatar_render_mode: 'photo' | 'animation' | null;
+  likes: number;
+  dislikes: number;
+  rating_score: number;
+  comment_count: number;
+  own_rating: -1 | 1 | null;
+}
+
+export interface PostComment {
+  id: string;
+  post_id: string;
+  author_user_id: string;
+  body: string;
+  created_at: string;
+  display_name: string;
+  avatar_media_id: string | null;
+  avatar_render_mode: 'photo' | 'animation' | null;
 }
 
 export interface SearchAvailability {

@@ -158,7 +158,7 @@ button {
   bottom: 0;
   transform: translateX(-50%);
   display: grid;
-  grid-template-columns: repeat(5, 1fr);
+  grid-template-columns: repeat(6, 1fr);
   width: min(100%, 760px);
   padding: 8px 10px calc(8px + var(--safe-bottom));
   background: color-mix(in srgb, var(--surface-solid) 88%, transparent);
@@ -423,6 +423,52 @@ select:focus-visible {
 }
 .profile-media-arrow-right {
   right: 12px;
+}
+.profile-media-fullscreen {
+  position: absolute;
+  z-index: 4;
+  right: 12px;
+  bottom: 12px;
+  display: grid;
+  width: 42px;
+  height: 42px;
+  place-items: center;
+  border: 1px solid rgba(255, 255, 255, 0.32);
+  border-radius: 14px;
+  color: white;
+  background: rgba(10, 15, 27, 0.76);
+  backdrop-filter: blur(10px);
+}
+.media-lightbox {
+  position: fixed;
+  z-index: 1000;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  padding: calc(18px + var(--safe-top)) 18px calc(18px + var(--safe-bottom));
+  background: rgba(3, 5, 10, 0.96);
+}
+.media-lightbox-content {
+  display: block;
+  width: 100%;
+  height: 100%;
+  max-width: 1200px;
+  max-height: calc(100dvh - 36px - var(--safe-top) - var(--safe-bottom));
+  object-fit: contain;
+}
+.media-lightbox-close {
+  position: fixed;
+  z-index: 1001;
+  top: calc(14px + var(--safe-top));
+  right: 14px;
+  display: grid;
+  width: 44px;
+  height: 44px;
+  place-items: center;
+  border: 1px solid rgba(255, 255, 255, 0.35);
+  border-radius: 50%;
+  color: white;
+  background: rgba(10, 15, 27, 0.82);
 }
 .profile-media-dots {
   position: absolute;

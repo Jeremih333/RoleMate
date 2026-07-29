@@ -124,201 +124,262 @@ export function ProfileCard({
   const audioMedia = media.filter((item) => ['audio', 'voice'].includes(item.media_type));
   const documents = media.filter((item) => item.media_type === 'document');
   const [mediaIndex, setMediaIndex] = useState(0);
+  const [fullscreenMediaOpen, setFullscreenMediaOpen] = useState(false);
   const currentMedia = visualMedia[mediaIndex % Math.max(visualMedia.length, 1)];
   const autoPlayCover =
     !expanded &&
     Boolean(profile.has_premium) &&
     mediaIndex === 0 &&
     currentMedia?.media_type === 'video';
+  useEffect(() => {
+    if (!fullscreenMediaOpen) return;
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') setFullscreenMediaOpen(false);
+    };
+    window.addEventListener('keydown', closeOnEscape);
+    return () => window.removeEventListener('keydown', closeOnEscape);
+  }, [fullscreenMediaOpen]);
   return (
-    <Card className={`profile-card overflow-hidden ${expanded ? 'profile-card-expanded' : ''}`}>
-      <div className="profile-cover">
-        {currentMedia ? (
-          currentMedia.media_type === 'video' ? (
-            <video
-              className="absolute inset-0 h-full w-full bg-black object-contain"
-              src={`/api/profile-media/${currentMedia.id}`}
-              controls
-              autoPlay={autoPlayCover}
-              loop={autoPlayCover}
-              muted={autoPlayCover}
-              playsInline
-              preload="metadata"
-            />
-          ) : (
-            <img
-              className="absolute inset-0 h-full w-full object-cover"
-              src={`/api/profile-media/${currentMedia.id}`}
-              alt=""
-              loading="eager"
-            />
-          )
-        ) : null}
-        {visualMedia.length > 1 ? (
-          <>
+    <>
+      <Card className={`profile-card overflow-hidden ${expanded ? 'profile-card-expanded' : ''}`}>
+        <div className="profile-cover">
+          {currentMedia ? (
+            currentMedia.media_type === 'video' ? (
+              <video
+                className="absolute inset-0 h-full w-full bg-black object-contain"
+                src={`/api/profile-media/${currentMedia.id}`}
+                controls
+                autoPlay={autoPlayCover}
+                loop={autoPlayCover}
+                muted={autoPlayCover}
+                playsInline
+                preload="metadata"
+              />
+            ) : (
+              <img
+                className="absolute inset-0 h-full w-full object-cover"
+                src={`/api/profile-media/${currentMedia.id}`}
+                alt=""
+                loading="eager"
+              />
+            )
+          ) : null}
+          {currentMedia ? (
             <button
-              className="profile-media-arrow profile-media-arrow-left"
+              className="profile-media-fullscreen"
               type="button"
-              aria-label={ru.miniApp.search.previousMedia}
-              onClick={() =>
-                setMediaIndex((index) => (index - 1 + visualMedia.length) % visualMedia.length)
-              }
+              aria-label={ru.miniApp.search.openMediaFullscreen}
+              onClick={() => setFullscreenMediaOpen(true)}
             >
-              <ChevronLeft />
+              <Maximize2 className="h-5 w-5" />
             </button>
-            <button
-              className="profile-media-arrow profile-media-arrow-right"
-              type="button"
-              aria-label={ru.miniApp.search.nextMedia}
-              onClick={() => setMediaIndex((index) => (index + 1) % visualMedia.length)}
-            >
-              <ChevronRight />
-            </button>
-            <div className="profile-media-dots" aria-hidden>
-              {visualMedia.map((item, index) => (
-                <span className={index === mediaIndex ? 'active' : ''} key={item.id} />
-              ))}
-            </div>
-          </>
-        ) : null}
-        <div className="compatibility">
-          {preview ? (
-            <span>{ru.miniApp.profile.previewBadge}</span>
-          ) : (
+          ) : null}
+          {visualMedia.length > 1 ? (
             <>
-              {profile.compatibility}%<span>{ru.miniApp.search.matchPercent}</span>
-            </>
-          )}
-        </div>
-        {profile.is_premium ? (
-          <span className="premium-badge">
-            <Star /> Premium
-          </span>
-        ) : null}
-      </div>
-      <div className="p-5">
-        <div className="flex items-start justify-between gap-3">
-          <div className="flex min-w-0 items-center gap-3">
-            <ProfileAvatar
-              mediaId={profile.avatar_media_id}
-              renderMode={profile.avatar_render_mode}
-              name={profile.display_name}
-            />
-            <div className="min-w-0">
-              <h2 className="truncate font-display text-3xl font-semibold">
-                {profile.display_name}
-              </h2>
-              <p className="mt-1 truncate text-sm text-muted">{profile.short_headline}</p>
-            </div>
-          </div>
-          <span className="activity-dot" title={ru.miniApp.search.recentlyActive} />
-        </div>
-        <div className="mt-4 flex flex-wrap gap-2">
-          {[
-            ...(expanded ? fandoms : fandoms.slice(0, 2)),
-            ...(expanded ? genres : genres.slice(0, 2)),
-            ...(expanded ? tags : tags.slice(0, 3)),
-          ].map((tag) => (
-            <span className="tag" key={tag}>
-              {tag}
-            </span>
-          ))}
-        </div>
-        <ProfileMarkdown
-          className={`mt-4 text-sm leading-relaxed text-soft ${expanded ? '' : 'line-clamp-4'}`}
-          allowLinks={Boolean(profile.has_premium)}
-        >
-          {profile.about}
-        </ProfileMarkdown>
-        {audioMedia.length ? (
-          <div className="profile-audio-list">
-            {audioMedia.map((item, index) => (
-              <div className="profile-track" key={item.id}>
-                <div className="profile-track-cover">
-                  {item.has_thumbnail ? (
-                    <img src={`/api/profile-media/${item.id}/thumbnail`} alt="" loading="lazy" />
-                  ) : (
-                    <Music aria-hidden />
-                  )}
-                </div>
-                <div className="profile-track-content">
-                  <strong>{item.track_title || ru.miniApp.search.trackUnknown}</strong>
-                  <span>{item.track_performer || ru.miniApp.search.performerUnknown}</span>
-                  <audio
-                    className="w-full"
-                    src={`/api/profile-media/${item.id}`}
-                    controls
-                    preload="none"
-                    aria-label={ru.miniApp.search.profileAudio(index + 1)}
-                  />
-                </div>
+              <button
+                className="profile-media-arrow profile-media-arrow-left"
+                type="button"
+                aria-label={ru.miniApp.search.previousMedia}
+                onClick={() =>
+                  setMediaIndex((index) => (index - 1 + visualMedia.length) % visualMedia.length)
+                }
+              >
+                <ChevronLeft />
+              </button>
+              <button
+                className="profile-media-arrow profile-media-arrow-right"
+                type="button"
+                aria-label={ru.miniApp.search.nextMedia}
+                onClick={() => setMediaIndex((index) => (index + 1) % visualMedia.length)}
+              >
+                <ChevronRight />
+              </button>
+              <div className="profile-media-dots" aria-hidden>
+                {visualMedia.map((item, index) => (
+                  <span className={index === mediaIndex ? 'active' : ''} key={item.id} />
+                ))}
               </div>
+            </>
+          ) : null}
+          <div className="compatibility">
+            {preview ? (
+              <span>{ru.miniApp.profile.previewBadge}</span>
+            ) : (
+              <>
+                {profile.compatibility}%<span>{ru.miniApp.search.matchPercent}</span>
+              </>
+            )}
+          </div>
+          {profile.is_premium ? (
+            <span className="premium-badge">
+              <Star /> Premium
+            </span>
+          ) : null}
+        </div>
+        <div className="p-5">
+          <div className="flex items-start justify-between gap-3">
+            <div className="flex min-w-0 items-center gap-3">
+              <ProfileAvatar
+                mediaId={profile.avatar_media_id}
+                renderMode={profile.avatar_render_mode}
+                name={profile.display_name}
+              />
+              <div className="min-w-0">
+                <h2 className="truncate font-display text-3xl font-semibold">
+                  {profile.display_name}
+                </h2>
+                <p className="mt-1 truncate text-sm text-muted">{profile.short_headline}</p>
+              </div>
+            </div>
+            <span className="activity-dot" title={ru.miniApp.search.recentlyActive} />
+          </div>
+          <div className="mt-4 flex flex-wrap gap-2">
+            {[
+              ...(expanded ? fandoms : fandoms.slice(0, 2)),
+              ...(expanded ? genres : genres.slice(0, 2)),
+              ...(expanded ? tags : tags.slice(0, 3)),
+            ].map((tag) => (
+              <span className="tag" key={tag}>
+                {tag}
+              </span>
             ))}
           </div>
-        ) : null}
-        {documents.map((item) => (
-          <a
-            className="mt-3 block text-sm text-lilac underline"
-            href={`/api/profile-media/${item.id}`}
-            key={item.id}
+          <ProfileMarkdown
+            className={`mt-4 text-sm leading-relaxed text-soft ${expanded ? '' : 'line-clamp-4'}`}
+            allowLinks={Boolean(profile.has_premium)}
           >
-            {ru.miniApp.profile.openMedia}
-          </a>
-        ))}
-        <div className="mt-4 flex items-center gap-3 text-xs text-muted">
-          <strong className="text-soft">{ru.miniApp.search.rating}:</strong>
-          <span>
-            👍 {profile.rating_likes ?? 0} {ru.miniApp.search.likes}
-          </span>
-          <span>
-            👎 {profile.rating_dislikes ?? 0} {ru.miniApp.search.dislikes}
-          </span>
-        </div>
-        <div className="mt-5 grid grid-cols-2 gap-2 text-xs text-muted">
-          <span>
-            {ru.miniApp.search.style}:{' '}
-            {writingStyleLabels[profile.writing_style] ?? profile.writing_style}
-          </span>
-          <span>
-            {ru.miniApp.search.posts}:{' '}
-            {postLengthLabels[profile.average_post_length] ?? profile.average_post_length}
-          </span>
-          <span>
-            {ru.miniApp.search.activity}:{' '}
-            {activityLabels[profile.activity_frequency] ?? profile.activity_frequency}
-          </span>
-          <span>
-            {ru.miniApp.search.age}:{' '}
-            {profile.age_group
-              ? (ageLabels[profile.age_group] ?? profile.age_group)
-              : ru.miniApp.search.demographicsHidden}
-          </span>
-          <span>
-            {ru.miniApp.profile.gender}:{' '}
-            {profile.gender
-              ? (genderLabels[profile.gender] ?? profile.gender)
-              : ru.miniApp.search.demographicsHidden}
-          </span>
-        </div>
-        {expanded ? <ProfileDetails profile={profile} /> : null}
-        {!preview ? (
-          <div className="profile-card-primary-actions">
-            {!expanded && onOpen ? (
-              <Button type="button" variant="secondary" onClick={onOpen}>
-                <Maximize2 className="h-4 w-4" />
-                {ru.miniApp.search.openProfile}
-              </Button>
-            ) : null}
-            {expanded && onMessage ? (
-              <Button type="button" loading={messagePending} onClick={onMessage}>
-                <MessageCircle className="h-4 w-4" />
-                {messagePending ? ru.miniApp.search.startingChat : ru.miniApp.search.writeMessage}
-              </Button>
-            ) : null}
+            {profile.about}
+          </ProfileMarkdown>
+          {audioMedia.length ? (
+            <div className="profile-audio-list">
+              {audioMedia.map((item, index) => (
+                <div className="profile-track" key={item.id}>
+                  <div className="profile-track-cover">
+                    {item.has_thumbnail ? (
+                      <img src={`/api/profile-media/${item.id}/thumbnail`} alt="" loading="lazy" />
+                    ) : (
+                      <Music aria-hidden />
+                    )}
+                  </div>
+                  <div className="profile-track-content">
+                    <strong>{item.track_title || ru.miniApp.search.trackUnknown}</strong>
+                    <span>{item.track_performer || ru.miniApp.search.performerUnknown}</span>
+                    <audio
+                      className="w-full"
+                      src={`/api/profile-media/${item.id}`}
+                      controls
+                      preload="none"
+                      aria-label={ru.miniApp.search.profileAudio(index + 1)}
+                    />
+                  </div>
+                </div>
+              ))}
+            </div>
+          ) : null}
+          {documents.map((item) => (
+            <a
+              className="mt-3 block text-sm text-lilac underline"
+              href={`/api/profile-media/${item.id}`}
+              key={item.id}
+            >
+              {ru.miniApp.profile.openMedia}
+            </a>
+          ))}
+          <div className="mt-4 flex items-center gap-3 text-xs text-muted">
+            <strong className="text-soft">{ru.miniApp.search.rating}:</strong>
+            <span>
+              👍 {profile.rating_likes ?? 0} {ru.miniApp.search.likes}
+            </span>
+            <span>
+              👎 {profile.rating_dislikes ?? 0} {ru.miniApp.search.dislikes}
+            </span>
           </div>
+          <div className="mt-5 grid grid-cols-2 gap-2 text-xs text-muted">
+            <span>
+              {ru.miniApp.search.style}:{' '}
+              {writingStyleLabels[profile.writing_style] ?? profile.writing_style}
+            </span>
+            <span>
+              {ru.miniApp.search.posts}:{' '}
+              {postLengthLabels[profile.average_post_length] ?? profile.average_post_length}
+            </span>
+            <span>
+              {ru.miniApp.search.activity}:{' '}
+              {activityLabels[profile.activity_frequency] ?? profile.activity_frequency}
+            </span>
+            <span>
+              {ru.miniApp.search.age}:{' '}
+              {profile.age_group
+                ? (ageLabels[profile.age_group] ?? profile.age_group)
+                : ru.miniApp.search.demographicsHidden}
+            </span>
+            <span>
+              {ru.miniApp.profile.gender}:{' '}
+              {profile.gender
+                ? (genderLabels[profile.gender] ?? profile.gender)
+                : ru.miniApp.search.demographicsHidden}
+            </span>
+          </div>
+          {expanded ? <ProfileDetails profile={profile} /> : null}
+          {!preview ? (
+            <div className="profile-card-primary-actions">
+              {!expanded && onOpen ? (
+                <Button type="button" variant="secondary" onClick={onOpen}>
+                  <Maximize2 className="h-4 w-4" />
+                  {ru.miniApp.search.openProfile}
+                </Button>
+              ) : null}
+              {expanded && onMessage ? (
+                <Button type="button" loading={messagePending} onClick={onMessage}>
+                  <MessageCircle className="h-4 w-4" />
+                  {messagePending ? ru.miniApp.search.startingChat : ru.miniApp.search.writeMessage}
+                </Button>
+              ) : null}
+            </div>
+          ) : null}
+        </div>
+      </Card>
+      <AnimatePresence>
+        {fullscreenMediaOpen && currentMedia ? (
+          <motion.div
+            className="media-lightbox"
+            role="dialog"
+            aria-modal="true"
+            aria-label={ru.miniApp.search.openMediaFullscreen}
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            onMouseDown={(event) => {
+              if (event.target === event.currentTarget) setFullscreenMediaOpen(false);
+            }}
+          >
+            <button
+              className="media-lightbox-close"
+              type="button"
+              aria-label={ru.miniApp.search.closeMediaFullscreen}
+              onClick={() => setFullscreenMediaOpen(false)}
+            >
+              <X />
+            </button>
+            {currentMedia.media_type === 'video' ? (
+              <video
+                className="media-lightbox-content"
+                src={`/api/profile-media/${currentMedia.id}`}
+                controls
+                autoPlay
+                playsInline
+              />
+            ) : (
+              <img
+                className="media-lightbox-content"
+                src={`/api/profile-media/${currentMedia.id}`}
+                alt=""
+              />
+            )}
+          </motion.div>
         ) : null}
-      </div>
-    </Card>
+      </AnimatePresence>
+    </>
   );
 }
 

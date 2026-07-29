@@ -483,21 +483,54 @@ export function ProfilePage() {
 export function ProfileEditorPage() {
   const queryClient = useQueryClient();
   const [languageDraft, setLanguageDraft] = useState('');
-  const profile = useQuery({ queryKey: ['profile'], queryFn: api.profile, retry: false });
-  const media = useQuery({ queryKey: ['profile-media'], queryFn: api.profileMedia, retry: false });
+  const questionnaireId =
+    window.location.pathname.match(
+      /^\/questionnaires\/([0-9a-f]{8}-[0-9a-f-]{27,})\/edit$/i,
+    )?.[1] ?? null;
+  const [questionnaireTitle, setQuestionnaireTitle] = useState('');
+  const profile = useQuery({
+    queryKey: questionnaireId ? ['questionnaire', questionnaireId] : ['profile'],
+    queryFn: () => (questionnaireId ? api.questionnaire(questionnaireId) : api.profile()),
+    retry: false,
+  });
+  const media = useQuery({
+    queryKey: ['profile-media'],
+    queryFn: api.profileMedia,
+    retry: false,
+    enabled: !questionnaireId,
+  });
   const form = useForm<ProfileInput>({
     resolver: zodResolver(profileSchema) as Resolver<ProfileInput>,
     defaultValues: defaults,
   });
   const resetForm = form.reset;
   useEffect(() => {
-    if (profile.data) resetForm(existingProfile(profile.data));
-  }, [profile.data, resetForm]);
+    if (profile.data) {
+      resetForm(existingProfile(profile.data));
+      if (questionnaireId && 'title' in profile.data) {
+        setQuestionnaireTitle(String(profile.data.title));
+      }
+    }
+  }, [profile.data, questionnaireId, resetForm]);
   const save = useMutation({
-    mutationFn: api.saveProfile,
+    mutationFn: async (submittedProfile: ProfileInput) => {
+      if (questionnaireId) {
+        await api.saveQuestionnaire(
+          questionnaireId,
+          questionnaireTitle.trim() || submittedProfile.shortHeadline,
+          submittedProfile,
+        );
+      } else {
+        await api.saveProfile(submittedProfile);
+      }
+    },
     onSuccess: (_result, submittedProfile) => {
       form.reset(submittedProfile);
       void queryClient.invalidateQueries({ queryKey: ['profile'] });
+      void queryClient.invalidateQueries({ queryKey: ['questionnaires'] });
+      if (questionnaireId) {
+        void queryClient.invalidateQueries({ queryKey: ['questionnaire', questionnaireId] });
+      }
       void queryClient.invalidateQueries({ queryKey: ['profile-preview'] });
       void queryClient.invalidateQueries({ queryKey: ['search'] });
     },
@@ -576,6 +609,18 @@ export function ProfileEditorPage() {
         <p className="mt-2 text-sm text-muted">{ru.miniApp.profile.privacyNotice}</p>
       </div>
       <Card className="space-y-5 p-5">
+        {questionnaireId ? (
+          <label>
+            <span>{ru.miniApp.social.titlePrompt}</span>
+            <input
+              className={field}
+              minLength={2}
+              maxLength={80}
+              value={questionnaireTitle}
+              onChange={(event) => setQuestionnaireTitle(event.target.value)}
+            />
+          </label>
+        ) : null}
         <label>
           <span>{ru.miniApp.profile.alias}</span>
           <input

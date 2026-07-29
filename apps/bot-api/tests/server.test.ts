@@ -348,7 +348,20 @@ describe('Telegram webhook integration', () => {
     const links = (rows ?? []).flatMap((row) =>
       row.flatMap((button) => (button.web_app ? [button.web_app.url] : [])),
     );
-    expect(links).toHaveLength(7);
+    expect(links).toHaveLength(9);
+    expect(links.map((link) => parseMenuLaunchPath(new URL(link).pathname)?.route)).toEqual(
+      expect.arrayContaining([
+        '/search',
+        '/profile',
+        '/questionnaires',
+        '/posts',
+        '/matches',
+        '/chats',
+        '/premium',
+        '/referrals',
+        '/settings',
+      ]),
+    );
     for (const link of links) {
       const url = new URL(link);
       const launch = parseMenuLaunchPath(url.pathname);

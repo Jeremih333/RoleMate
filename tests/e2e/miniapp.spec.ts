@@ -87,6 +87,71 @@ async function mockApi(
         profile_completion_percent: 100,
         in_search_pool: 1,
       },
+      '/api/public-profile': {
+        id: '00000000-0000-4000-8000-000000000001',
+        display_name: 'Лис',
+        bio: 'Отдельный публичный профиль',
+        avatar_media_id: null,
+        avatar_render_mode: null,
+        questionnaire_count: 1,
+        post_count: 1,
+        created_at: '2026-07-29 12:00:00',
+        updated_at: '2026-07-29 12:00:00',
+      },
+      '/api/questionnaires': {
+        premium: true,
+        limit: 5,
+        questionnaires: [
+          {
+            id: '00000000-0000-4000-8000-000000000010',
+            title: 'Основная история',
+            display_name: 'Лис',
+            short_headline: 'Ищу соавтора',
+            is_primary: 1,
+            is_active: 1,
+            moderation_status: 'approved',
+            media_count: 0,
+            rating_likes: 4,
+            rating_dislikes: 1,
+            rating_score: 3,
+          },
+        ],
+      },
+      '/api/posts': [
+        {
+          id: '00000000-0000-4000-8000-000000000099',
+          author_user_id: '00000000-0000-4000-8000-000000000002',
+          source_chat_id: 42,
+          source_message_id: 10,
+          content_type: 'text',
+          text_preview: 'Пост из отдельного профиля',
+          media_telegram_file_id: null,
+          media_thumbnail_file_id: null,
+          track_title: null,
+          track_performer: null,
+          published_at: '2026-07-29 12:00:00',
+          display_name: 'Автор',
+          avatar_media_id: null,
+          avatar_render_mode: null,
+          likes: 2,
+          dislikes: 0,
+          rating_score: 2,
+          comment_count: 1,
+          own_rating: null,
+        },
+      ],
+      '/api/posts/00000000-0000-4000-8000-000000000099/comments': [
+        {
+          id: '00000000-0000-4000-8000-000000000098',
+          post_id: '00000000-0000-4000-8000-000000000099',
+          author_user_id: '00000000-0000-4000-8000-000000000003',
+          body: 'Первый комментарий',
+          created_at: '2026-07-29 12:01:00',
+          display_name: 'Читатель',
+          avatar_media_id: null,
+          avatar_render_mode: null,
+        },
+      ],
       '/api/profile/preview': {
         id: '00000000-0000-4000-8000-000000000010',
         user_id: '00000000-0000-4000-8000-000000000001',
@@ -331,6 +396,44 @@ test.beforeEach(async ({ page }) => {
   await mockTelegram(page);
 });
 
+test('public profile is separate from questionnaires and exposes only the internal ID', async ({
+  page,
+}) => {
+  await mockApi(page);
+  await page.goto('/profile');
+  await expect(page.getByRole('heading', { name: 'Мой профиль' })).toBeVisible();
+  await expect(page.getByText('00000000-0000-4000-8000-000000000001')).toBeVisible();
+  await expect(page.getByText(/Telegram ID/i)).toHaveCount(0);
+
+  await page.goto('/questionnaires');
+  await expect(page.getByRole('heading', { name: 'Анкеты для поиска' })).toBeVisible();
+  await expect(page.getByText('1 из 5')).toBeVisible();
+  await expect(page.getByText('Основная история')).toBeVisible();
+});
+
+test('posts section renders ratings and opens comments', async ({ page }) => {
+  await mockApi(page);
+  await page.goto('/posts');
+  await expect(page.getByRole('heading', { name: 'Посты' })).toBeVisible();
+  await expect(page.getByText('Пост из отдельного профиля')).toBeVisible();
+  await page.getByRole('button', { name: /1$/ }).click();
+  await expect(page.getByText('Первый комментарий')).toBeVisible();
+});
+
+test('questionnaire media opens fullscreen and closes without losing the card', async ({
+  page,
+}) => {
+  await mockApi(page);
+  await page.goto('/search');
+  await page.getByRole('button', { name: 'Открыть медиа на весь экран' }).click();
+  const dialog = page.getByRole('dialog', { name: 'Открыть медиа на весь экран' });
+  await expect(dialog).toBeVisible();
+  await expect(dialog.locator('img')).toHaveCSS('object-fit', 'contain');
+  await page.getByRole('button', { name: 'Закрыть полноэкранный просмотр' }).click();
+  await expect(dialog).toBeHidden();
+  await expect(page.getByRole('heading', { name: 'Лис' })).toBeVisible();
+});
+
 test('home and search remain usable on Telegram-sized screens', async ({ page }) => {
   await mockApi(page);
   await page.goto('/');
@@ -443,6 +546,8 @@ test('every MiniApp menu destination authenticates with its signed fallback with
   for (const path of [
     '/search',
     '/profile',
+    '/questionnaires',
+    '/posts',
     '/matches',
     '/chats',
     '/premium',
@@ -589,7 +694,7 @@ test('profile page can disable its own questionnaire and renders the bot avatar'
   page,
 }) => {
   await mockApi(page);
-  await page.goto('/profile');
+  await page.goto('/profile/legacy');
   await expect(page.locator('img.brand-mark').first()).toHaveAttribute(
     'src',
     '/assets/telegram-bot-avatar.jpg',
@@ -601,7 +706,7 @@ test('profile page can disable its own questionnaire and renders the bot avatar'
 
 test('profile owner can preview the exact public card with its media header', async ({ page }) => {
   await mockApi(page);
-  await page.goto('/profile');
+  await page.goto('/profile/legacy');
   await page.getByRole('button', { name: 'Посмотреть глазами других' }).click();
   await expect(page.getByText('Предпросмотр', { exact: true })).toBeVisible();
   await expect(page.locator('.profile-markdown strong')).toHaveText('сложные сюжеты');
@@ -632,7 +737,7 @@ test('own profile uses the first ordered visual media as its header', async ({ p
       },
     ],
   });
-  await page.goto('/profile');
+  await page.goto('/profile/legacy');
   await expect(page.locator('.profile-cover video')).toHaveAttribute(
     'src',
     '/api/profile-media/00000000-0000-4000-8000-000000000301',
@@ -928,7 +1033,7 @@ test('active Premium section shows expiry date and remaining days', async ({ pag
 test('profile state card remains readable on a narrow Telegram viewport', async ({ page }) => {
   await mockApi(page);
   await page.setViewportSize({ width: 360, height: 720 });
-  await page.goto('/profile');
+  await page.goto('/profile/legacy');
   const copy = page.locator('.profile-state-copy');
   await expect(copy).toBeVisible();
   expect((await copy.boundingBox())?.width ?? 0).toBeGreaterThan(150);

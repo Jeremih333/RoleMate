@@ -578,6 +578,51 @@ const handlers: { [K in WorkerOperation]: Handler<K> } = {
     )
       .bind(input.userId)
       .run();
+    await env.DB.batch([
+      env.DB.prepare(
+        `INSERT OR IGNORE INTO user_profiles (user_id, display_name, bio)
+         VALUES (?1, ?2, ?3)`,
+      ).bind(input.userId, input.profile.displayName, input.profile.about),
+      env.DB.prepare(
+        `INSERT OR IGNORE INTO questionnaires (
+          id, user_id, title, display_name, age_group, short_headline, about,
+          roleplay_experience, preferred_role, writing_style, average_post_length,
+          activity_frequency, timezone, active_hours, languages, fandoms, genres, tags,
+          settings, plots, looking_for, boundaries, adult_topics_allowed,
+          contact_reveal_policy, gender, moderation_status, moderation_reason,
+          profile_completion_percent, is_active, is_primary, avatar_media_id,
+          avatar_render_mode, last_boosted_at, created_at, updated_at
+        )
+        SELECT id, user_id, short_headline, display_name, age_group, short_headline, about,
+          roleplay_experience, preferred_role, writing_style, average_post_length,
+          activity_frequency, timezone, active_hours, languages, fandoms, genres, tags,
+          settings, plots, looking_for, boundaries, adult_topics_allowed,
+          contact_reveal_policy, gender, moderation_status, moderation_reason,
+          profile_completion_percent, is_active, 1, avatar_media_id,
+          avatar_render_mode, last_boosted_at, created_at, updated_at
+        FROM profiles WHERE user_id = ?1`,
+      ).bind(input.userId),
+      env.DB.prepare(
+        `UPDATE questionnaires SET
+          display_name = source.display_name, age_group = source.age_group,
+          short_headline = source.short_headline, about = source.about,
+          roleplay_experience = source.roleplay_experience,
+          preferred_role = source.preferred_role, writing_style = source.writing_style,
+          average_post_length = source.average_post_length,
+          activity_frequency = source.activity_frequency, timezone = source.timezone,
+          active_hours = source.active_hours, languages = source.languages,
+          fandoms = source.fandoms, genres = source.genres, tags = source.tags,
+          settings = source.settings, plots = source.plots, looking_for = source.looking_for,
+          boundaries = source.boundaries, adult_topics_allowed = source.adult_topics_allowed,
+          contact_reveal_policy = source.contact_reveal_policy, gender = source.gender,
+          moderation_status = source.moderation_status,
+          profile_completion_percent = source.profile_completion_percent,
+          is_active = source.is_active, updated_at = CURRENT_TIMESTAMP
+        FROM profiles source
+        WHERE questionnaires.user_id = ?1 AND questionnaires.is_primary = 1
+          AND source.user_id = questionnaires.user_id`,
+      ).bind(input.userId),
+    ]);
 
     const referral = await env.DB.prepare(
       `SELECT r.id, r.referrer_user_id, u.telegram_user_id
@@ -776,6 +821,10 @@ const handlers: { [K in WorkerOperation]: Handler<K> } = {
         `UPDATE users SET is_search_enabled = ?2, updated_at = CURRENT_TIMESTAMP
          WHERE id = ?1`,
       ).bind(input.userId, input.active ? 1 : 0),
+      env.DB.prepare(
+        `UPDATE questionnaires SET is_active = ?2, updated_at = CURRENT_TIMESTAMP
+         WHERE user_id = ?1 AND is_primary = 1`,
+      ).bind(input.userId, input.active ? 1 : 0),
     ]);
     return { active: input.active };
   },
@@ -864,6 +913,29 @@ const handlers: { [K in WorkerOperation]: Handler<K> } = {
         input.height ?? null,
       )
       .run();
+    await env.DB.prepare(
+      `INSERT OR REPLACE INTO questionnaire_media
+         (id, questionnaire_id, telegram_file_id, telegram_file_unique_id, media_type,
+          sort_order, moderation_status, track_title, track_performer,
+          thumbnail_telegram_file_id, file_size_bytes, duration_seconds, width, height)
+       VALUES (?1, ?2, ?3, ?4, ?5, ?6, 'approved', ?7, ?8, ?9, ?10, ?11, ?12, ?13)`,
+    )
+      .bind(
+        id,
+        profile.id,
+        input.telegramFileId,
+        input.telegramFileUniqueId,
+        input.mediaType,
+        total,
+        input.trackTitle ?? null,
+        input.trackPerformer ?? null,
+        input.thumbnailTelegramFileId ?? null,
+        input.fileSizeBytes ?? null,
+        input.durationSeconds ?? null,
+        input.width ?? null,
+        input.height ?? null,
+      )
+      .run();
     return { id, moderationStatus: 'approved' };
   },
   'profiles.media.delete': async (env, input) => {
@@ -880,6 +952,22 @@ const handlers: { [K in WorkerOperation]: Handler<K> } = {
       .bind(input.mediaId, input.userId)
       .run();
     if (result.meta.changes !== 1) throw new ApiError(404, 'MEDIA_NOT_FOUND', 'Image not found');
+    await env.DB.batch([
+      env.DB.prepare(
+        `UPDATE questionnaires SET avatar_media_id = NULL, avatar_render_mode = NULL
+         WHERE user_id = ?2 AND avatar_media_id = ?1`,
+      ).bind(input.mediaId, input.userId),
+      env.DB.prepare(
+        `UPDATE user_profiles SET avatar_media_id = NULL, avatar_render_mode = NULL
+         WHERE user_id = ?2 AND avatar_media_id = ?1`,
+      ).bind(input.mediaId, input.userId),
+      env.DB.prepare(
+        `DELETE FROM questionnaire_media
+         WHERE id = ?1 AND questionnaire_id IN (
+           SELECT id FROM questionnaires WHERE user_id = ?2
+         )`,
+      ).bind(input.mediaId, input.userId),
+    ]);
     return { deleted: true };
   },
   'profiles.media.reorder': async (env, input) => {
@@ -904,25 +992,39 @@ const handlers: { [K in WorkerOperation]: Handler<K> } = {
     }
     if (ownedIds.length > 2) await requirePremium(env, input.userId);
     await env.DB.batch(
-      input.mediaIds.map((mediaId, sortOrder) =>
+      input.mediaIds.flatMap((mediaId, sortOrder) => [
         env.DB.prepare(
           `UPDATE profile_media SET sort_order = ?3
              WHERE id = ?2 AND profile_id IN (
                SELECT id FROM profiles WHERE user_id = ?1
              )`,
         ).bind(input.userId, mediaId, sortOrder),
-      ),
+        env.DB.prepare(
+          `UPDATE questionnaire_media SET sort_order = ?3
+           WHERE id = ?2 AND questionnaire_id IN (
+             SELECT id FROM questionnaires WHERE user_id = ?1 AND is_primary = 1
+           )`,
+        ).bind(input.userId, mediaId, sortOrder),
+      ]),
     );
     return { reordered: true, mediaIds: input.mediaIds };
   },
   'profiles.avatar.set': async (env, input) => {
     if (input.mediaId === null) {
-      await env.DB.prepare(
-        `UPDATE profiles SET avatar_media_id = NULL, avatar_render_mode = NULL,
-           updated_at = CURRENT_TIMESTAMP WHERE user_id = ?1`,
-      )
-        .bind(input.userId)
-        .run();
+      await env.DB.batch([
+        env.DB.prepare(
+          `UPDATE profiles SET avatar_media_id = NULL, avatar_render_mode = NULL,
+             updated_at = CURRENT_TIMESTAMP WHERE user_id = ?1`,
+        ).bind(input.userId),
+        env.DB.prepare(
+          `UPDATE questionnaires SET avatar_media_id = NULL, avatar_render_mode = NULL,
+             updated_at = CURRENT_TIMESTAMP WHERE user_id = ?1 AND is_primary = 1`,
+        ).bind(input.userId),
+        env.DB.prepare(
+          `UPDATE user_profiles SET avatar_media_id = NULL, avatar_render_mode = NULL,
+             updated_at = CURRENT_TIMESTAMP WHERE user_id = ?1`,
+        ).bind(input.userId),
+      ]);
       return { avatarMediaId: null, renderMode: null };
     }
     const media = await env.DB.prepare(
@@ -969,7 +1071,345 @@ const handlers: { [K in WorkerOperation]: Handler<K> } = {
     )
       .bind(input.userId, media.id, renderMode)
       .run();
+    await env.DB.batch([
+      env.DB.prepare(
+        `UPDATE questionnaires SET avatar_media_id = ?2, avatar_render_mode = ?3,
+         updated_at = CURRENT_TIMESTAMP WHERE user_id = ?1 AND is_primary = 1`,
+      ).bind(input.userId, media.id, renderMode),
+      env.DB.prepare(
+        `UPDATE user_profiles SET avatar_media_id = ?2, avatar_render_mode = ?3,
+         updated_at = CURRENT_TIMESTAMP WHERE user_id = ?1`,
+      ).bind(input.userId, media.id, renderMode),
+    ]);
     return { avatarMediaId: media.id, renderMode };
+  },
+  'publicProfiles.getOwn': async (env, input) => {
+    await env.DB.prepare(
+      `INSERT OR IGNORE INTO user_profiles (user_id, display_name, bio)
+       SELECT id, telegram_first_name, '' FROM users WHERE id = ?1`,
+    )
+      .bind(input.userId)
+      .run();
+    const profile = await env.DB.prepare(
+      `SELECT up.user_id AS id, up.display_name, up.bio, up.avatar_media_id,
+              up.avatar_render_mode, up.created_at, up.updated_at,
+              (SELECT COUNT(*) FROM questionnaires q WHERE q.user_id = up.user_id) AS questionnaire_count,
+              (SELECT COUNT(*) FROM telegram_posts tp
+               WHERE tp.author_user_id = up.user_id AND tp.status = 'active') AS post_count
+       FROM user_profiles up WHERE up.user_id = ?1`,
+    )
+      .bind(input.userId)
+      .first();
+    if (!profile) throw new ApiError(404, 'PUBLIC_PROFILE_NOT_FOUND', 'Public profile not found');
+    return profile;
+  },
+  'publicProfiles.get': async (env, input) => {
+    const profile = await env.DB.prepare(
+      `SELECT up.user_id AS id, up.display_name, up.bio, up.avatar_media_id,
+              up.avatar_render_mode, up.created_at,
+              (SELECT COUNT(*) FROM questionnaires q
+               WHERE q.user_id = up.user_id AND q.is_active = 1
+                 AND q.moderation_status = 'approved') AS questionnaire_count,
+              (SELECT COUNT(*) FROM telegram_posts tp
+               WHERE tp.author_user_id = up.user_id AND tp.status = 'active') AS post_count
+       FROM user_profiles up
+       JOIN users u ON u.id = up.user_id
+       WHERE up.user_id = ?1 AND u.is_banned = 0 AND u.deleted_at IS NULL
+         AND NOT EXISTS (
+           SELECT 1 FROM blocks b
+           WHERE (b.blocker_user_id = ?2 AND b.blocked_user_id = up.user_id)
+              OR (b.blocker_user_id = up.user_id AND b.blocked_user_id = ?2)
+         )`,
+    )
+      .bind(input.profileUserId, input.requesterUserId)
+      .first();
+    if (!profile) throw new ApiError(404, 'PUBLIC_PROFILE_NOT_FOUND', 'Public profile not found');
+    return profile;
+  },
+  'publicProfiles.update': async (env, input) => {
+    const premium = Boolean(await premiumEnd(env, input.userId));
+    const policy = checkContentLinkPolicy(`${input.displayName}\n${input.bio}`, premium);
+    if (!policy.allowed) {
+      throw new ApiError(403, 'LINK_POLICY_VIOLATION', policy.reason);
+    }
+    if (input.avatarMediaId) {
+      const owned = await env.DB.prepare(
+        `SELECT qm.id, qm.media_type
+         FROM questionnaire_media qm
+         JOIN questionnaires q ON q.id = qm.questionnaire_id
+         WHERE qm.id = ?1 AND q.user_id = ?2 AND qm.moderation_status = 'approved'
+           AND qm.media_type IN ('photo', 'video')`,
+      )
+        .bind(input.avatarMediaId, input.userId)
+        .first<{ id: string; media_type: string }>();
+      if (!owned) throw new ApiError(404, 'AVATAR_MEDIA_NOT_FOUND', 'Avatar media not found');
+      await env.DB.prepare(
+        `UPDATE user_profiles SET display_name = ?2, bio = ?3, avatar_media_id = ?4,
+           avatar_render_mode = ?5, updated_at = CURRENT_TIMESTAMP WHERE user_id = ?1`,
+      )
+        .bind(
+          input.userId,
+          input.displayName,
+          input.bio,
+          owned.id,
+          owned.media_type === 'video' ? 'animation' : 'photo',
+        )
+        .run();
+    } else {
+      await env.DB.prepare(
+        `UPDATE user_profiles SET display_name = ?2, bio = ?3, avatar_media_id = NULL,
+           avatar_render_mode = NULL, updated_at = CURRENT_TIMESTAMP WHERE user_id = ?1`,
+      )
+        .bind(input.userId, input.displayName, input.bio)
+        .run();
+    }
+    return { updated: true };
+  },
+  'questionnaires.listOwn': async (env, input) => {
+    const premium = Boolean(await premiumEnd(env, input.userId));
+    if (!premium) {
+      await env.DB.prepare(
+        `UPDATE questionnaires SET is_active = 0, updated_at = CURRENT_TIMESTAMP
+         WHERE user_id = ?1 AND is_primary = 0 AND is_active = 1`,
+      )
+        .bind(input.userId)
+        .run();
+    }
+    const rows = await env.DB.prepare(
+      `SELECT q.*,
+              (SELECT COUNT(*) FROM questionnaire_media qm
+               WHERE qm.questionnaire_id = q.id) AS media_count,
+              (SELECT COUNT(*) FROM questionnaire_ratings qr
+               WHERE qr.questionnaire_id = q.id AND qr.value = 1) AS rating_likes,
+              (SELECT COUNT(*) FROM questionnaire_ratings qr
+               WHERE qr.questionnaire_id = q.id AND qr.value = -1) AS rating_dislikes,
+              COALESCE((SELECT SUM(qr.value) FROM questionnaire_ratings qr
+               WHERE qr.questionnaire_id = q.id), 0) AS rating_score
+       FROM questionnaires q WHERE q.user_id = ?1
+       ORDER BY q.is_primary DESC, q.updated_at DESC`,
+    )
+      .bind(input.userId)
+      .all();
+    return { premium, limit: premium ? 5 : 1, questionnaires: rows.results };
+  },
+  'questionnaires.getOwn': async (env, input) => {
+    const questionnaire = await env.DB.prepare(
+      `SELECT * FROM questionnaires WHERE id = ?1 AND user_id = ?2`,
+    )
+      .bind(input.questionnaireId, input.userId)
+      .first();
+    if (!questionnaire)
+      throw new ApiError(404, 'QUESTIONNAIRE_NOT_FOUND', 'Questionnaire not found');
+    return questionnaire;
+  },
+  'questionnaires.create': async (env, input) => {
+    const premium = Boolean(await premiumEnd(env, input.userId));
+    const count = await env.DB.prepare(
+      'SELECT COUNT(*) AS total FROM questionnaires WHERE user_id = ?1',
+    )
+      .bind(input.userId)
+      .first<{ total: number }>();
+    const limit = premium ? 5 : 1;
+    if (Number(count?.total ?? 0) >= limit) {
+      throw new ApiError(
+        403,
+        premium ? 'QUESTIONNAIRE_LIMIT' : 'PREMIUM_REQUIRED',
+        premium ? 'Up to five questionnaires are available' : 'Premium is required',
+      );
+    }
+    const text = [
+      input.title,
+      input.profile.displayName,
+      input.profile.shortHeadline,
+      input.profile.about,
+      ...input.profile.fandoms,
+      ...input.profile.genres,
+      ...input.profile.tags,
+    ].join('\n');
+    const policy = checkContentLinkPolicy(text, premium);
+    if (!policy.allowed) throw new ApiError(403, 'LINK_POLICY_VIOLATION', policy.reason);
+    const id = crypto.randomUUID();
+    const completion = profileCompletion(input.profile);
+    await env.DB.prepare(
+      `INSERT INTO questionnaires (
+        id, user_id, title, display_name, age_group, short_headline, about,
+        roleplay_experience, preferred_role, writing_style, average_post_length,
+        activity_frequency, timezone, active_hours, languages, fandoms, genres, tags,
+        settings, plots, looking_for, boundaries, adult_topics_allowed,
+        contact_reveal_policy, gender, moderation_status, profile_completion_percent,
+        is_active, is_primary
+      ) VALUES (
+        ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15,
+        ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, 'approved', ?26, 1, 0
+      )`,
+    )
+      .bind(
+        id,
+        input.userId,
+        input.title,
+        input.profile.displayName,
+        input.profile.ageGroup,
+        input.profile.shortHeadline,
+        input.profile.about,
+        input.profile.roleplayExperience,
+        json(input.profile.preferredRole),
+        input.profile.writingStyle,
+        input.profile.averagePostLength,
+        input.profile.activityFrequency,
+        input.profile.timezone,
+        input.profile.activeHours,
+        json(input.profile.languages),
+        json(input.profile.fandoms),
+        json(input.profile.genres),
+        json(input.profile.tags),
+        input.profile.settings,
+        input.profile.plots,
+        json(input.profile.lookingFor),
+        input.profile.boundaries,
+        input.profile.adultTopicsAllowed ? 1 : 0,
+        input.profile.contactRevealPolicy,
+        input.profile.gender,
+        completion,
+      )
+      .run();
+    return { id, moderationStatus: 'approved', completion };
+  },
+  'questionnaires.clonePrimary': async (env, input) => {
+    if (!(await premiumEnd(env, input.userId))) {
+      throw new ApiError(403, 'PREMIUM_REQUIRED', 'Premium is required');
+    }
+    const count = await env.DB.prepare(
+      'SELECT COUNT(*) AS total FROM questionnaires WHERE user_id = ?1',
+    )
+      .bind(input.userId)
+      .first<{ total: number }>();
+    if (Number(count?.total ?? 0) >= 5) {
+      throw new ApiError(403, 'QUESTIONNAIRE_LIMIT', 'Up to five questionnaires are available');
+    }
+    const id = crypto.randomUUID();
+    const result = await env.DB.prepare(
+      `INSERT INTO questionnaires (
+        id, user_id, title, display_name, age_group, short_headline, about,
+        roleplay_experience, preferred_role, writing_style, average_post_length,
+        activity_frequency, timezone, active_hours, languages, fandoms, genres, tags,
+        settings, plots, looking_for, boundaries, adult_topics_allowed,
+        contact_reveal_policy, gender, moderation_status, profile_completion_percent,
+        is_active, is_primary
+      )
+      SELECT ?1, user_id, ?3, display_name, age_group, short_headline, about,
+        roleplay_experience, preferred_role, writing_style, average_post_length,
+        activity_frequency, timezone, active_hours, languages, fandoms, genres, tags,
+        settings, plots, looking_for, boundaries, adult_topics_allowed,
+        contact_reveal_policy, gender, 'approved', profile_completion_percent, 1, 0
+      FROM questionnaires WHERE user_id = ?2 AND is_primary = 1`,
+    )
+      .bind(id, input.userId, input.title)
+      .run();
+    if (result.meta.changes !== 1) {
+      throw new ApiError(409, 'PRIMARY_QUESTIONNAIRE_REQUIRED', 'Create the first questionnaire');
+    }
+    return { id, cloned: true };
+  },
+  'questionnaires.update': async (env, input) => {
+    const premium = Boolean(await premiumEnd(env, input.userId));
+    const policy = checkContentLinkPolicy(
+      [
+        input.title,
+        input.profile.displayName,
+        input.profile.shortHeadline,
+        input.profile.about,
+        ...input.profile.fandoms,
+        ...input.profile.genres,
+        ...input.profile.tags,
+      ].join('\n'),
+      premium,
+    );
+    if (!policy.allowed) throw new ApiError(403, 'LINK_POLICY_VIOLATION', policy.reason);
+    const result = await env.DB.prepare(
+      `UPDATE questionnaires SET title = ?3, display_name = ?4, age_group = ?5,
+         short_headline = ?6, about = ?7, roleplay_experience = ?8,
+         preferred_role = ?9, writing_style = ?10, average_post_length = ?11,
+         activity_frequency = ?12, timezone = ?13, active_hours = ?14,
+         languages = ?15, fandoms = ?16, genres = ?17, tags = ?18,
+         settings = ?19, plots = ?20, looking_for = ?21, boundaries = ?22,
+         adult_topics_allowed = ?23, contact_reveal_policy = ?24, gender = ?25,
+         profile_completion_percent = ?26, updated_at = CURRENT_TIMESTAMP
+       WHERE id = ?1 AND user_id = ?2`,
+    )
+      .bind(
+        input.questionnaireId,
+        input.userId,
+        input.title,
+        input.profile.displayName,
+        input.profile.ageGroup,
+        input.profile.shortHeadline,
+        input.profile.about,
+        input.profile.roleplayExperience,
+        json(input.profile.preferredRole),
+        input.profile.writingStyle,
+        input.profile.averagePostLength,
+        input.profile.activityFrequency,
+        input.profile.timezone,
+        input.profile.activeHours,
+        json(input.profile.languages),
+        json(input.profile.fandoms),
+        json(input.profile.genres),
+        json(input.profile.tags),
+        input.profile.settings,
+        input.profile.plots,
+        json(input.profile.lookingFor),
+        input.profile.boundaries,
+        input.profile.adultTopicsAllowed ? 1 : 0,
+        input.profile.contactRevealPolicy,
+        input.profile.gender,
+        profileCompletion(input.profile),
+      )
+      .run();
+    if (result.meta.changes !== 1)
+      throw new ApiError(404, 'QUESTIONNAIRE_NOT_FOUND', 'Questionnaire not found');
+    return { updated: true };
+  },
+  'questionnaires.setActive': async (env, input) => {
+    const questionnaire = await env.DB.prepare(
+      `SELECT is_primary, moderation_status FROM questionnaires
+       WHERE id = ?1 AND user_id = ?2`,
+    )
+      .bind(input.questionnaireId, input.userId)
+      .first<{ is_primary: number; moderation_status: string }>();
+    if (!questionnaire)
+      throw new ApiError(404, 'QUESTIONNAIRE_NOT_FOUND', 'Questionnaire not found');
+    if (input.active && questionnaire.moderation_status !== 'approved') {
+      throw new ApiError(409, 'QUESTIONNAIRE_BLOCKED', 'Questionnaire is blocked by moderation');
+    }
+    if (input.active && !questionnaire.is_primary && !(await premiumEnd(env, input.userId))) {
+      throw new ApiError(403, 'PREMIUM_REQUIRED', 'Premium is required');
+    }
+    await env.DB.prepare(
+      `UPDATE questionnaires SET is_active = ?3, updated_at = CURRENT_TIMESTAMP
+       WHERE id = ?1 AND user_id = ?2`,
+    )
+      .bind(input.questionnaireId, input.userId, input.active ? 1 : 0)
+      .run();
+    return { active: input.active };
+  },
+  'questionnaires.rate': async (env, input) => {
+    const target = await env.DB.prepare(
+      'SELECT user_id FROM questionnaires WHERE id = ?1 AND moderation_status = ?2',
+    )
+      .bind(input.questionnaireId, 'approved')
+      .first<{ user_id: string }>();
+    if (!target) throw new ApiError(404, 'QUESTIONNAIRE_NOT_FOUND', 'Questionnaire not found');
+    if (target.user_id === input.userId)
+      throw new ApiError(400, 'SELF_RATING', 'Self rating is not allowed');
+    await env.DB.prepare(
+      `INSERT INTO questionnaire_ratings (questionnaire_id, user_id, value)
+       VALUES (?1, ?2, ?3)
+       ON CONFLICT(questionnaire_id, user_id) DO UPDATE SET
+         value = excluded.value, updated_at = CURRENT_TIMESTAMP`,
+    )
+      .bind(input.questionnaireId, input.userId, input.value)
+      .run();
+    return { saved: true };
   },
   'profiles.media.resolve': async (env, input) => {
     const media = await env.DB.prepare(
@@ -1303,14 +1743,14 @@ const handlers: { [K in WorkerOperation]: Handler<K> } = {
                 WHERE active_pe.user_id = p.user_id AND active_pe.status = 'active'
                   AND active_pe.ends_at > CURRENT_TIMESTAMP
               ) AS has_premium,
-              (SELECT pm.id FROM profile_media pm
-               WHERE pm.profile_id = p.id AND pm.moderation_status = 'approved'
+              (SELECT pm.id FROM questionnaire_media pm
+               WHERE pm.questionnaire_id = p.id AND pm.moderation_status = 'approved'
                  AND (
                    (
                      pm.media_type IN ('photo', 'video')
                      AND pm.id IN (
-                       SELECT free_media.id FROM profile_media free_media
-                       WHERE free_media.profile_id = p.id
+                       SELECT free_media.id FROM questionnaire_media free_media
+                       WHERE free_media.questionnaire_id = p.id
                          AND free_media.media_type IN ('photo', 'video')
                        ORDER BY free_media.sort_order, free_media.created_at LIMIT 2
                      )
@@ -1322,14 +1762,14 @@ const handlers: { [K in WorkerOperation]: Handler<K> } = {
                    )
                  )
                ORDER BY pm.sort_order, pm.created_at LIMIT 1) AS media_id,
-              (SELECT pm.media_type FROM profile_media pm
-               WHERE pm.profile_id = p.id AND pm.moderation_status = 'approved'
+              (SELECT pm.media_type FROM questionnaire_media pm
+               WHERE pm.questionnaire_id = p.id AND pm.moderation_status = 'approved'
                  AND (
                    (
                      pm.media_type IN ('photo', 'video')
                      AND pm.id IN (
-                       SELECT free_media.id FROM profile_media free_media
-                       WHERE free_media.profile_id = p.id
+                       SELECT free_media.id FROM questionnaire_media free_media
+                       WHERE free_media.questionnaire_id = p.id
                          AND free_media.media_type IN ('photo', 'video')
                        ORDER BY free_media.sort_order, free_media.created_at LIMIT 2
                      )
@@ -1353,14 +1793,14 @@ const handlers: { [K in WorkerOperation]: Handler<K> } = {
                   SELECT pm.id, pm.media_type, pm.track_title, pm.track_performer,
                          CASE WHEN pm.thumbnail_telegram_file_id IS NULL
                            THEN 0 ELSE 1 END AS has_thumbnail
-                  FROM profile_media pm
-                  WHERE pm.profile_id = p.id AND pm.moderation_status = 'approved'
+                  FROM questionnaire_media pm
+                  WHERE pm.questionnaire_id = p.id AND pm.moderation_status = 'approved'
                     AND (
                       (
                         pm.media_type IN ('photo', 'video')
                         AND pm.id IN (
-                          SELECT free_media.id FROM profile_media free_media
-                          WHERE free_media.profile_id = p.id
+                          SELECT free_media.id FROM questionnaire_media free_media
+                          WHERE free_media.questionnaire_id = p.id
                             AND free_media.media_type IN ('photo', 'video')
                           ORDER BY free_media.sort_order, free_media.created_at LIMIT 2
                         )
@@ -1381,12 +1821,12 @@ const handlers: { [K in WorkerOperation]: Handler<K> } = {
                 WHERE pe.user_id = p.user_id AND pe.status = 'active'
                   AND pe.ends_at > CURRENT_TIMESTAMP AND settings.show_premium_badge = 1
               ) THEN 1 ELSE 0 END AS is_premium,
-              (SELECT COUNT(*) FROM conversation_ratings cr
-               WHERE cr.rated_user_id = p.user_id AND cr.value = 1) AS rating_likes,
-              (SELECT COUNT(*) FROM conversation_ratings cr
-               WHERE cr.rated_user_id = p.user_id AND cr.value = -1) AS rating_dislikes,
-              COALESCE((SELECT SUM(cr.value) FROM conversation_ratings cr
-               WHERE cr.rated_user_id = p.user_id), 0) AS rating_score,
+              (SELECT COUNT(*) FROM questionnaire_ratings qr
+               WHERE qr.questionnaire_id = p.id AND qr.value = 1) AS rating_likes,
+              (SELECT COUNT(*) FROM questionnaire_ratings qr
+               WHERE qr.questionnaire_id = p.id AND qr.value = -1) AS rating_dislikes,
+              COALESCE((SELECT SUM(qr.value) FROM questionnaire_ratings qr
+               WHERE qr.questionnaire_id = p.id), 0) AS rating_score,
               (
                 CASE WHEN p.age_group = ?12 THEN 30 ELSE 0 END
                 + (SELECT COUNT(*) FROM json_each(p.fandoms) candidate
@@ -1398,7 +1838,7 @@ const handlers: { [K in WorkerOperation]: Handler<K> } = {
                 + (SELECT COUNT(*) FROM json_each(p.tags) candidate
                    WHERE candidate.value IN (SELECT value FROM json_each(?18))) * 8
               ) AS relevance_score
-       FROM profiles p
+       FROM questionnaires p
        JOIN users u ON u.id = p.user_id
        WHERE p.user_id <> ?1 AND p.moderation_status = 'approved' AND p.is_active = 1
          AND u.is_banned = 0 AND u.is_search_enabled = 1 AND u.deleted_at IS NULL
@@ -1433,8 +1873,8 @@ const handlers: { [K in WorkerOperation]: Handler<K> } = {
          ))
          AND (?10 = 0 OR u.last_activity_at >= datetime('now', '-15 minutes'))
          AND (?11 = 0 OR EXISTS (
-           SELECT 1 FROM profile_media pm
-           WHERE pm.profile_id = p.id AND pm.moderation_status = 'approved'
+           SELECT 1 FROM questionnaire_media pm
+           WHERE pm.questionnaire_id = p.id AND pm.moderation_status = 'approved'
          ))
          AND (
            ?13 = ''
@@ -1541,7 +1981,7 @@ const handlers: { [K in WorkerOperation]: Handler<K> } = {
                OR (b.blocker_user_id = p.user_id AND b.blocked_user_id = ?1)
            )
            THEN 1 ELSE 0 END) AS safe_candidates
-       FROM profiles p JOIN users u ON u.id = p.user_id`,
+       FROM questionnaires p JOIN users u ON u.id = p.user_id`,
     )
       .bind(input.userId)
       .first<{
@@ -2077,13 +2517,17 @@ const handlers: { [K in WorkerOperation]: Handler<K> } = {
       `SELECT target.id
        FROM users requester
        JOIN users target ON target.id = ?2
-       JOIN profiles profile ON profile.user_id = target.id
        WHERE requester.id = ?1
          AND requester.is_banned = 0 AND requester.deleted_at IS NULL
          AND requester.is_rules_accepted = 1 AND requester.is_age_confirmed = 1
          AND target.is_banned = 0 AND target.deleted_at IS NULL
          AND target.is_search_enabled = 1
-         AND profile.moderation_status = 'approved' AND profile.is_active = 1
+         AND EXISTS (
+           SELECT 1 FROM questionnaires questionnaire
+           WHERE questionnaire.user_id = target.id
+             AND questionnaire.moderation_status = 'approved'
+             AND questionnaire.is_active = 1
+         )
          AND NOT (
            target.role = 'admin' AND target.telegram_user_id = 1040929628
          )
@@ -2654,7 +3098,9 @@ const handlers: { [K in WorkerOperation]: Handler<K> } = {
     const result = await env.DB.prepare(
       `UPDATE telegram_posts
        SET source_chat_id = ?2, source_message_id = ?3, content_type = ?4,
-           text_preview = ?5, updated_at = CURRENT_TIMESTAMP
+           text_preview = ?5, media_telegram_file_id = ?6,
+           media_thumbnail_file_id = ?7, track_title = ?8, track_performer = ?9,
+           updated_at = CURRENT_TIMESTAMP
        WHERE author_user_id = ?1 AND status = 'draft'`,
     )
       .bind(
@@ -2663,6 +3109,10 @@ const handlers: { [K in WorkerOperation]: Handler<K> } = {
         input.sourceMessageId,
         input.contentType,
         input.textPreview,
+        input.mediaTelegramFileId ?? null,
+        input.mediaThumbnailFileId ?? null,
+        input.trackTitle ?? null,
+        input.trackPerformer ?? null,
       )
       .run();
     if (result.meta.changes !== 1) {
@@ -2774,6 +3224,28 @@ const handlers: { [K in WorkerOperation]: Handler<K> } = {
     if (!post) throw new ApiError(404, 'POST_NOT_FOUND', 'Post not found');
     return post;
   },
+  'posts.media.resolve': async (env, input) => {
+    const post = await env.DB.prepare(
+      `SELECT tp.media_telegram_file_id AS telegram_file_id, tp.content_type
+       FROM telegram_posts tp
+       WHERE tp.id = ?1 AND tp.media_telegram_file_id IS NOT NULL
+         AND (
+           tp.author_user_id = ?2
+           OR (
+             tp.status = 'active'
+             AND NOT EXISTS (
+               SELECT 1 FROM blocks b
+               WHERE (b.blocker_user_id = ?2 AND b.blocked_user_id = tp.author_user_id)
+                  OR (b.blocker_user_id = tp.author_user_id AND b.blocked_user_id = ?2)
+             )
+           )
+         )`,
+    )
+      .bind(input.postId, input.userId)
+      .first();
+    if (!post) throw new ApiError(404, 'POST_MEDIA_NOT_FOUND', 'Post media not found');
+    return post;
+  },
   'posts.own.list': async (env, input) => {
     return (
       await env.DB.prepare(
@@ -2786,6 +3258,115 @@ const handlers: { [K in WorkerOperation]: Handler<K> } = {
         .bind(input.userId, input.limit)
         .all()
     ).results;
+  },
+  'posts.feed.list': async (env, input) => {
+    return (
+      await env.DB.prepare(
+        `SELECT tp.id, tp.author_user_id, tp.source_chat_id, tp.source_message_id,
+                tp.content_type, tp.text_preview, tp.published_at,
+                tp.media_telegram_file_id, tp.media_thumbnail_file_id,
+                tp.track_title, tp.track_performer,
+                up.display_name, up.avatar_media_id, up.avatar_render_mode,
+                COALESCE(SUM(CASE WHEN pr.value = 1 THEN 1 ELSE 0 END), 0) AS likes,
+                COALESCE(SUM(CASE WHEN pr.value = -1 THEN 1 ELSE 0 END), 0) AS dislikes,
+                COALESCE(SUM(pr.value), 0) AS rating_score,
+                (SELECT COUNT(*) FROM post_comments pc
+                 WHERE pc.post_id = tp.id AND pc.status = 'active') AS comment_count,
+                (SELECT own.value FROM post_ratings own
+                 WHERE own.post_id = tp.id AND own.user_id = ?1) AS own_rating
+         FROM telegram_posts tp
+         JOIN user_profiles up ON up.user_id = tp.author_user_id
+         JOIN users u ON u.id = tp.author_user_id
+         LEFT JOIN post_ratings pr ON pr.post_id = tp.id
+         WHERE tp.status = 'active' AND u.is_banned = 0 AND u.deleted_at IS NULL
+           AND NOT EXISTS (
+             SELECT 1 FROM blocks b
+             WHERE (b.blocker_user_id = ?1 AND b.blocked_user_id = tp.author_user_id)
+                OR (b.blocker_user_id = tp.author_user_id AND b.blocked_user_id = ?1)
+           )
+         GROUP BY tp.id
+         ORDER BY rating_score DESC, tp.published_at DESC
+         LIMIT ?2`,
+      )
+        .bind(input.userId, input.limit)
+        .all()
+    ).results;
+  },
+  'posts.comments.list': async (env, input) => {
+    const visible = await env.DB.prepare(
+      `SELECT 1 AS visible FROM telegram_posts tp
+       WHERE tp.id = ?1 AND (tp.status = 'active' OR tp.author_user_id = ?2)
+         AND NOT EXISTS (
+           SELECT 1 FROM blocks b
+           WHERE (b.blocker_user_id = ?2 AND b.blocked_user_id = tp.author_user_id)
+              OR (b.blocker_user_id = tp.author_user_id AND b.blocked_user_id = ?2)
+         )`,
+    )
+      .bind(input.postId, input.userId)
+      .first();
+    if (!visible) throw new ApiError(404, 'POST_NOT_FOUND', 'Post not found');
+    return (
+      await env.DB.prepare(
+        `SELECT pc.id, pc.post_id, pc.author_user_id, pc.body, pc.created_at,
+                up.display_name, up.avatar_media_id, up.avatar_render_mode
+         FROM post_comments pc
+         JOIN user_profiles up ON up.user_id = pc.author_user_id
+         WHERE pc.post_id = ?1 AND pc.status = 'active'
+           AND NOT EXISTS (
+             SELECT 1 FROM blocks b
+             WHERE (b.blocker_user_id = ?2 AND b.blocked_user_id = pc.author_user_id)
+                OR (b.blocker_user_id = pc.author_user_id AND b.blocked_user_id = ?2)
+           )
+         ORDER BY pc.created_at ASC LIMIT ?3`,
+      )
+        .bind(input.postId, input.userId, input.limit)
+        .all()
+    ).results;
+  },
+  'posts.comments.create': async (env, input) => {
+    const post = await env.DB.prepare(
+      `SELECT author_user_id FROM telegram_posts
+       WHERE id = ?1 AND status = 'active'
+         AND NOT EXISTS (
+           SELECT 1 FROM blocks b
+           WHERE (b.blocker_user_id = ?2 AND b.blocked_user_id = author_user_id)
+              OR (b.blocker_user_id = author_user_id AND b.blocked_user_id = ?2)
+         )`,
+    )
+      .bind(input.postId, input.userId)
+      .first();
+    if (!post) throw new ApiError(404, 'POST_NOT_FOUND', 'Post not found');
+    const premium = Boolean(await premiumEnd(env, input.userId));
+    const policy = checkContentLinkPolicy(input.body, premium);
+    if (!policy.allowed) throw new ApiError(403, 'LINK_POLICY_VIOLATION', policy.reason);
+    const id = crypto.randomUUID();
+    await env.DB.prepare(
+      `INSERT INTO post_comments (id, post_id, author_user_id, body)
+       VALUES (?1, ?2, ?3, ?4)`,
+    )
+      .bind(id, input.postId, input.userId, input.body)
+      .run();
+    return { id, created: true };
+  },
+  'posts.rate': async (env, input) => {
+    const post = await env.DB.prepare(
+      `SELECT author_user_id FROM telegram_posts
+       WHERE id = ?1 AND status = 'active'`,
+    )
+      .bind(input.postId)
+      .first<{ author_user_id: string }>();
+    if (!post) throw new ApiError(404, 'POST_NOT_FOUND', 'Post not found');
+    if (post.author_user_id === input.userId)
+      throw new ApiError(400, 'SELF_RATING', 'Self rating is not allowed');
+    await env.DB.prepare(
+      `INSERT INTO post_ratings (post_id, user_id, value)
+       VALUES (?1, ?2, ?3)
+       ON CONFLICT(post_id, user_id) DO UPDATE SET
+         value = excluded.value, updated_at = CURRENT_TIMESTAMP`,
+    )
+      .bind(input.postId, input.userId, input.value)
+      .run();
+    return { saved: true };
   },
   'posts.delete': async (env, input) => {
     const result = await env.DB.prepare(

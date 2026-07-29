@@ -1,4 +1,5 @@
 name = "rolemate-data-api"
+account_id = "9d1b271d6aec48ab5d8f595d1d3fac61"
 main = "src/index.ts"
 compatibility_date = "2026-07-01"
 workers_dev = true

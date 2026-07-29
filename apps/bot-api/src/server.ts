@@ -436,6 +436,95 @@ export async function buildServer(
     const session = await authenticate(request);
     return dataApi.execute('profiles.getOwn', { userId: session.userId });
   });
+  app.get('/api/public-profile', async (request) => {
+    const session = await authenticate(request);
+    return dataApi.execute('publicProfiles.getOwn', { userId: session.userId });
+  });
+  app.put('/api/public-profile', async (request) => {
+    const session = await mutateSafe(request);
+    const body = z
+      .object({
+        displayName: z.string().trim().min(2).max(80),
+        bio: z.string().trim().max(1_500),
+        avatarMediaId: z.string().uuid().nullable(),
+      })
+      .parse(request.body);
+    return dataApi.execute('publicProfiles.update', { userId: session.userId, ...body });
+  });
+  app.get('/api/users/:userId/profile', async (request) => {
+    const session = await authenticate(request);
+    const { userId } = z.object({ userId: z.string().uuid() }).parse(request.params);
+    return dataApi.execute('publicProfiles.get', {
+      requesterUserId: session.userId,
+      profileUserId: userId,
+    });
+  });
+  app.get('/api/questionnaires', async (request) => {
+    const session = await authenticate(request);
+    return dataApi.execute('questionnaires.listOwn', { userId: session.userId });
+  });
+  app.get('/api/questionnaires/:questionnaireId', async (request) => {
+    const session = await authenticate(request);
+    const { questionnaireId } = z
+      .object({ questionnaireId: z.string().uuid() })
+      .parse(request.params);
+    return dataApi.execute('questionnaires.getOwn', {
+      userId: session.userId,
+      questionnaireId,
+    });
+  });
+  app.post('/api/questionnaires', async (request) => {
+    const session = await mutateSafe(request);
+    const body = z
+      .object({ title: z.string().trim().min(2).max(80), profile: profileSchema })
+      .parse(request.body);
+    return dataApi.execute('questionnaires.create', { userId: session.userId, ...body });
+  });
+  app.post('/api/questionnaires/clone', async (request) => {
+    const session = await mutateSafe(request);
+    const { title } = z.object({ title: z.string().trim().min(2).max(80) }).parse(request.body);
+    return dataApi.execute('questionnaires.clonePrimary', { userId: session.userId, title });
+  });
+  app.put('/api/questionnaires/:questionnaireId', async (request) => {
+    const session = await mutateSafe(request);
+    const { questionnaireId } = z
+      .object({ questionnaireId: z.string().uuid() })
+      .parse(request.params);
+    const body = z
+      .object({ title: z.string().trim().min(2).max(80), profile: profileSchema })
+      .parse(request.body);
+    return dataApi.execute('questionnaires.update', {
+      userId: session.userId,
+      questionnaireId,
+      ...body,
+    });
+  });
+  app.put('/api/questionnaires/:questionnaireId/state', async (request) => {
+    const session = await mutateSafe(request);
+    const { questionnaireId } = z
+      .object({ questionnaireId: z.string().uuid() })
+      .parse(request.params);
+    const { active } = z.object({ active: z.boolean() }).parse(request.body);
+    return dataApi.execute('questionnaires.setActive', {
+      userId: session.userId,
+      questionnaireId,
+      active,
+    });
+  });
+  app.put('/api/questionnaires/:questionnaireId/rating', async (request) => {
+    const session = await mutateSafe(request);
+    const { questionnaireId } = z
+      .object({ questionnaireId: z.string().uuid() })
+      .parse(request.params);
+    const { value } = z
+      .object({ value: z.union([z.literal(-1), z.literal(1)]) })
+      .parse(request.body);
+    return dataApi.execute('questionnaires.rate', {
+      userId: session.userId,
+      questionnaireId,
+      value,
+    });
+  });
   app.get('/api/profile/preview', async (request) => {
     const session = await authenticate(request);
     return dataApi.execute('profiles.previewOwn', { userId: session.userId });
@@ -1071,6 +1160,61 @@ export async function buildServer(
       conversationId,
       value,
     });
+  });
+  app.get('/api/posts', async (request) => {
+    const session = await authenticate(request);
+    const { limit } = z
+      .object({ limit: z.coerce.number().int().min(1).max(50).default(20) })
+      .parse(request.query);
+    return dataApi.execute('posts.feed.list', { userId: session.userId, limit });
+  });
+  app.get('/api/posts/:postId/comments', async (request) => {
+    const session = await authenticate(request);
+    const { postId } = z.object({ postId: z.string().uuid() }).parse(request.params);
+    return dataApi.execute('posts.comments.list', {
+      userId: session.userId,
+      postId,
+      limit: 100,
+    });
+  });
+  app.get('/api/posts/:postId/media', async (request, reply) => {
+    const session = await authenticate(request);
+    const { postId } = z.object({ postId: z.string().uuid() }).parse(request.params);
+    const media = await dataApi.execute<{ telegram_file_id: string; content_type: string }>(
+      'posts.media.resolve',
+      { userId: session.userId, postId },
+    );
+    const file = await bot.api.getFile(media.telegram_file_id);
+    if (!file.file_path) throw new DataApiError('MEDIA_UNAVAILABLE', ru.api.mediaUnavailable, 404);
+    const response = await fetch(
+      `https://api.telegram.org/file/bot${env.TELEGRAM_BOT_TOKEN}/${file.file_path}`,
+      { signal: AbortSignal.timeout(20_000) },
+    );
+    if (!response.ok) throw new DataApiError('MEDIA_UNAVAILABLE', ru.api.mediaUnavailable, 502);
+    reply.header(
+      'Content-Type',
+      response.headers.get('content-type') ?? 'application/octet-stream',
+    );
+    reply.header('Cache-Control', 'private, max-age=300');
+    return reply.send(Buffer.from(await response.arrayBuffer()));
+  });
+  app.post('/api/posts/:postId/comments', async (request) => {
+    const session = await mutateSafe(request);
+    const { postId } = z.object({ postId: z.string().uuid() }).parse(request.params);
+    const { body } = z.object({ body: z.string().trim().min(1).max(1_000) }).parse(request.body);
+    return dataApi.execute('posts.comments.create', {
+      userId: session.userId,
+      postId,
+      body,
+    });
+  });
+  app.put('/api/posts/:postId/rating', async (request) => {
+    const session = await mutateSafe(request);
+    const { postId } = z.object({ postId: z.string().uuid() }).parse(request.params);
+    const { value } = z
+      .object({ value: z.union([z.literal(-1), z.literal(1)]) })
+      .parse(request.body);
+    return dataApi.execute('posts.rate', { userId: session.userId, postId, value });
   });
   app.get('/api/settings', async (request) => {
     const session = await authenticate(request);

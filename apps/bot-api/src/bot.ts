@@ -38,6 +38,8 @@ async function mainKeyboard(env: AppEnv, telegramUserId: number, role = 'user'):
     const routes: MenuLaunchRoute[] = [
       '/search',
       '/profile',
+      '/questionnaires',
+      '/posts',
       '/matches',
       '/chats',
       '/premium',
@@ -55,6 +57,9 @@ async function mainKeyboard(env: AppEnv, telegramUserId: number, role = 'user'):
       .webApp(ru.bot.menu.search, urls.get('/search')!)
       .webApp(ru.bot.menu.profile, urls.get('/profile')!)
       .row()
+      .webApp(ru.bot.menu.questionnaires, urls.get('/questionnaires')!)
+      .webApp(ru.bot.menu.posts, urls.get('/posts')!)
+      .row()
       .webApp(ru.bot.menu.matches, urls.get('/matches')!)
       .webApp(ru.bot.menu.chats, urls.get('/chats')!)
       .row()
@@ -64,13 +69,15 @@ async function mainKeyboard(env: AppEnv, telegramUserId: number, role = 'user'):
       .webApp(ru.bot.menu.settings, urls.get('/settings')!)
       .text(ru.bot.menu.help)
       .row()
-      .text(ru.bot.menu.posts)
       .text(ru.bot.menu.createPost)
       .row();
   } else {
     keyboard
       .text(ru.bot.menu.search)
       .text(ru.bot.menu.profile)
+      .row()
+      .text(ru.bot.menu.questionnaires)
+      .text(ru.bot.menu.posts)
       .row()
       .text(ru.bot.menu.matches)
       .text(ru.bot.menu.chats)
@@ -1288,6 +1295,7 @@ export function createBot(
     const menuMap: Record<string, string> = {
       [ru.bot.menu.search]: '/search',
       [ru.bot.menu.profile]: '/profile',
+      [ru.bot.menu.questionnaires]: '/profile',
       [ru.bot.menu.matches]: '/matches',
       [ru.bot.menu.chats]: '/chats',
       [ru.bot.menu.premium]: '/premium',
@@ -1565,12 +1573,33 @@ export function createBot(
           await context.reply(ru.bot.postUnsupportedMedia);
           return;
         }
+        const mediaTelegramFileId =
+          ('photo' in context.message && context.message.photo.at(-1)?.file_id) ||
+          ('animation' in context.message && context.message.animation.file_id) ||
+          ('voice' in context.message && context.message.voice.file_id) ||
+          ('audio' in context.message && context.message.audio.file_id) ||
+          ('video' in context.message && context.message.video.file_id) ||
+          ('video_note' in context.message && context.message.video_note.file_id) ||
+          ('document' in context.message && context.message.document.file_id) ||
+          undefined;
+        const mediaThumbnailFileId =
+          ('audio' in context.message && context.message.audio.thumbnail?.file_id) ||
+          ('video' in context.message && context.message.video.thumbnail?.file_id) ||
+          ('document' in context.message && context.message.document.thumbnail?.file_id) ||
+          undefined;
+        const trackTitle = ('audio' in context.message && context.message.audio.title) || undefined;
+        const trackPerformer =
+          ('audio' in context.message && context.message.audio.performer) || undefined;
         const attached = await dataApi.execute<{ postId: string }>('posts.draft.attach', {
           userId: user.userId,
           sourceChatId: context.chat.id,
           sourceMessageId: context.message.message_id,
           contentType: messageType,
           textPreview: (caption ?? '').slice(0, 500),
+          ...(mediaTelegramFileId ? { mediaTelegramFileId } : {}),
+          ...(mediaThumbnailFileId ? { mediaThumbnailFileId } : {}),
+          ...(trackTitle ? { trackTitle } : {}),
+          ...(trackPerformer ? { trackPerformer } : {}),
         });
         await context.reply(ru.bot.postDraftReady, {
           reply_markup: new InlineKeyboard()

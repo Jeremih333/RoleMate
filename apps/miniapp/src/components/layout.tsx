@@ -1,5 +1,5 @@
 import type { ReactNode } from 'react';
-import { Heart, Home, MessageCircle, Search, Shield, UserRound } from 'lucide-react';
+import { FileText, Heart, Home, MessageCircle, Search, Shield, UserRound } from 'lucide-react';
 import { Link, useLocation } from 'wouter';
 import { motion } from 'framer-motion';
 import { ru } from '@rolemate/shared';
@@ -9,6 +9,7 @@ const navigation = [
   { to: '/', label: ru.miniApp.navigation.home, icon: Home },
   { to: '/search', label: ru.miniApp.navigation.search, icon: Search },
   { to: '/matches', label: ru.miniApp.navigation.matches, icon: Heart },
+  { to: '/posts', label: ru.miniApp.navigation.posts, icon: FileText },
   { to: '/chats', label: ru.miniApp.navigation.chats, icon: MessageCircle },
   { to: '/profile', label: ru.miniApp.navigation.profile, icon: UserRound },
 ];

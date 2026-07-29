@@ -49,6 +49,7 @@ describe('D1 migrations', () => {
       '0019_profile_music_metadata.sql',
       '0020_direct_conversation_source.sql',
       '0021_profile_avatars.sql',
+      '0022_social_profiles_questionnaires.sql',
     ]);
     expect(() => applyMigrations()).not.toThrow();
     const tables = database
@@ -79,6 +80,12 @@ describe('D1 migrations', () => {
         'posting_requirement_checks',
         'moderator_assignments',
         'referral_identity_claims',
+        'user_profiles',
+        'questionnaires',
+        'questionnaire_media',
+        'questionnaire_ratings',
+        'post_comments',
+        'post_ratings',
       ]),
     );
     expect(tables.length).toBeGreaterThanOrEqual(35);

@@ -393,13 +393,53 @@ test('menu launch recovers initData from the Telegram URL when the SDK is late',
   expect(receivedInitData).toBe(initData);
 });
 
-test('every MiniApp menu destination reuses a valid session without hanging on login', async ({
+test('every MiniApp menu destination authenticates with its signed fallback without initData', async ({
   page,
 }) => {
   await page.addInitScript(() => {
     Object.defineProperty(window, 'Telegram', { value: undefined, configurable: true });
   });
-  await mockApi(page);
+  let authenticated = false;
+  let receivedRoute = '';
+  let receivedToken = '';
+  await mockApi(page, false, {
+    '/api/me': async (route) => {
+      await route.fulfill({
+        status: authenticated ? 200 : 401,
+        contentType: 'application/json',
+        body: JSON.stringify(
+          authenticated
+            ? {
+                userId: '00000000-0000-4000-8000-000000000001',
+                telegramUserId: 42,
+                role: 'user',
+                isAdmin: false,
+                isOwner: false,
+                riskScore: 0,
+              }
+            : { error: 'UNAUTHORIZED' },
+        ),
+      });
+    },
+    '/api/auth/menu': async (route) => {
+      const body = route.request().postDataJSON() as { route: string; token: string };
+      receivedRoute = body.route;
+      receivedToken = body.token;
+      authenticated = true;
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          user: {
+            id: '00000000-0000-4000-8000-000000000001',
+            telegramUserId: 42,
+            role: 'user',
+          },
+          csrfToken: 'menu-csrf-token',
+        }),
+      });
+    },
+  });
   for (const path of [
     '/search',
     '/profile',
@@ -409,9 +449,16 @@ test('every MiniApp menu destination reuses a valid session without hanging on l
     '/referrals',
     '/settings',
   ]) {
-    await page.goto(path);
+    authenticated = false;
+    receivedRoute = '';
+    receivedToken = '';
+    const token = `signed-menu-token-${path.slice(1)}`;
+    await page.goto(`${path}?rm_launch=${token}`);
     await expect(page.getByRole('button', { name: 'Повторить вход' })).toHaveCount(0);
     await expect(page.locator('main')).toBeVisible();
+    await expect.poll(() => receivedRoute).toBe(path);
+    expect(receivedToken).toBe(token);
+    await expect(page).toHaveURL(path);
   }
 });
 

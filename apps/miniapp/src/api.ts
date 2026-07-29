@@ -1,4 +1,4 @@
-import { ru, type ProfileInput } from '@rolemate/shared';
+import { ru, type MenuLaunchRoute, type ProfileInput } from '@rolemate/shared';
 
 const API_BASE = '/api';
 
@@ -46,6 +46,15 @@ export const api = {
       user: { id: string; telegramUserId: number; role: string };
       csrfToken: string;
     }>('/auth/telegram', { method: 'POST', body: JSON.stringify({ initData }) });
+    csrfToken = result.csrfToken;
+    sessionStorage.setItem('rm_csrf', csrfToken);
+    return result.user;
+  },
+  async authenticateMenu(token: string, route: MenuLaunchRoute) {
+    const result = await request<{
+      user: { id: string; telegramUserId: number; role: string };
+      csrfToken: string;
+    }>('/auth/menu', { method: 'POST', body: JSON.stringify({ token, route }) });
     csrfToken = result.csrfToken;
     sessionStorage.setItem('rm_csrf', csrfToken);
     return result.user;

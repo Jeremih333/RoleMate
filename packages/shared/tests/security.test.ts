@@ -2,9 +2,11 @@ import { webcrypto } from 'node:crypto';
 import { beforeAll, describe, expect, it } from 'vitest';
 import {
   assertAdmin,
+  createMenuLaunchToken,
   createInvoicePayload,
   signInternalRequest,
   validateTelegramInitData,
+  verifyMenuLaunchToken,
   verifyInternalRequest,
 } from '../src/index.js';
 
@@ -37,6 +39,40 @@ describe('security contracts', () => {
         now: new Date('2026-01-01T00:02:00Z'),
       }),
     ).resolves.toBe(false);
+  });
+
+  it('binds a short-lived menu launch token to Telegram identity and route', async () => {
+    const secret = 'menu-session-secret-that-is-at-least-32-characters';
+    const now = new Date('2026-07-29T16:00:00Z');
+    const token = await createMenuLaunchToken({
+      telegramUserId: 42,
+      route: '/matches',
+      secret,
+      now,
+      ttlSeconds: 60,
+    });
+    await expect(
+      verifyMenuLaunchToken({ token, route: '/matches', secret, now }),
+    ).resolves.toMatchObject({ telegramUserId: 42, route: '/matches' });
+    await expect(verifyMenuLaunchToken({ token, route: '/profile', secret, now })).rejects.toThrow(
+      /mismatched/i,
+    );
+    await expect(
+      verifyMenuLaunchToken({
+        token: `${token.slice(0, -1)}0`,
+        route: '/matches',
+        secret,
+        now,
+      }),
+    ).rejects.toThrow(/signature/i);
+    await expect(
+      verifyMenuLaunchToken({
+        token,
+        route: '/matches',
+        secret,
+        now: new Date('2026-07-29T16:01:01Z'),
+      }),
+    ).rejects.toThrow(/expired/i);
   });
 
   it('validates official Telegram initData HMAC construction', async () => {

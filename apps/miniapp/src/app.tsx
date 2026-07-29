@@ -1,6 +1,6 @@
 import { type ReactNode, useEffect } from 'react';
 import { useQuery } from '@tanstack/react-query';
-import { ru } from '@rolemate/shared';
+import { menuLaunchRouteSchema, ru } from '@rolemate/shared';
 import { Redirect, Route, Switch } from 'wouter';
 import { api, ApiError } from './api.js';
 import { Layout } from './components/layout.js';
@@ -25,7 +25,7 @@ function AuthGate({ children }: { children: ReactNode }) {
   const auth = useQuery({
     queryKey: ['auth'],
     queryFn: async () => {
-      try {
+      const currentUser = async () => {
         const me = await api.me();
         return {
           id: me.userId,
@@ -34,11 +34,33 @@ function AuthGate({ children }: { children: ReactNode }) {
           isAdmin: me.isAdmin,
           isOwner: me.isOwner,
         };
+      };
+      try {
+        return await currentUser();
       } catch (error) {
         if (!(error instanceof ApiError) || error.status !== 401) throw error;
       }
+      const launchUrl = new URL(window.location.href);
+      const launchToken = launchUrl.searchParams.get('rm_launch');
+      const launchRoute = menuLaunchRouteSchema.safeParse(window.location.pathname);
+      let launchError: unknown;
+      if (launchToken && launchRoute.success) {
+        try {
+          await api.authenticateMenu(launchToken, launchRoute.data);
+          launchUrl.searchParams.delete('rm_launch');
+          window.history.replaceState(
+            window.history.state,
+            '',
+            `${launchUrl.pathname}${launchUrl.search}${launchUrl.hash}`,
+          );
+          return await currentUser();
+        } catch (error) {
+          launchError = error;
+        }
+      }
       const initData = await waitForTelegramInitData();
       if (!initData) {
+        if (launchError instanceof Error) throw launchError;
         throw new Error(ru.miniApp.auth.telegramOnly);
       }
       const user = await api.authenticate(initData);

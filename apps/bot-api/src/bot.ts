@@ -7,27 +7,63 @@ import {
   NEWS_CHANNEL_URL,
   PROMO_CHAT_URL,
   STARS_SUBSCRIPTION_PERIOD_SECONDS,
+  createMenuLaunchToken,
   ru,
   sha256,
+  type MenuLaunchRoute,
 } from '@rolemate/shared';
 import { DataApiError, type DataApiClient } from './d1-client.js';
 import type { AppEnv } from './env.js';
 import { validateUserContentLinks } from './content-policy.js';
 
-function mainKeyboard(env: AppEnv, telegramUserId: number, role = 'user'): Keyboard {
+async function menuLaunchUrl(
+  env: AppEnv,
+  telegramUserId: number,
+  route: MenuLaunchRoute,
+): Promise<string> {
+  const url = new URL(env.MINI_APP_URL);
+  url.pathname = route;
+  url.searchParams.set(
+    'rm_launch',
+    await createMenuLaunchToken({
+      telegramUserId,
+      route,
+      secret: env.SESSION_SECRET,
+    }),
+  );
+  return url.toString();
+}
+
+async function mainKeyboard(env: AppEnv, telegramUserId: number, role = 'user'): Promise<Keyboard> {
   const keyboard = new Keyboard();
   if (env.MINI_APP_URL) {
+    const routes: MenuLaunchRoute[] = [
+      '/search',
+      '/profile',
+      '/matches',
+      '/chats',
+      '/premium',
+      '/referrals',
+      '/settings',
+    ];
+    const urls = new Map(
+      await Promise.all(
+        routes.map(
+          async (route) => [route, await menuLaunchUrl(env, telegramUserId, route)] as const,
+        ),
+      ),
+    );
     keyboard
-      .webApp(ru.bot.menu.search, `${env.MINI_APP_URL}/search`)
-      .webApp(ru.bot.menu.profile, `${env.MINI_APP_URL}/profile`)
+      .webApp(ru.bot.menu.search, urls.get('/search')!)
+      .webApp(ru.bot.menu.profile, urls.get('/profile')!)
       .row()
-      .webApp(ru.bot.menu.matches, `${env.MINI_APP_URL}/matches`)
-      .webApp(ru.bot.menu.chats, `${env.MINI_APP_URL}/chats`)
+      .webApp(ru.bot.menu.matches, urls.get('/matches')!)
+      .webApp(ru.bot.menu.chats, urls.get('/chats')!)
       .row()
-      .webApp(ru.bot.menu.premium, `${env.MINI_APP_URL}/premium`)
-      .webApp(ru.bot.menu.referrals, `${env.MINI_APP_URL}/referrals`)
+      .webApp(ru.bot.menu.premium, urls.get('/premium')!)
+      .webApp(ru.bot.menu.referrals, urls.get('/referrals')!)
       .row()
-      .webApp(ru.bot.menu.settings, `${env.MINI_APP_URL}/settings`)
+      .webApp(ru.bot.menu.settings, urls.get('/settings')!)
       .text(ru.bot.menu.help)
       .row()
       .text(ru.bot.menu.posts)
@@ -52,7 +88,7 @@ function mainKeyboard(env: AppEnv, telegramUserId: number, role = 'user'): Keybo
       .row();
   }
   if (env.MINI_APP_URL && (telegramUserId === OWNER_TELEGRAM_ID || role === 'moderator')) {
-    keyboard.webApp(ru.bot.menu.admin, `${env.MINI_APP_URL}/admin`);
+    keyboard.webApp(ru.bot.menu.admin, await menuLaunchUrl(env, telegramUserId, '/admin'));
   }
   return keyboard.resized().persistent();
 }
@@ -477,7 +513,7 @@ export function createBot(
   bot.command('menu', async (context) => {
     const user = await upsertUser(context, dataApi);
     await context.reply(ru.bot.mainMenu, {
-      reply_markup: mainKeyboard(env, context.from?.id ?? 0, user.role),
+      reply_markup: await mainKeyboard(env, context.from?.id ?? 0, user.role),
     });
   });
   bot.command('help', (context) => context.reply(ru.help));

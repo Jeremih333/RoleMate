@@ -1,6 +1,12 @@
 import { webcrypto } from 'node:crypto';
 import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
-import { ru, sha256 } from '@rolemate/shared';
+import {
+  createMenuLaunchToken,
+  ru,
+  sha256,
+  verifyMenuLaunchToken,
+  type MenuLaunchRoute,
+} from '@rolemate/shared';
 import { DataApiClient } from '../src/d1-client.js';
 import { readEnv } from '../src/env.js';
 import { buildServer } from '../src/server.js';
@@ -48,6 +54,8 @@ function testEnv() {
     INTERNAL_API_SECRET: 'test-internal-secret-value',
     SESSION_SECRET: 'test-session-secret-value-at-least-32-characters',
     ALLOWED_ORIGINS: 'https://miniapp.example.test',
+    MINI_APP_URL: 'https://miniapp.example.test',
+    PUBLIC_BASE_URL: 'https://miniapp.example.test',
     WELCOME_IMAGE_PATH: 'assets/generated/does-not-exist.jpg',
   });
 }
@@ -67,6 +75,17 @@ function startUpdate(updateId: number) {
       },
       text: '/start',
       entities: [{ type: 'bot_command' as const, offset: 0, length: 6 }],
+    },
+  };
+}
+
+function menuUpdate(updateId: number) {
+  return {
+    ...startUpdate(updateId),
+    message: {
+      ...startUpdate(updateId).message,
+      text: '/menu',
+      entities: [{ type: 'bot_command' as const, offset: 0, length: 5 }],
     },
   };
 }
@@ -126,7 +145,14 @@ function telegramAndDataFetch(options: FetchOptions = {}) {
             : operation === 'users.upsert'
               ? { userId: '00000000-0000-4000-8000-000000000042', isNew: true, role: 'user' }
               : operation === 'users.get'
-                ? { risk_score: 0 }
+                ? {
+                    id: '00000000-0000-4000-8000-000000000042',
+                    telegram_user_id: 42,
+                    role: 'user',
+                    status: 'active',
+                    is_banned: 0,
+                    risk_score: 0,
+                  }
                 : operation === 'payments.getByPayload'
                   ? { id: '00000000-0000-4000-8000-000000000700' }
                   : operation === 'payments.completeStars'
@@ -276,6 +302,81 @@ describe('Telegram webhook integration', () => {
         [{ url: 'https://t.me/odinnadsat' }, { url: 'https://t.me/rolemate' }],
       ],
     });
+    await app.close();
+  });
+
+  it('puts a route-bound signed fallback into every /menu MiniApp button', async () => {
+    const { fetchMock, requests } = telegramAndDataFetch();
+    vi.stubGlobal('fetch', fetchMock);
+    const env = testEnv();
+    const app = await buildServer(env);
+
+    const response = await app.inject({
+      method: 'POST',
+      url: '/telegram/webhook',
+      headers: { 'x-telegram-bot-api-secret-token': 'test-webhook-secret-value' },
+      payload: menuUpdate(104),
+    });
+
+    expect(response.statusCode, response.body).toBe(200);
+    const menu = requests.find(
+      (request) => request.url.endsWith('/sendMessage') && request.body.text === ru.bot.mainMenu,
+    );
+    const rows = (
+      menu?.body.reply_markup as { keyboard?: Array<Array<{ web_app?: { url: string } }>> }
+    ).keyboard;
+    const links = (rows ?? []).flatMap((row) =>
+      row.flatMap((button) => (button.web_app ? [button.web_app.url] : [])),
+    );
+    expect(links).toHaveLength(7);
+    for (const link of links) {
+      const url = new URL(link);
+      const route = url.pathname as MenuLaunchRoute;
+      const token = url.searchParams.get('rm_launch');
+      expect(token).toBeTruthy();
+      await expect(
+        verifyMenuLaunchToken({
+          token: token!,
+          route,
+          secret: env.SESSION_SECRET,
+        }),
+      ).resolves.toMatchObject({ telegramUserId: 42, route });
+    }
+    await app.close();
+  });
+
+  it('creates a session from a valid menu fallback and rejects route substitution', async () => {
+    const { fetchMock } = telegramAndDataFetch();
+    vi.stubGlobal('fetch', fetchMock);
+    const env = testEnv();
+    const app = await buildServer(env);
+    const token = await createMenuLaunchToken({
+      telegramUserId: 42,
+      route: '/matches',
+      secret: env.SESSION_SECRET,
+    });
+
+    const response = await app.inject({
+      method: 'POST',
+      url: '/api/auth/menu',
+      payload: { token, route: '/matches' },
+    });
+    expect(response.statusCode, response.body).toBe(200);
+    expect(response.headers['set-cookie']).toContain('rm_session=');
+    const responseBody = response.json<{
+      user: { telegramUserId: number; role: string };
+      csrfToken: unknown;
+    }>();
+    expect(responseBody.user).toMatchObject({ telegramUserId: 42, role: 'user' });
+    expect(typeof responseBody.csrfToken).toBe('string');
+
+    const substituted = await app.inject({
+      method: 'POST',
+      url: '/api/auth/menu',
+      payload: { token, route: '/profile' },
+    });
+    expect(substituted.statusCode).toBe(401);
+    expect(substituted.json()).toMatchObject({ error: 'INVALID_MENU_LAUNCH' });
     await app.close();
   });
 

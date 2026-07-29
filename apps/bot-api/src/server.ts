@@ -10,10 +10,12 @@ import swagger from '@fastify/swagger';
 import swaggerUi from '@fastify/swagger-ui';
 import {
   OWNER_TELEGRAM_ID,
+  menuLaunchRouteSchema,
   profileSchema,
   ru,
   sha256,
   validateTelegramInitData,
+  verifyMenuLaunchToken,
 } from '@rolemate/shared';
 import { z } from 'zod';
 import { createBot } from './bot.js';
@@ -26,6 +28,10 @@ import { validateUserContentLinks } from './content-policy.js';
 import { InlineKeyboard, InputFile } from 'grammy';
 
 const authBodySchema = z.object({ initData: z.string().min(1).max(8_192) });
+const menuAuthBodySchema = z.object({
+  token: z.string().min(80).max(1_024),
+  route: menuLaunchRouteSchema,
+});
 const swipeBodySchema = z.object({
   targetUserId: z.string().uuid(),
   action: z.enum(['like', 'skip', 'super_like', 'rewind']),
@@ -360,6 +366,55 @@ export async function buildServer(
       });
       return {
         user: { id: user.userId, telegramUserId: validated.user.id, role: user.role },
+        csrfToken: session.csrfToken,
+      };
+    },
+  );
+
+  app.post(
+    '/api/auth/menu',
+    { config: { rateLimit: { max: 30, timeWindow: '1 minute' } } },
+    async (request, reply) => {
+      const body = menuAuthBodySchema.parse(request.body);
+      let launch: Awaited<ReturnType<typeof verifyMenuLaunchToken>>;
+      try {
+        launch = await verifyMenuLaunchToken({
+          token: body.token,
+          route: body.route,
+          secret: env.SESSION_SECRET,
+        });
+      } catch {
+        throw new DataApiError('INVALID_MENU_LAUNCH', ru.miniApp.auth.invalidData, 401);
+      }
+      const user = await dataApi.execute<{
+        id: string;
+        telegram_user_id: number;
+        role: string;
+        status: string;
+        is_banned: number;
+      } | null>('users.get', { telegramUserId: launch.telegramUserId });
+      if (
+        !user ||
+        user.telegram_user_id !== launch.telegramUserId ||
+        user.status !== 'active' ||
+        user.is_banned
+      ) {
+        throw new DataApiError('INVALID_MENU_LAUNCH', ru.miniApp.auth.invalidData, 401);
+      }
+      const session = await createSession(dataApi, user.id);
+      reply.setCookie('rm_session', session.token, {
+        path: '/',
+        httpOnly: true,
+        secure: env.NODE_ENV === 'production',
+        sameSite: 'strict',
+        expires: session.expiresAt,
+      });
+      return {
+        user: {
+          id: user.id,
+          telegramUserId: user.telegram_user_id,
+          role: user.role,
+        },
         csrfToken: session.csrfToken,
       };
     },

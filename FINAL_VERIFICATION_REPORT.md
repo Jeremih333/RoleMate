@@ -9,7 +9,7 @@
 Northflank и банковская карта не являются обязательными зависимостями.
 
 - MiniApp и Bot API: <https://rolemate-app.carreljeremih.workers.dev>
-- App Worker version: `3af87d69-d3e4-40f7-98f3-fc025d8817a2`
+- App Worker version: `0a3da6a3-dd81-4969-ad85-56916baf441a`
 - D1 Data API: <https://rolemate-data-api.carreljeremih.workers.dev>
 - Data API version: `67102638-0d58-460d-8010-588969b0d207`
 - Preview Data API version: `4070eec0-32d3-4373-a52f-f89e300fb1fe`
@@ -42,6 +42,9 @@ Northflank и банковская карта не являются обязат
   взаимного лайка; такой чат не маскируется под взаимную симпатию.
 - Входящие симпатии доступны без Premium в MiniApp и через `/matches`, привязаны к
   внутреннему UUID профиля и не зависят от изменяемого Telegram username.
+- Суперсимпатии доступны всем: бесплатный лимит — 1 в сутки, Premium-лимит
+  настраивается владельцем и по умолчанию равен 5. MiniApp и бот показывают
+  остаток/исчерпание лимита, а получатель видит отдельное уведомление.
 - Добавлены профильные фото- и видеоаватары. Видео проверяется по лимитам 6 секунд,
   8 МБ и 720×720 и отображается как бесшумная зацикленная GIF-анимация.
 - Исправлен запуск разделов из `/menu`: бот создаёт компактную HMAC-подписанную,
@@ -82,8 +85,8 @@ Northflank и банковская карта не являются обязат
 | Prettier                         | passed                                |
 | ESLint                           | passed                                |
 | TypeScript `strict`              | passed                                |
-| Unit/integration/migration tests | 70 passed                             |
-| Playwright E2E                   | 102 passed: Android, iPhone и desktop |
+| Unit/integration/migration tests | 71 passed                             |
+| Playwright E2E                   | 105 passed: Android, iPhone и desktop |
 | Production build                 | passed                                |
 | Dependency audit                 | известных уязвимостей нет             |
 | `git diff --check`               | passed                                |
@@ -126,7 +129,7 @@ Northflank и банковская карта не являются обязат
 | App `/version`              | 200, production            |
 | Data API `/health/live`     | 200, `ok`                  |
 | Data API `/health/ready`    | 200, `ready`               |
-| MiniApp JS/CSS              | 200, `index-BQ0ejPEf.js`   |
+| MiniApp JS/CSS              | 200, `index-Czq2ceEX.js`   |
 | Menu auth с ложной подписью | 401, `INVALID_MENU_LAUNCH` |
 | User API без сессии         | 401                        |
 | Data API без подписи        | 401                        |

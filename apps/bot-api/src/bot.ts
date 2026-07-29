@@ -258,15 +258,25 @@ export function createBot(
     });
   }
 
-  async function notifyAboutLike(targetUserId: string): Promise<void> {
+  async function notifyAboutLike(
+    targetUserId: string,
+    action: 'like' | 'super_like',
+  ): Promise<void> {
     const target = await dataApi.execute<{ telegram_user_id: number } | null>(
       'notifications.deliveryTarget',
       { userId: targetUserId, kind: 'like' },
     );
     if (!target) return;
-    await bot.api.sendMessage(target.telegram_user_id, ru.bot.newLikeNotification, {
-      reply_markup: new InlineKeyboard().webApp(ru.bot.menu.matches, `${env.MINI_APP_URL}/matches`),
-    });
+    await bot.api.sendMessage(
+      target.telegram_user_id,
+      action === 'super_like' ? ru.bot.newSuperLikeNotification : ru.bot.newLikeNotification,
+      {
+        reply_markup: new InlineKeyboard().webApp(
+          ru.bot.menu.matches,
+          `${env.MINI_APP_URL}/matches`,
+        ),
+      },
+    );
   }
 
   async function resolveReply(
@@ -577,7 +587,9 @@ export function createBot(
       {
         reply_markup: new InlineKeyboard()
           .text(ru.bot.buttons.skip, `swipe:skip:${profile.user_id}`)
-          .text(ru.bot.buttons.like, `swipe:like:${profile.user_id}`),
+          .text(ru.bot.buttons.like, `swipe:like:${profile.user_id}`)
+          .row()
+          .text(ru.bot.buttons.superLike, `swipe:super_like:${profile.user_id}`),
       },
     );
   });
@@ -863,21 +875,39 @@ export function createBot(
     const user = await upsertUser(context, dataApi);
     const action = context.match?.[1] as 'like' | 'skip' | 'super_like';
     const targetUserId = context.match?.[2] ?? '';
-    const result = await dataApi.execute<{
-      created: boolean;
-      matched: boolean;
-      matchId?: string;
-    }>('swipes.create', {
-      userId: user.userId,
-      targetUserId,
-      action,
-      source: 'bot',
-      idempotencyKey: `bot:${context.update.update_id}:${targetUserId}`,
-    });
-    if (result.created && ['like', 'super_like'].includes(action)) {
-      await notifyAboutLike(targetUserId);
+    let result: { created: boolean; matched: boolean; matchId?: string };
+    try {
+      result = await dataApi.execute<{
+        created: boolean;
+        matched: boolean;
+        matchId?: string;
+      }>('swipes.create', {
+        userId: user.userId,
+        targetUserId,
+        action,
+        source: 'bot',
+        idempotencyKey: `bot:${context.update.update_id}:${targetUserId}`,
+      });
+    } catch (error) {
+      if (error instanceof DataApiError && error.code === 'SUPER_LIKE_LIMIT') {
+        await context.answerCallbackQuery({
+          text: ru.bot.superLikeLimitReached,
+          show_alert: true,
+        });
+        return;
+      }
+      throw error;
     }
-    await context.answerCallbackQuery(result.matched ? ru.bot.swipeMatched : ru.bot.done);
+    if (result.created && ['like', 'super_like'].includes(action)) {
+      await notifyAboutLike(targetUserId, action === 'super_like' ? 'super_like' : 'like');
+    }
+    await context.answerCallbackQuery(
+      result.matched
+        ? ru.bot.swipeMatched
+        : action === 'super_like'
+          ? ru.bot.superLikeSent
+          : ru.bot.done,
+    );
     await context.editMessageReplyMarkup();
     if (result.matched) await context.reply(ru.match);
   });
@@ -915,7 +945,7 @@ export function createBot(
       source: 'bot',
       idempotencyKey: `post:${context.update.update_id}:${post.author_user_id}`,
     });
-    if (result.created) await notifyAboutLike(post.author_user_id);
+    if (result.created) await notifyAboutLike(post.author_user_id, 'like');
     await context.answerCallbackQuery(result.matched ? ru.bot.swipeMatched : ru.bot.postLiked);
   });
   bot.callbackQuery(/^postmore:([0-9a-f-]{36})$/, async (context) => {

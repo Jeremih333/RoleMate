@@ -19,6 +19,7 @@ import { useEffect, useState } from 'react';
 import { ru } from '@rolemate/shared';
 import { useLocation } from 'wouter';
 import {
+  ApiError,
   api,
   type SearchPreferences,
   type SearchPreferencesInput,
@@ -692,6 +693,13 @@ export function SearchPage() {
           <Star />
         </Button>
       </div>
+      {swipe.isError ? (
+        <div className="error-box mt-3">
+          {swipe.error instanceof ApiError && swipe.error.code === 'SUPER_LIKE_LIMIT'
+            ? ru.miniApp.search.superLikeLimitReached
+            : swipe.error.message}
+        </div>
+      ) : null}
       <div className="mt-3 flex justify-center gap-6 text-xs text-muted">
         <button
           className="inline-flex gap-1"

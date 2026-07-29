@@ -1484,6 +1484,8 @@ describe('D1 domain operations', () => {
     const freeUser = await onboard(2200);
     const firstTarget = await onboard(2201);
     const secondTarget = await onboard(2202);
+    const thirdTarget = await onboard(2203);
+    const fourthTarget = await onboard(2204);
     const adminId = await upsert(1_040_929_628);
 
     await expect(
@@ -1625,6 +1627,32 @@ describe('D1 domain operations', () => {
         crypto.randomUUID(),
       ),
     ).resolves.toEqual({ updated: true });
+
+    for (const [targetUserId, idempotencyKey] of [
+      [thirdTarget, 'premium-super-like-limit-0003'],
+      [fourthTarget, 'premium-super-like-limit-0004'],
+    ] as const) {
+      await expect(
+        executeOperation(
+          env,
+          'swipes.create',
+          {
+            userId: freeUser,
+            targetUserId,
+            action: 'super_like',
+            source: 'miniapp',
+            idempotencyKey,
+          },
+          crypto.randomUUID(),
+        ),
+      ).resolves.toMatchObject({ created: true });
+    }
+    await expect(
+      executeOperation(env, 'premium.status', { userId: freeUser }, crypto.randomUUID()),
+    ).resolves.toMatchObject({
+      premium: true,
+      usage: { superLikes: 3, superLikeLimit: 5 },
+    });
 
     await executeOperation(
       env,

@@ -90,6 +90,17 @@ function menuUpdate(updateId: number) {
   };
 }
 
+function searchUpdate(updateId: number) {
+  return {
+    ...startUpdate(updateId),
+    message: {
+      ...startUpdate(updateId).message,
+      text: '/search',
+      entities: [{ type: 'bot_command' as const, offset: 0, length: 7 }],
+    },
+  };
+}
+
 function successfulPaymentUpdate(updateId: number) {
   return {
     update_id: updateId,
@@ -176,15 +187,24 @@ function telegramAndDataFetch(options: FetchOptions = {}) {
                           ? { written: true }
                           : operation === 'premium.status'
                             ? { premium: false }
-                            : operation === 'conversations.resolveMiniAppRelay'
-                              ? {
-                                  destination_chat_id: 777,
-                                  recipient_muted: 0,
-                                  notify_message: 0,
-                                }
-                              : operation === 'conversations.recordMiniAppMessage'
-                                ? { recorded: true }
-                                : null;
+                            : operation === 'search.list'
+                              ? [
+                                  {
+                                    user_id: '00000000-0000-4000-8000-000000000099',
+                                    display_name: 'Ночной автор',
+                                    short_headline: 'Ищу сюжет',
+                                    compatibility: 88,
+                                  },
+                                ]
+                              : operation === 'conversations.resolveMiniAppRelay'
+                                ? {
+                                    destination_chat_id: 777,
+                                    recipient_muted: 0,
+                                    notify_message: 0,
+                                  }
+                                : operation === 'conversations.recordMiniAppMessage'
+                                  ? { recorded: true }
+                                  : null;
       return Promise.resolve(
         new Response(JSON.stringify({ ok: true, data, requestId: 'request' }), {
           status: 200,
@@ -342,6 +362,34 @@ describe('Telegram webhook integration', () => {
         }),
       ).resolves.toMatchObject({ telegramUserId: 42, route: launch!.route });
     }
+    await app.close();
+  });
+
+  it('offers a super-like to every user in bot search', async () => {
+    const { fetchMock, requests } = telegramAndDataFetch();
+    vi.stubGlobal('fetch', fetchMock);
+    const app = await buildServer(testEnv());
+
+    const response = await app.inject({
+      method: 'POST',
+      url: '/telegram/webhook',
+      headers: { 'x-telegram-bot-api-secret-token': 'test-webhook-secret-value' },
+      payload: searchUpdate(105),
+    });
+
+    expect(response.statusCode, response.body).toBe(200);
+    const card = requests.find(
+      (request) =>
+        request.url.endsWith('/sendMessage') &&
+        typeof request.body.text === 'string' &&
+        request.body.text.includes('Ночной автор'),
+    );
+    const keyboard = card?.body.reply_markup as
+      { inline_keyboard?: Array<Array<{ text?: string; callback_data?: string }>> } | undefined;
+    expect(keyboard?.inline_keyboard?.flat()).toContainEqual({
+      text: ru.bot.buttons.superLike,
+      callback_data: 'swipe:super_like:00000000-0000-4000-8000-000000000099',
+    });
     await app.close();
   });
 

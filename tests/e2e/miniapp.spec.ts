@@ -659,6 +659,28 @@ test('keyword search sends the query and profile markdown is rendered safely', a
   await expect(page.locator('.profile-cover video')).toBeVisible();
 });
 
+test('free super-like limit shows a clear Premium-aware message', async ({ page }) => {
+  await mockApi(page, false, {
+    '/api/swipes': async (route) => {
+      await route.fulfill({
+        status: 429,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          error: 'SUPER_LIKE_LIMIT',
+          message: 'Daily super-like limit reached',
+        }),
+      });
+    },
+  });
+  await page.goto('/search');
+  await page.getByRole('button', { name: 'Суперсимпатия' }).click();
+  await expect(
+    page.getByText(
+      'Лимит суперсимпатий на сегодня исчерпан. С Premium их доступно больше — открой раздел Premium или попробуй завтра.',
+    ),
+  ).toBeVisible();
+});
+
 test('a search profile opens in full, renders a Telegram-style track, and starts chat directly', async ({
   page,
 }) => {

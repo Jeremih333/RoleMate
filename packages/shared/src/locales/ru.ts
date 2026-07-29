@@ -33,6 +33,7 @@ export const ru = {
       openProfile: '👤 Открыть анкету',
       skip: '❌ Пропустить',
       like: '❤️ Нравится',
+      superLike: '⭐ Суперсимпатия',
       share: 'Поделиться',
       deleteForever: 'Удалить безвозвратно',
       cancel: 'Отмена',
@@ -79,6 +80,7 @@ export const ru = {
     matchesTitle: '💞 Твои взаимные симпатии:',
     noChats: '💬 Активных анонимных чатов пока нет.',
     newLikeNotification: '💜 Ты кому-то понравился',
+    newSuperLikeNotification: '⭐ Тебе отправили суперсимпатию',
     newMessageNotification: '💬 Получено новое сообщение',
     premiumGranted: (days: number) => {
       const mod100 = days % 100;
@@ -140,6 +142,9 @@ export const ru = {
     },
     rulesAcceptance: 'Продолжая, ты принимаешь правила и политику конфиденциальности.',
     swipeMatched: 'Это взаимно! Открыт анонимный чат.',
+    superLikeSent: 'Суперсимпатия отправлена',
+    superLikeLimitReached:
+      'Лимит суперсимпатий на сегодня исчерпан. С Premium их доступно больше — открой раздел Premium или попробуй завтра.',
     done: 'Готово',
     chatSelected: 'Чат выбран',
     chatInstructions:
@@ -435,6 +440,8 @@ export const ru = {
       skip: 'Пропустить',
       like: 'Нравится',
       superLike: 'Суперсимпатия',
+      superLikeLimitReached:
+        'Лимит суперсимпатий на сегодня исчерпан. С Premium их доступно больше — открой раздел Premium или попробуй завтра.',
       block: 'Заблокировать',
       report: 'Пожаловаться',
       reportPrompt: 'Опишите причину жалобы',

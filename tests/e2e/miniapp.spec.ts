@@ -1,4 +1,4 @@
-import { expect, test, type Page } from '@playwright/test';
+import { expect, test, type Page, type Route } from '@playwright/test';
 
 async function mockTelegram(page: Page): Promise<void> {
   await page.route('https://telegram.org/js/telegram-web-app.js*', async (route) => {
@@ -26,7 +26,13 @@ async function mockTelegram(page: Page): Promise<void> {
   });
 }
 
-async function mockApi(page: Page, admin: boolean | 'moderator' = false): Promise<void> {
+type ApiOverride = unknown | ((route: Route) => Promise<void> | void);
+
+async function mockApi(
+  page: Page,
+  admin: boolean | 'moderator' = false,
+  overrides: Record<string, ApiOverride> = {},
+): Promise<void> {
   const owner = admin === true;
   const staff = owner || admin === 'moderator';
   await page.route('**/api/**', async (route) => {
@@ -76,6 +82,43 @@ async function mockApi(page: Page, admin: boolean | 'moderator' = false): Promis
         moderation_status: 'approved',
         is_active: 1,
         has_premium: 0,
+        profile_completion_percent: 100,
+        in_search_pool: 1,
+      },
+      '/api/profile/preview': {
+        id: '00000000-0000-4000-8000-000000000010',
+        user_id: '00000000-0000-4000-8000-000000000001',
+        display_name: 'Лис',
+        age_group: '21_25',
+        gender: 'not_specified',
+        short_headline: 'Ищу соавтора для долгой истории',
+        about: 'Люблю **сложные сюжеты** и спокойное обсуждение границ.',
+        fandoms: '["Arcane"]',
+        genres: '["драма"]',
+        tags: '["медленные ответы"]',
+        writing_style: 'literary',
+        average_post_length: 'paragraphs_3_5',
+        activity_frequency: 'daily',
+        compatibility: 100,
+        is_premium: 1,
+        has_premium: 1,
+        media_items: JSON.stringify([
+          {
+            id: '00000000-0000-4000-8000-000000000211',
+            media_type: 'photo',
+          },
+          {
+            id: '00000000-0000-4000-8000-000000000212',
+            media_type: 'video',
+          },
+          {
+            id: '00000000-0000-4000-8000-000000000213',
+            media_type: 'audio',
+          },
+        ]),
+        rating_likes: 4,
+        rating_dislikes: 1,
+        rating_score: 3,
       },
       '/api/profile/state': { active: false },
       '/api/profile/media': [],
@@ -114,6 +157,20 @@ async function mockApi(page: Page, admin: boolean | 'moderator' = false): Promis
           compatibility: 91,
           is_premium: 1,
           has_premium: 1,
+          media_items: JSON.stringify([
+            {
+              id: '00000000-0000-4000-8000-000000000201',
+              media_type: 'photo',
+            },
+            {
+              id: '00000000-0000-4000-8000-000000000202',
+              media_type: 'video',
+            },
+            {
+              id: '00000000-0000-4000-8000-000000000203',
+              media_type: 'audio',
+            },
+          ]),
         },
       ],
       '/api/premium/status': {
@@ -125,6 +182,12 @@ async function mockApi(page: Page, admin: boolean | 'moderator' = false): Promis
           superLikes: 0,
           superLikeLimit: 1,
         },
+      },
+      '/api/premium/profile-variants': [],
+      '/api/search/availability': {
+        otherProfiles: 1,
+        otherSearchable: 1,
+        safeCandidates: 1,
       },
       '/api/search/preferences': {
         premium: false,
@@ -138,7 +201,18 @@ async function mockApi(page: Page, admin: boolean | 'moderator' = false): Promis
         only_with_photo: 0,
       },
       '/api/search/filter-sets': [],
-      '/api/products': [],
+      '/api/products': [
+        {
+          id: '00000000-0000-4000-8000-000000000007',
+          code: 'premium_7d',
+          name: 'Premium на 7 дней',
+          description: 'Все Premium-возможности на 7 дней',
+          billing_type: 'one_time',
+          duration_days: 7,
+          stars_amount: 75,
+          is_active: 1,
+        },
+      ],
       '/api/admin/dashboard': {
         users: 120,
         profiles: 84,
@@ -221,10 +295,17 @@ async function mockApi(page: Page, admin: boolean | 'moderator' = false): Promis
         },
       ],
     };
+    const override = overrides[path];
+    if (typeof override === 'function') {
+      await override(route);
+      return;
+    }
     await route.fulfill({
       status: 200,
       contentType: 'application/json',
-      body: JSON.stringify(payloads[path] ?? {}),
+      body: JSON.stringify(
+        Object.prototype.hasOwnProperty.call(overrides, path) ? override : (payloads[path] ?? {}),
+      ),
     });
   });
 }
@@ -256,6 +337,17 @@ test('menu launch recovers initData from the Telegram URL when the SDK is late',
   await expect(page.locator('main h2').first()).toBeVisible();
 });
 
+test('home readiness uses the saved profile completion instead of a hardcoded zero', async ({
+  page,
+}) => {
+  await mockApi(page);
+  await page.goto('/');
+  await expect(page.getByText('100%')).toBeVisible();
+  await expect(page.locator('a[href="/profile/edit"]').last()).toContainText(
+    'Редактировать анкету',
+  );
+});
+
 test('admin route is absent for a regular user', async ({ page }) => {
   await mockApi(page, false);
   await page.goto('/admin');
@@ -273,8 +365,40 @@ test('profile editor loads existing values without destructive defaults', async 
   await expect(page.locator('textarea[name="about"]')).toHaveValue(/Люблю сложные сюжеты/);
   await expect(page.locator('select[name="ageGroup"]')).toHaveValue('21_25');
   await expect(page.getByText('Русский', { exact: true })).toBeVisible();
-  await expect(page.locator('select[name="timezone"]')).toContainText('по Москве');
-  await expect(page.locator('select[name="timezone"]')).toContainText('по Екатеринбургу');
+  const timezone = page.getByRole('button', { name: 'Часовой пояс' });
+  await expect(timezone).toBeVisible();
+  await expect(timezone).toContainText('UTC+3 — по Москве');
+  await timezone.click();
+  await expect(page.getByRole('option', { name: 'UTC+5 — по Екатеринбургу' })).toBeVisible();
+  const timezoneMenu = page.getByRole('listbox');
+  const menuBox = await timezoneMenu.boundingBox();
+  const viewport = page.viewportSize();
+  expect(menuBox?.height ?? Number.POSITIVE_INFINITY).toBeLessThanOrEqual(
+    (viewport?.height ?? 1_000) * 0.42,
+  );
+  await page.getByRole('option', { name: 'UTC+5 — по Екатеринбургу' }).click();
+  await expect(timezone).toContainText('UTC+5 — по Екатеринбургу');
+});
+
+test('profile publish button confirms a successful save and resets after editing', async ({
+  page,
+}) => {
+  let saveRequests = 0;
+  page.on('request', (request) => {
+    if (new URL(request.url()).pathname === '/api/profile' && request.method() === 'PUT') {
+      saveRequests += 1;
+    }
+  });
+  await mockApi(page);
+  await page.goto('/profile/edit');
+  const button = page.locator('.sticky-submit button');
+  await button.click();
+  await expect(button).toContainText('Опубликовано!');
+  await expect(button).toHaveClass(/profile-publish-success/);
+  expect(saveRequests).toBe(1);
+
+  await page.locator('input[name="displayName"]').fill('Новый псевдоним');
+  await expect(button).not.toHaveClass(/profile-publish-success/);
 });
 
 test('profile languages accept suggestions and custom comma-separated tags', async ({ page }) => {
@@ -284,6 +408,24 @@ test('profile languages accept suggestions and custom comma-separated tags', asy
   await languageInput.fill('Клингонский,');
   await expect(page.getByText('Клингонский', { exact: true })).toBeVisible();
   await expect(page.getByRole('button', { name: 'Удалить язык «Клингонский»' })).toBeVisible();
+});
+
+test('profile taxonomy fields accept comma-separated values as removable tags', async ({
+  page,
+}) => {
+  await mockApi(page);
+  await page.goto('/profile/edit');
+  for (const [label, value] of [
+    ['Фандомы', 'Cyberpunk 2077'],
+    ['Жанры', 'киберпанк'],
+    ['Теги анкеты', 'ищу соавтора'],
+    ['Кого или что ищешь — через запятую', 'сюжет'],
+  ] as const) {
+    const input = page.getByRole('textbox', { name: label });
+    await input.fill(`${value},`);
+    await expect(page.getByText(value, { exact: true })).toBeVisible();
+    await expect(page.getByRole('button', { name: `Удалить тег: ${value}` })).toBeVisible();
+  }
 });
 
 test('profile page can disable its own questionnaire and renders the bot avatar', async ({
@@ -300,18 +442,124 @@ test('profile page can disable its own questionnaire and renders the bot avatar'
   await expect(page.getByText('Анкета отключена и скрыта из поиска.')).toBeVisible();
 });
 
+test('profile owner can preview the exact public card with its media header', async ({ page }) => {
+  await mockApi(page);
+  await page.goto('/profile');
+  await page.getByRole('button', { name: 'Посмотреть глазами других' }).click();
+  await expect(page.getByText('Предпросмотр', { exact: true })).toBeVisible();
+  await expect(page.locator('.profile-markdown strong')).toHaveText('сложные сюжеты');
+  await expect(page.getByLabel('Аудио анкеты 1')).toBeVisible();
+  await page.getByRole('button', { name: 'Следующее медиа' }).click();
+  await expect(page.locator('.profile-cover video')).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Закрыть предпросмотр' })).toBeVisible();
+});
+
 test('keyword search sends the query and profile markdown is rendered safely', async ({ page }) => {
   await mockApi(page);
   await page.goto('/search');
   const requestPromise = page.waitForRequest(
     (request) => new URL(request.url()).searchParams.get('q') === 'готический детектив',
   );
-  await page.getByLabel('Поиск анкет по ключевым словам и тегам').fill('готический детектив');
+  await page
+    .getByLabel('Поиск анкет по псевдониму, ключевым словам и тегам')
+    .fill('готический детектив');
   await page.getByRole('button', { name: 'Найти' }).click();
   const request = await requestPromise;
   expect(new URL(request.url()).searchParams.get('q')).toBe('готический детектив');
   await expect(page.getByText('готический детектив', { exact: true })).toBeVisible();
   await expect(page.locator('.profile-markdown strong')).toHaveText('сложные сюжеты');
+  await expect(page.getByLabel('Аудио анкеты 1')).toBeVisible();
+  await page.getByRole('button', { name: 'Следующее медиа' }).click();
+  await expect(page.locator('.profile-cover video')).toBeVisible();
+});
+
+test('regular users never see quick moderation in search', async ({ page }) => {
+  await mockApi(page);
+  await page.goto('/search');
+  await expect(page.getByTestId('search-moderation-panel')).toHaveCount(0);
+});
+
+test('assigned staff can warn directly from search', async ({ page }) => {
+  await mockApi(page, 'moderator');
+  await page.goto('/search');
+  await expect(page.getByTestId('search-moderation-panel')).toBeVisible();
+  const warningRequest = page.waitForRequest(
+    (request) =>
+      request.url().endsWith('/api/admin/users/00000000-0000-4000-8000-000000000003/moderate') &&
+      request.method() === 'POST',
+  );
+  page.once('dialog', (dialog) => void dialog.accept('Нарушение правил публикации'));
+  await page
+    .getByTestId('search-moderation-panel')
+    .getByRole('button', { name: 'Предупредить' })
+    .click();
+  expect((await warningRequest).postDataJSON()).toMatchObject({
+    action: 'warn',
+    reason: 'Нарушение правил публикации',
+  });
+});
+
+test('active Premium section shows expiry date and remaining days', async ({ page }) => {
+  const endsAt = new Date(Date.now() + 3 * 86_400_000).toISOString();
+  let boostAttempts = 0;
+  await mockApi(page, false, {
+    '/api/premium/status': {
+      premium: true,
+      endsAt,
+      earlyAccess: false,
+      usage: {
+        profileViews: 1,
+        profileViewLimit: 100,
+        superLikes: 0,
+        superLikeLimit: 5,
+      },
+    },
+    '/api/premium/stats': {
+      viewsToday: 1,
+      viewsSevenDays: 4,
+      viewsTotal: 10,
+      incomingLikes: 2,
+    },
+    '/api/premium/boost': (route) => {
+      boostAttempts += 1;
+      return route.fulfill({
+        status: boostAttempts === 1 ? 200 : 429,
+        contentType: 'application/json',
+        body: JSON.stringify(
+          boostAttempts === 1
+            ? { boosted: true }
+            : { error: 'BOOST_COOLDOWN', message: 'A free boost is available once per day' },
+        ),
+      });
+    },
+  });
+  const statusResponse = page.waitForResponse((response) =>
+    response.url().endsWith('/api/premium/status'),
+  );
+  await page.goto('/premium');
+  expect(await (await statusResponse).json()).toMatchObject({ premium: true, endsAt });
+  await expect(page.getByText('Premium активен', { exact: true })).toBeVisible();
+  await expect(page.getByText(/Действует до/)).toBeVisible();
+  await expect(page.getByText(/Осталось 3 дня/)).toBeVisible();
+  const boostButton = page.getByRole('button', { name: 'Активировать бесплатный boost' });
+  await boostButton.click();
+  await expect(page.getByText('Анкета поднята в приоритетной выдаче на 24 часа.')).toBeVisible();
+  await boostButton.click();
+  await expect(
+    page.getByText(
+      'Бесплатный boost можно активировать только один раз в день. Попробуй снова завтра.',
+    ),
+  ).toBeVisible();
+});
+
+test('profile state card remains readable on a narrow Telegram viewport', async ({ page }) => {
+  await mockApi(page);
+  await page.setViewportSize({ width: 360, height: 720 });
+  await page.goto('/profile');
+  const copy = page.locator('.profile-state-copy');
+  await expect(copy).toBeVisible();
+  expect((await copy.boundingBox())?.width ?? 0).toBeGreaterThan(150);
+  await expect(page.locator('.profile-state-action')).toBeVisible();
 });
 
 test('account deletion requires the exact confirmation phrase', async ({ page }) => {
@@ -352,6 +600,44 @@ test('a user can block anyone who wrote to them from the MiniApp chat list', asy
   await expect(blockRequest).resolves.toBeTruthy();
 });
 
+test('a user can create a Premium gift invoice for their active chat partner', async ({ page }) => {
+  await mockApi(page);
+  await page.route('**/api/conversations', (route) =>
+    route.fulfill({
+      contentType: 'application/json',
+      body: JSON.stringify([
+        {
+          id: '00000000-0000-4000-8000-000000000099',
+          status: 'active',
+          contact_reveal_status: 'hidden',
+          is_muted: 0,
+          anonymous_alias: 'Автор B',
+          other_user_id: '00000000-0000-4000-8000-000000000098',
+          short_headline: 'Активный чат',
+        },
+      ]),
+    }),
+  );
+  await page.route('**/api/conversations/*/premium-gift/invoice', (route) =>
+    route.fulfill({
+      contentType: 'application/json',
+      body: JSON.stringify({ invoiceLink: 'https://t.me/$gift-test' }),
+    }),
+  );
+  await page.goto('/chats');
+  await page.getByRole('button', { name: 'Прикрепить' }).click();
+  await page.getByRole('button', { name: 'Подарить Premium' }).click();
+  const requestPromise = page.waitForRequest(
+    (request) => request.url().includes('/premium-gift/invoice') && request.method() === 'POST',
+  );
+  page.once('dialog', (dialog) => void dialog.accept());
+  await page.getByRole('button', { name: /Premium на 7 дней · 75/ }).click();
+  const request = await requestPromise;
+  expect(request.postDataJSON()).toEqual({
+    productId: '00000000-0000-4000-8000-000000000007',
+  });
+});
+
 test('owner sees the protected dashboard', async ({ page }) => {
   await mockApi(page, true);
   await page.goto('/admin');
@@ -370,6 +656,24 @@ test('users section does not substitute profile questionnaires for Telegram acco
   await expect(page.getByText('Profile pseudonym must stay hidden')).toHaveCount(0);
 });
 
+test('moderation warning submits its text to the backend', async ({ page }) => {
+  await mockApi(page, true);
+  await page.goto('/admin');
+  await page.getByTestId('admin-section-users').click();
+  const warningRequest = page.waitForRequest(
+    (request) =>
+      request.url().includes('/api/admin/users/') &&
+      request.url().endsWith('/moderate') &&
+      request.method() === 'POST',
+  );
+  page.once('dialog', (dialog) => void dialog.accept('Соблюдайте правила RoleMate'));
+  await page.getByTestId('moderation-warn-00000000-0000-4000-8000-000000000042').click();
+  expect((await warningRequest).postDataJSON()).toMatchObject({
+    action: 'warn',
+    reason: 'Соблюдайте правила RoleMate',
+  });
+});
+
 test('owner can open moderator management in the admin panel', async ({ page }) => {
   await mockApi(page, true);
   await page.goto('/admin');
@@ -378,6 +682,63 @@ test('owner can open moderator management in the admin panel', async ({ page }) 
   await expect(page.locator('input[inputmode="numeric"]')).toBeVisible();
   await expect(page.getByTestId('moderator-assign')).toBeDisabled();
   await expect(page.getByTestId('moderator-remove-7001')).toBeVisible();
+});
+
+test('owner can fully edit and delete a promotion', async ({ page }) => {
+  await mockApi(page, true);
+  const promotionId = '00000000-0000-4000-8000-000000000777';
+  await page.route('**/api/admin/promotions*', (route) => {
+    if (route.request().method() === 'GET') {
+      return route.fulfill({
+        contentType: 'application/json',
+        body: JSON.stringify([
+          {
+            id: promotionId,
+            code: 'EDIT-ME',
+            type: 'discount',
+            discount_stars: 10,
+            discount_rubles: 0,
+            premium_days: 0,
+            eligible_product_ids: '["00000000-0000-4000-8000-000000000007"]',
+            activation_count: 0,
+            is_active: 1,
+          },
+        ]),
+      });
+    }
+    return route.fulfill({
+      contentType: 'application/json',
+      body: JSON.stringify(
+        route.request().method() === 'DELETE'
+          ? { deleted: true, archived: false }
+          : { updated: true },
+      ),
+    });
+  });
+  await page.goto('/admin');
+  await page.getByTestId('admin-section-promotions').click();
+  await page.getByTestId(`promotion-edit-${promotionId}`).click();
+  await page.locator('input[type="number"]').first().fill('25');
+  const updateRequest = page.waitForRequest(
+    (request) =>
+      request.url().endsWith(`/api/admin/promotions/${promotionId}`) && request.method() === 'PUT',
+  );
+  await page.getByTestId('promotion-save').click();
+  expect((await updateRequest).postDataJSON()).toMatchObject({
+    code: 'EDIT-ME',
+    discountStars: 25,
+    eligibleProductIds: ['00000000-0000-4000-8000-000000000007'],
+    isActive: true,
+  });
+
+  const deleteRequest = page.waitForRequest(
+    (request) =>
+      request.url().endsWith(`/api/admin/promotions/${promotionId}`) &&
+      request.method() === 'DELETE',
+  );
+  page.once('dialog', (dialog) => void dialog.accept());
+  await page.getByTestId(`promotion-delete-${promotionId}`).click();
+  await expect(deleteRequest).resolves.toBeTruthy();
 });
 
 test('moderator sees only moderation sections', async ({ page }) => {

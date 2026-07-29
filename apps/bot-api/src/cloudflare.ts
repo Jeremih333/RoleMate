@@ -27,6 +27,8 @@ interface WorkerEnv {
   ALLOWED_ORIGINS: string;
   TURNSTILE_SITE_KEY?: string;
   TURNSTILE_SECRET_KEY?: string;
+  TURN_KEY_ID?: string;
+  TURN_KEY_SECRET?: string;
   COMMIT_SHA?: string;
   DEPLOYMENT_ENV: string;
 }
@@ -77,6 +79,8 @@ function appEnv(env: WorkerEnv): AppEnv {
     ALLOWED_ORIGINS: env.ALLOWED_ORIGINS,
     TURNSTILE_SITE_KEY: env.TURNSTILE_SITE_KEY ?? '',
     TURNSTILE_SECRET_KEY: env.TURNSTILE_SECRET_KEY ?? '',
+    TURN_KEY_ID: env.TURN_KEY_ID ?? '',
+    TURN_KEY_SECRET: env.TURN_KEY_SECRET ?? '',
     YOOKASSA_ENABLED: 'false',
     YOOKASSA_DIGITAL_PREMIUM_ENABLED: 'false',
     COMMIT_SHA: env.COMMIT_SHA ?? 'cloudflare-worker',
@@ -117,6 +121,12 @@ async function dispatchScheduledTasks(env: WorkerEnv): Promise<void> {
   await dataApi.execute('payments.expirePending', {}).catch((error) => {
     console.error({
       event: 'scheduled_payment_expiry_failed',
+      error: error instanceof Error ? error.message : 'unknown',
+    });
+  });
+  await dataApi.execute('calls.expire', {}).catch((error) => {
+    console.error({
+      event: 'call_signals_expiry_failed',
       error: error instanceof Error ? error.message : 'unknown',
     });
   });

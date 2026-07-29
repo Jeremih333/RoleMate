@@ -100,6 +100,7 @@ beforeEach(() => {
     ENVIRONMENT: 'test',
     INTERNAL_SERVICE_ID: 'test',
     INTERNAL_API_SECRET: 'test-secret',
+    REFERRAL_IDENTITY_SECRET: 'test-referral-identity-secret',
   };
 });
 
@@ -182,6 +183,278 @@ describe('D1 domain operations', () => {
       .get(userId) as { moderation_status: string; is_active: number };
     expect(user).toEqual({ is_onboarding_completed: 1, is_search_enabled: 1 });
     expect(savedProfile).toEqual({ moderation_status: 'approved', is_active: 1 });
+  });
+
+  it('reports real profile readiness and explains when only the own profile exists', async () => {
+    const userId = await onboard(2011);
+    const own = (await executeOperation(
+      env,
+      'profiles.getOwn',
+      { userId },
+      crypto.randomUUID(),
+    )) as { profile_completion_percent: number; in_search_pool: number };
+    expect(own.profile_completion_percent).toBeGreaterThan(0);
+    expect(own.in_search_pool).toBe(1);
+    await expect(
+      executeOperation(env, 'search.availability', { userId }, crypto.randomUUID()),
+    ).resolves.toEqual({ otherProfiles: 0, otherSearchable: 0, safeCandidates: 0 });
+
+    const otherUserId = await onboard(2012);
+    await expect(
+      executeOperation(env, 'search.availability', { userId }, crypto.randomUUID()),
+    ).resolves.toEqual({ otherProfiles: 1, otherSearchable: 1, safeCandidates: 1 });
+    const results = (await executeOperation(
+      env,
+      'search.list',
+      { userId, query: '', limit: 20 },
+      crypto.randomUUID(),
+    )) as Array<{ user_id: string }>;
+    expect(results).toContainEqual(expect.objectContaining({ user_id: otherUserId }));
+  });
+
+  it('builds own preview with the same Premium privacy and media rules as discovery', async () => {
+    const userId = await onboard(2_013);
+    const adminId = await upsert(1_040_929_628);
+    await executeOperation(
+      env,
+      'admin.premium.grant',
+      {
+        adminUserId: adminId,
+        targetUserId: userId,
+        durationDays: 7,
+        reason: 'Own preview integration test',
+        idempotencyKey: 'profile-preview-premium-0001',
+      },
+      crypto.randomUUID(),
+    );
+    await executeOperation(
+      env,
+      'settings.update',
+      {
+        userId,
+        notificationsEnabled: true,
+        matchNotificationsEnabled: true,
+        messageNotificationsEnabled: true,
+        referralNotificationsEnabled: true,
+        premiumNotificationsEnabled: true,
+        privacyShieldEnabled: true,
+        showOnlineStatus: true,
+        showPremiumBadge: true,
+        hideDemographics: true,
+        theme: 'dark',
+      },
+      crypto.randomUUID(),
+    );
+    const photo = (await executeOperation(
+      env,
+      'profiles.media.add',
+      {
+        userId,
+        telegramFileId: 'preview-photo',
+        telegramFileUniqueId: 'preview-photo-unique',
+        mediaType: 'photo',
+      },
+      crypto.randomUUID(),
+    )) as { id: string };
+    const video = (await executeOperation(
+      env,
+      'profiles.media.add',
+      {
+        userId,
+        telegramFileId: 'preview-video',
+        telegramFileUniqueId: 'preview-video-unique',
+        mediaType: 'video',
+      },
+      crypto.randomUUID(),
+    )) as { id: string };
+
+    const premiumPreview = (await executeOperation(
+      env,
+      'profiles.previewOwn',
+      { userId },
+      crypto.randomUUID(),
+    )) as {
+      age_group: string | null;
+      gender: string | null;
+      is_premium: number;
+      media_items: string;
+    };
+    expect(premiumPreview).toMatchObject({ age_group: null, gender: null, is_premium: 1 });
+    expect(JSON.parse(premiumPreview.media_items)).toEqual([
+      { id: photo.id, media_type: 'photo' },
+      { id: video.id, media_type: 'video' },
+    ]);
+
+    sqlite
+      .prepare(
+        `UPDATE premium_entitlements SET ends_at = datetime('now', '-1 minute')
+         WHERE user_id = ?`,
+      )
+      .run(userId);
+    const freePreview = (await executeOperation(
+      env,
+      'profiles.previewOwn',
+      { userId },
+      crypto.randomUUID(),
+    )) as {
+      age_group: string | null;
+      is_premium: number;
+      media_items: string;
+    };
+    expect(freePreview.age_group).toBe('21_25');
+    expect(freePreview.is_premium).toBe(0);
+    expect(JSON.parse(freePreview.media_items)).toEqual([{ id: photo.id, media_type: 'photo' }]);
+  });
+
+  it('shows a searchable profile to an age-confirmed viewer without their own profile', async () => {
+    const authorId = await onboard(2_011);
+    const viewerId = await upsert(2_012);
+    await executeOperation(
+      env,
+      'users.acceptRules',
+      { userId: viewerId, ageGroup: '18_20' },
+      crypto.randomUUID(),
+    );
+    const results = (await executeOperation(
+      env,
+      'search.list',
+      { userId: viewerId, query: '', limit: 20 },
+      crypto.randomUUID(),
+    )) as Array<{ user_id: string }>;
+    expect(results).toHaveLength(1);
+    expect(results[0]?.user_id).toBe(authorId);
+    await expect(
+      executeOperation(env, 'search.availability', { userId: viewerId }, crypto.randomUUID()),
+    ).resolves.toMatchObject({ otherSearchable: 1, safeCandidates: 1 });
+  });
+
+  it('ranks more relevant profiles first without exact adult age isolation', async () => {
+    const viewerId = await onboard(2_021);
+    const relevantId = await onboard(2_022);
+    const lessRelevantId = await upsert(2_023);
+    await executeOperation(
+      env,
+      'users.acceptRules',
+      { userId: lessRelevantId, ageGroup: '26_plus' },
+      crypto.randomUUID(),
+    );
+    await executeOperation(
+      env,
+      'profiles.upsert',
+      {
+        userId: lessRelevantId,
+        profile: {
+          ...profile,
+          ageGroup: '26_plus',
+          fandoms: ['Другой фандом'],
+          genres: ['Ужасы'],
+          languages: ['English'],
+          tags: ['быстрые ответы'],
+        },
+      },
+      crypto.randomUUID(),
+    );
+
+    const results = (await executeOperation(
+      env,
+      'search.list',
+      { userId: viewerId, query: '', limit: 20 },
+      crypto.randomUUID(),
+    )) as Array<{ user_id: string; relevance_score: number }>;
+    expect(results.map((item) => item.user_id)).toEqual([relevantId, lessRelevantId]);
+    expect(results[0]?.relevance_score).toBeGreaterThan(results[1]?.relevance_score ?? 0);
+  });
+
+  it('requires Premium for calls and removes transient signaling after the call', async () => {
+    const first = await onboard(2013);
+    const second = await onboard(2014);
+    await executeOperation(
+      env,
+      'swipes.create',
+      {
+        userId: first,
+        targetUserId: second,
+        action: 'like',
+        source: 'miniapp',
+        idempotencyKey: 'call-match-first-0001',
+      },
+      crypto.randomUUID(),
+    );
+    await executeOperation(
+      env,
+      'swipes.create',
+      {
+        userId: second,
+        targetUserId: first,
+        action: 'like',
+        source: 'miniapp',
+        idempotencyKey: 'call-match-second-001',
+      },
+      crypto.randomUUID(),
+    );
+    const conversation = sqlite.prepare('SELECT id FROM conversations').get() as { id: string };
+    await expect(
+      executeOperation(
+        env,
+        'calls.start',
+        { userId: first, conversationId: conversation.id, kind: 'audio' },
+        crypto.randomUUID(),
+      ),
+    ).rejects.toMatchObject<ApiError>({ code: 'PREMIUM_REQUIRED' });
+
+    const now = new Date();
+    const endsAt = new Date(now.getTime() + 86_400_000).toISOString();
+    for (const userId of [first, second]) {
+      sqlite
+        .prepare(
+          `INSERT INTO premium_entitlements
+             (id, user_id, source, status, starts_at, ends_at)
+           VALUES (?, ?, 'admin', 'active', ?, ?)`,
+        )
+        .run(crypto.randomUUID(), userId, now.toISOString(), endsAt);
+    }
+    const call = (await executeOperation(
+      env,
+      'calls.start',
+      { userId: first, conversationId: conversation.id, kind: 'video' },
+      crypto.randomUUID(),
+    )) as { id: string };
+    await executeOperation(
+      env,
+      'calls.signal',
+      { userId: first, callId: call.id, type: 'offer', payload: '{"type":"offer"}' },
+      crypto.randomUUID(),
+    );
+    await expect(
+      executeOperation(
+        env,
+        'calls.poll',
+        { userId: second, conversationId: conversation.id, afterSequence: 0 },
+        crypto.randomUUID(),
+      ),
+    ).resolves.toMatchObject({
+      call: { id: call.id, kind: 'video', isInitiator: false },
+      signals: [expect.objectContaining({ type: 'offer' })],
+    });
+    await executeOperation(
+      env,
+      'calls.respond',
+      { userId: second, callId: call.id, accept: true },
+      crypto.randomUUID(),
+    );
+    await executeOperation(
+      env,
+      'calls.end',
+      { userId: first, callId: call.id },
+      crypto.randomUUID(),
+    );
+    expect(
+      (
+        sqlite
+          .prepare('SELECT COUNT(*) AS total FROM anonymous_call_signals WHERE call_id = ?')
+          .get(call.id) as { total: number }
+      ).total,
+    ).toBe(0);
   });
 
   it('does not let profile editing bypass a moderator pause', async () => {
@@ -275,6 +548,17 @@ describe('D1 domain operations', () => {
     expect(results).toHaveLength(1);
     expect(results[0]).toMatchObject({ user_id: candidateId });
     expect(results[0]?.tags).toContain('готический детектив');
+
+    const byAlias = (await executeOperation(
+      env,
+      'search.list',
+      { userId: viewerId, limit: 20, query: profile.displayName },
+      crypto.randomUUID(),
+    )) as Array<{ user_id: string; display_name: string }>;
+    expect(byAlias[0]).toMatchObject({
+      user_id: candidateId,
+      display_name: profile.displayName,
+    });
   });
 
   it('persists settings and rejects duplicate Telegram updates', async () => {
@@ -316,10 +600,86 @@ describe('D1 domain operations', () => {
     ).resolves.toEqual({ claimed: false });
   });
 
-  it('queues profile images for owner-only moderation and protects their delivery', async () => {
+  it('only requests bot notifications while the recipient is outside MiniApp', async () => {
+    const recipientId = await upsert(2003);
+    const outside = (await executeOperation(
+      env,
+      'notifications.deliveryTarget',
+      { userId: recipientId, kind: 'like' },
+      crypto.randomUUID(),
+    )) as { telegram_user_id: number } | null;
+    expect(outside).toEqual({ telegram_user_id: 2003 });
+
+    const sessionHash = 'a'.repeat(64);
+    await executeOperation(
+      env,
+      'sessions.create',
+      {
+        userId: recipientId,
+        sessionHash,
+        csrfHash: 'b'.repeat(64),
+        expiresAt: new Date(Date.now() + 60_000).toISOString(),
+      },
+      crypto.randomUUID(),
+    );
+    await expect(
+      executeOperation(
+        env,
+        'notifications.deliveryTarget',
+        { userId: recipientId, kind: 'message' },
+        crypto.randomUUID(),
+      ),
+    ).resolves.toBeNull();
+
+    sqlite.prepare("UPDATE web_sessions SET last_seen_at = datetime('now', '-3 minutes')").run();
+    await expect(
+      executeOperation(
+        env,
+        'notifications.deliveryTarget',
+        { userId: recipientId, kind: 'message' },
+        crypto.randomUUID(),
+      ),
+    ).resolves.toEqual({ telegram_user_id: 2003 });
+
+    await executeOperation(
+      env,
+      'settings.update',
+      {
+        userId: recipientId,
+        notificationsEnabled: true,
+        matchNotificationsEnabled: true,
+        messageNotificationsEnabled: false,
+        referralNotificationsEnabled: true,
+        premiumNotificationsEnabled: true,
+        privacyShieldEnabled: true,
+        showOnlineStatus: true,
+        showPremiumBadge: true,
+        theme: 'dark',
+      },
+      crypto.randomUUID(),
+    );
+    await expect(
+      executeOperation(
+        env,
+        'notifications.deliveryTarget',
+        { userId: recipientId, kind: 'message' },
+        crypto.randomUUID(),
+      ),
+    ).resolves.toBeNull();
+  });
+
+  it('publishes profile media immediately while keeping staff moderation effective', async () => {
     const owner = await onboard(2050);
     const viewer = await onboard(2051);
     const adminId = await upsert(1_040_929_628);
+    const moderatorId = await upsert(2052);
+    sqlite
+      .prepare(
+        `INSERT INTO moderator_assignments
+           (user_id, assigned_by_user_id, is_active)
+         VALUES (?, ?, 1)`,
+      )
+      .run(moderatorId, adminId);
     const added = (await executeOperation(
       env,
       'profiles.media.add',
@@ -331,7 +691,15 @@ describe('D1 domain operations', () => {
       },
       crypto.randomUUID(),
     )) as { id: string; moderationStatus: string };
-    expect(added.moderationStatus).toBe('pending');
+    expect(added.moderationStatus).toBe('approved');
+    await expect(
+      executeOperation(
+        env,
+        'profiles.media.resolve',
+        { requesterUserId: moderatorId, mediaId: added.id },
+        crypto.randomUUID(),
+      ),
+    ).resolves.toMatchObject({ telegram_file_id: 'telegram-file-id-1' });
     await expect(
       executeOperation(
         env,
@@ -339,7 +707,7 @@ describe('D1 domain operations', () => {
         { requesterUserId: viewer, mediaId: added.id },
         crypto.randomUUID(),
       ),
-    ).rejects.toMatchObject<ApiError>({ code: 'MEDIA_NOT_FOUND' });
+    ).resolves.toMatchObject({ telegram_file_id: 'telegram-file-id-1' });
     await expect(
       executeOperation(
         env,
@@ -368,15 +736,32 @@ describe('D1 domain operations', () => {
         { adminUserId: adminId, status: 'pending', limit: 20 },
         crypto.randomUUID(),
       ),
+    ).resolves.toEqual([]);
+    await expect(
+      executeOperation(
+        env,
+        'admin.media.list',
+        { adminUserId: adminId, status: 'approved', limit: 20 },
+        crypto.randomUUID(),
+      ),
     ).resolves.toEqual([expect.objectContaining({ id: added.id, user_id: owner })]);
+    const immediateSearchResult = (await executeOperation(
+      env,
+      'search.list',
+      { userId: viewer, query: '', limit: 20 },
+      crypto.randomUUID(),
+    )) as Array<{ user_id: string; media_items: string }>;
+    expect(
+      JSON.parse(immediateSearchResult.find((item) => item.user_id === owner)?.media_items ?? '[]'),
+    ).toEqual([{ id: added.id, media_type: 'photo' }]);
     await executeOperation(
       env,
       'admin.media.moderate',
       {
         adminUserId: adminId,
         mediaId: added.id,
-        status: 'approved',
-        reason: 'Safe test image',
+        status: 'rejected',
+        reason: 'Rule violation in test image',
       },
       crypto.randomUUID(),
     );
@@ -387,7 +772,18 @@ describe('D1 domain operations', () => {
         { requesterUserId: viewer, mediaId: added.id },
         crypto.randomUUID(),
       ),
-    ).resolves.toMatchObject({ moderation_status: 'approved' });
+    ).rejects.toMatchObject<ApiError>({ code: 'MEDIA_NOT_FOUND' });
+    await executeOperation(
+      env,
+      'admin.media.moderate',
+      {
+        adminUserId: adminId,
+        mediaId: added.id,
+        status: 'approved',
+        reason: 'Regression test restores safe media',
+      },
+      crypto.randomUUID(),
+    );
     await executeOperation(
       env,
       'blocks.create',
@@ -634,6 +1030,24 @@ describe('D1 domain operations', () => {
     expect(
       sqlite.prepare('SELECT status FROM captcha_challenges WHERE user_id = ?').get(userId),
     ).toEqual({ status: 'expired' });
+    await expect(
+      executeOperation(
+        env,
+        'admin.user.moderate',
+        {
+          adminUserId: adminId,
+          targetUserId: userId,
+          action: 'warn',
+          reason: 'Please follow the community rules',
+        },
+        crypto.randomUUID(),
+      ),
+    ).resolves.toMatchObject({ updated: true, notifyTelegramUserId: 2003 });
+    expect(
+      sqlite
+        .prepare("SELECT type FROM notifications WHERE user_id = ? AND type = 'moderation_warning'")
+        .get(userId),
+    ).toEqual({ type: 'moderation_warning' });
 
     await executeOperation(
       env,
@@ -1145,10 +1559,10 @@ describe('D1 domain operations', () => {
     };
     await expect(
       executeOperation(env, 'payments.completeStars', completion, crypto.randomUUID()),
-    ).resolves.toEqual({ duplicate: false, orderId: order.orderId });
+    ).resolves.toEqual({ duplicate: false, orderId: order.orderId, durationDays: 30 });
     await expect(
       executeOperation(env, 'payments.completeStars', completion, crypto.randomUUID()),
-    ).resolves.toEqual({ duplicate: true, orderId: order.orderId });
+    ).resolves.toEqual({ duplicate: true, orderId: order.orderId, durationDays: 30 });
     expect(
       (
         sqlite
@@ -1413,6 +1827,132 @@ describe('D1 domain operations', () => {
     expect(grants.hours).toBe(24);
   });
 
+  it('blocks referral farming through late codes, risky accounts, and account recreation', async () => {
+    const referrer = await upsert(5_011);
+    const summary = (await executeOperation(
+      env,
+      'referrals.summary',
+      { userId: referrer, botUsername: 'r0lemate_bot' },
+      crypto.randomUUID(),
+    )) as { link: string };
+    const referralCode = summary.link.split('ref_')[1];
+
+    const existingUser = await upsert(5_012);
+    await executeOperation(
+      env,
+      'users.upsert',
+      {
+        telegramUser: { id: 5_012, first_name: 'Existing user' },
+        referralCode,
+      },
+      crypto.randomUUID(),
+    );
+    expect(
+      sqlite
+        .prepare('SELECT COUNT(*) AS total FROM referrals WHERE referred_user_id = ?')
+        .get(existingUser),
+    ).toEqual({ total: 0 });
+
+    const risky = (await executeOperation(
+      env,
+      'users.upsert',
+      {
+        telegramUser: { id: 5_013, first_name: 'Risky referred user' },
+        referralCode,
+      },
+      crypto.randomUUID(),
+    )) as { userId: string };
+    sqlite.prepare('UPDATE users SET risk_score = 90 WHERE id = ?').run(risky.userId);
+    await executeOperation(
+      env,
+      'users.acceptRules',
+      { userId: risky.userId, ageGroup: '21_25' },
+      crypto.randomUUID(),
+    );
+    await executeOperation(
+      env,
+      'profiles.upsert',
+      { userId: risky.userId, profile },
+      crypto.randomUUID(),
+    );
+    expect(
+      sqlite.prepare('SELECT status FROM referrals WHERE referred_user_id = ?').get(risky.userId),
+    ).toEqual({ status: 'pending' });
+    expect(
+      sqlite
+        .prepare(
+          "SELECT COUNT(*) AS total FROM premium_entitlements WHERE user_id = ? AND source = 'referral'",
+        )
+        .get(referrer),
+    ).toEqual({ total: 0 });
+
+    const referred = (await executeOperation(
+      env,
+      'users.upsert',
+      {
+        telegramUser: { id: 5_014, first_name: 'Qualified referred user' },
+        referralCode,
+      },
+      crypto.randomUUID(),
+    )) as { userId: string };
+    await executeOperation(
+      env,
+      'users.acceptRules',
+      { userId: referred.userId, ageGroup: '21_25' },
+      crypto.randomUUID(),
+    );
+    await executeOperation(
+      env,
+      'profiles.upsert',
+      { userId: referred.userId, profile },
+      crypto.randomUUID(),
+    );
+    await executeOperation(env, 'users.delete', { userId: referred.userId }, crypto.randomUUID());
+
+    const recreated = (await executeOperation(
+      env,
+      'users.upsert',
+      {
+        telegramUser: { id: 5_014, first_name: 'Recreated account' },
+        referralCode,
+      },
+      crypto.randomUUID(),
+    )) as { userId: string };
+    expect(recreated.userId).not.toBe(referred.userId);
+    await executeOperation(
+      env,
+      'users.acceptRules',
+      { userId: recreated.userId, ageGroup: '21_25' },
+      crypto.randomUUID(),
+    );
+    await executeOperation(
+      env,
+      'profiles.upsert',
+      { userId: recreated.userId, profile },
+      crypto.randomUUID(),
+    );
+
+    expect(
+      sqlite
+        .prepare(
+          "SELECT COUNT(*) AS total FROM premium_entitlements WHERE user_id = ? AND source = 'referral'",
+        )
+        .get(referrer),
+    ).toEqual({ total: 1 });
+    expect(
+      sqlite
+        .prepare('SELECT COUNT(*) AS total FROM referrals WHERE referred_user_id = ?')
+        .get(recreated.userId),
+    ).toEqual({ total: 0 });
+    expect(
+      sqlite
+        .prepare(
+          "SELECT COUNT(*) AS total FROM referral_identity_claims WHERE status = 'qualified'",
+        )
+        .get(),
+    ).toEqual({ total: 1 });
+  });
+
   it('publishes bot posts and applies conversation ratings to their authors', async () => {
     const authorId = await onboard(6101);
     const viewerId = await onboard(6102);
@@ -1510,11 +2050,30 @@ describe('D1 domain operations', () => {
       ),
     ).rejects.toMatchObject({ code: 'PROMO_INVALID' });
 
-    const product = sqlite
+    const [product, otherProduct] = sqlite
       .prepare(
-        'SELECT id, stars_amount FROM products WHERE is_active = 1 ORDER BY sort_order LIMIT 1',
+        'SELECT id, stars_amount FROM products WHERE is_active = 1 ORDER BY sort_order LIMIT 2',
       )
-      .get() as { id: string; stars_amount: number };
+      .all() as Array<{ id: string; stars_amount: number }>;
+    expect(product).toBeDefined();
+    expect(otherProduct).toBeDefined();
+    if (!product || !otherProduct) throw new Error('Expected at least two products');
+    await expect(
+      executeOperation(
+        env,
+        'admin.promotions.create',
+        {
+          adminUserId: ownerId,
+          code: 'NO-PLANS',
+          type: 'discount',
+          discountStars: 10,
+          discountRubles: 0,
+          premiumDays: 0,
+          eligibleProductIds: [],
+        },
+        crypto.randomUUID(),
+      ),
+    ).rejects.toMatchObject({ code: 'PROMO_PRODUCTS_REQUIRED' });
     await executeOperation(
       env,
       'admin.promotions.create',
@@ -1535,6 +2094,80 @@ describe('D1 domain operations', () => {
       { userId: secondUserId, code: 'stars-10' },
       crypto.randomUUID(),
     );
+    await expect(
+      executeOperation(
+        env,
+        'promotions.apply',
+        { userId: secondUserId, code: 'STARS-10' },
+        crypto.randomUUID(),
+      ),
+    ).rejects.toMatchObject({ code: 'PROMO_ALREADY_USED' });
+    const starsPromotion = sqlite
+      .prepare("SELECT id FROM promotions WHERE code = 'STARS-10'")
+      .get() as { id: string };
+    await executeOperation(
+      env,
+      'admin.promotions.update',
+      {
+        adminUserId: ownerId,
+        promotionId: starsPromotion.id,
+        code: 'STARS-10',
+        type: 'discount',
+        discountStars: 20,
+        discountRubles: 100,
+        premiumDays: 0,
+        eligibleProductIds: [otherProduct.id],
+        expiresAt: null,
+        maxActivations: null,
+        isActive: true,
+      },
+      crypto.randomUUID(),
+    );
+    expect(
+      sqlite
+        .prepare(
+          `SELECT promotion.activation_count, redemption.payment_order_id
+           FROM promotions promotion
+           JOIN promo_redemptions redemption ON redemption.promotion_id = promotion.id
+           WHERE promotion.code = 'STARS-10' AND redemption.user_id = ?`,
+        )
+        .get(secondUserId),
+    ).toEqual({ activation_count: 1, payment_order_id: null });
+
+    const discountedProducts = (await executeOperation(
+      env,
+      'products.listForUser',
+      { userId: secondUserId, activeOnly: true },
+      crypto.randomUUID(),
+    )) as Array<{
+      id: string;
+      stars_amount: number;
+      effective_stars_amount: number;
+      applied_discount_stars: number;
+    }>;
+    expect(discountedProducts.find((item) => item.id === product.id)).toMatchObject({
+      effective_stars_amount: Math.max(1, product.stars_amount - 10),
+      applied_discount_stars: Math.min(product.stars_amount - 1, 10),
+    });
+    expect(discountedProducts.find((item) => item.id === otherProduct.id)).toMatchObject({
+      effective_stars_amount: otherProduct.stars_amount,
+      applied_discount_stars: 0,
+    });
+
+    const fullPriceOrder = (await executeOperation(
+      env,
+      'payments.create',
+      {
+        userId: secondUserId,
+        productId: otherProduct.id,
+        idempotencyKey: 'promo-ineligible-order-0001',
+      },
+      crypto.randomUUID(),
+    )) as { amount: number; discountStars: number };
+    expect(fullPriceOrder).toMatchObject({
+      amount: otherProduct.stars_amount,
+      discountStars: 0,
+    });
     const order = (await executeOperation(
       env,
       'payments.create',
@@ -1554,6 +2187,273 @@ describe('D1 domain operations', () => {
         .prepare('SELECT discount_rubles FROM payment_orders WHERE idempotency_key = ?')
         .get('promo-payment-order-0001'),
     ).toEqual({ discount_rubles: 50 });
+    const idempotentOrder = (await executeOperation(
+      env,
+      'payments.create',
+      {
+        userId: secondUserId,
+        productId: product.id,
+        idempotencyKey: 'promo-payment-order-0001',
+      },
+      crypto.randomUUID(),
+    )) as { invoicePayload: string; amount: number; discountStars: number };
+    expect(idempotentOrder).toMatchObject({
+      amount: order.amount,
+      discountStars: order.discountStars,
+    });
+    expect(idempotentOrder.invoicePayload).toBeTruthy();
+
+    sqlite
+      .prepare(
+        `UPDATE payment_orders SET expires_at = datetime('now', '-1 minute')
+         WHERE idempotency_key = 'promo-payment-order-0001'`,
+      )
+      .run();
+    sqlite
+      .prepare(
+        `UPDATE promotions
+         SET is_active = 0, expires_at = datetime('now', '-1 minute')
+         WHERE code = 'STARS-10'`,
+      )
+      .run();
+    await executeOperation(env, 'payments.expirePending', {}, crypto.randomUUID());
+    expect(
+      sqlite
+        .prepare(
+          `SELECT promotion.activation_count, redemption.payment_order_id
+           FROM promotions promotion
+           JOIN promo_redemptions redemption ON redemption.promotion_id = promotion.id
+           WHERE promotion.code = 'STARS-10' AND redemption.user_id = ?`,
+        )
+        .get(secondUserId),
+    ).toEqual({ activation_count: 1, payment_order_id: null });
+    expect(
+      sqlite
+        .prepare('SELECT promotion_id FROM user_promo_selections WHERE user_id = ?')
+        .get(secondUserId),
+    ).toBeTruthy();
+    await expect(
+      executeOperation(
+        env,
+        'promotions.apply',
+        { userId: secondUserId, code: 'STARS-10' },
+        crypto.randomUUID(),
+      ),
+    ).rejects.toMatchObject({ code: 'PROMO_INVALID' });
+    const reissuedOrder = (await executeOperation(
+      env,
+      'payments.create',
+      {
+        userId: secondUserId,
+        productId: product.id,
+        idempotencyKey: 'promo-payment-order-0002',
+      },
+      crypto.randomUUID(),
+    )) as { orderId: string; amount: number; discountStars: number };
+    expect(reissuedOrder).toMatchObject({
+      amount: Math.max(1, product.stars_amount - 10),
+      discountStars: Math.min(product.stars_amount - 1, 10),
+    });
+    await executeOperation(
+      env,
+      'payments.markPrecheckout',
+      {
+        orderId: reissuedOrder.orderId,
+        telegramUserId: 7_101,
+        currency: 'XTR',
+        totalAmount: reissuedOrder.amount,
+      },
+      crypto.randomUUID(),
+    );
+    await executeOperation(
+      env,
+      'payments.completeStars',
+      {
+        orderId: reissuedOrder.orderId,
+        telegramPaymentChargeId: 'promo-telegram-charge-1',
+        providerPaymentChargeId: '',
+        totalAmount: reissuedOrder.amount,
+        isRecurring: false,
+        isFirstRecurring: false,
+        telegramUpdateId: 8_101,
+      },
+      crypto.randomUUID(),
+    );
+    expect(
+      sqlite
+        .prepare('SELECT promotion_id FROM user_promo_selections WHERE user_id = ?')
+        .get(secondUserId),
+    ).toBeUndefined();
+    const productsAfterPayment = (await executeOperation(
+      env,
+      'products.listForUser',
+      { userId: secondUserId, activeOnly: true },
+      crypto.randomUUID(),
+    )) as Array<{ id: string; stars_amount: number; effective_stars_amount: number }>;
+    expect(productsAfterPayment.find((item) => item.id === product.id)).toMatchObject({
+      effective_stars_amount: product.stars_amount,
+    });
+    await expect(
+      executeOperation(
+        env,
+        'admin.promotions.delete',
+        { adminUserId: ownerId, promotionId: starsPromotion.id },
+        crypto.randomUUID(),
+      ),
+    ).resolves.toEqual({ deleted: true, archived: true });
+    expect(
+      sqlite
+        .prepare('SELECT is_active, deleted_at FROM promotions WHERE id = ?')
+        .get(starsPromotion.id),
+    ).toMatchObject({ is_active: 0, deleted_at: expect.any(String) });
+    const visiblePromotions = (await executeOperation(
+      env,
+      'admin.promotions.list',
+      { adminUserId: ownerId, limit: 100 },
+      crypto.randomUUID(),
+    )) as Array<{ id: string }>;
+    expect(visiblePromotions.some((item) => item.id === starsPromotion.id)).toBe(false);
+
+    const unused = (await executeOperation(
+      env,
+      'admin.promotions.create',
+      {
+        adminUserId: ownerId,
+        code: 'DELETE-ME',
+        type: 'premium_days',
+        discountStars: 0,
+        discountRubles: 0,
+        premiumDays: 1,
+        eligibleProductIds: [],
+      },
+      crypto.randomUUID(),
+    )) as { id: string };
+    await expect(
+      executeOperation(
+        env,
+        'admin.promotions.delete',
+        { adminUserId: ownerId, promotionId: unused.id },
+        crypto.randomUUID(),
+      ),
+    ).resolves.toEqual({ deleted: true, archived: false });
+    expect(sqlite.prepare('SELECT id FROM promotions WHERE id = ?').get(unused.id)).toBeUndefined();
+  });
+
+  it('activates a Premium gift for the chat partner only after a real Stars payment', async () => {
+    const payerId = await upsert(7_150);
+    const recipientId = await upsert(7_151);
+    const outsiderId = await upsert(7_152);
+    const [userA, userB] = [payerId, recipientId].sort();
+    const matchId = crypto.randomUUID();
+    const conversationId = crypto.randomUUID();
+    sqlite
+      .prepare('INSERT INTO matches (id, user_a_id, user_b_id) VALUES (?, ?, ?)')
+      .run(matchId, userA, userB);
+    sqlite
+      .prepare('INSERT INTO conversations (id, match_id) VALUES (?, ?)')
+      .run(conversationId, matchId);
+    const participant = sqlite.prepare(
+      `INSERT INTO conversation_participants (conversation_id, user_id, anonymous_alias)
+       VALUES (?, ?, ?)`,
+    );
+    participant.run(conversationId, payerId, 'Даритель');
+    participant.run(conversationId, recipientId, 'Получатель');
+    const product = sqlite
+      .prepare(
+        `SELECT id, stars_amount, duration_days FROM products
+         WHERE is_active = 1 AND billing_type = 'one_time' ORDER BY sort_order LIMIT 1`,
+      )
+      .get() as { id: string; stars_amount: number; duration_days: number };
+
+    await expect(
+      executeOperation(
+        env,
+        'payments.createGift',
+        {
+          userId: outsiderId,
+          conversationId,
+          productId: product.id,
+          idempotencyKey: 'premium-gift-outsider-0001',
+        },
+        crypto.randomUUID(),
+      ),
+    ).rejects.toMatchObject<ApiError>({ code: 'ACTIVE_CHAT_NOT_FOUND' });
+
+    const gift = (await executeOperation(
+      env,
+      'payments.createGift',
+      {
+        userId: payerId,
+        conversationId,
+        productId: product.id,
+        idempotencyKey: 'premium-gift-payment-0001',
+      },
+      crypto.randomUUID(),
+    )) as { orderId: string; invoicePayload: string; amount: number };
+    expect(gift.amount).toBe(product.stars_amount);
+    expect(
+      sqlite
+        .prepare("SELECT COUNT(*) AS total FROM premium_entitlements WHERE source = 'stars_gift'")
+        .get(),
+    ).toEqual({ total: 0 });
+    await expect(
+      executeOperation(
+        env,
+        'payments.createGift',
+        {
+          userId: payerId,
+          conversationId,
+          productId: product.id,
+          idempotencyKey: 'premium-gift-payment-0001',
+        },
+        crypto.randomUUID(),
+      ),
+    ).resolves.toMatchObject({ orderId: gift.orderId, invoicePayload: gift.invoicePayload });
+
+    await executeOperation(
+      env,
+      'payments.markPrecheckout',
+      {
+        orderId: gift.orderId,
+        telegramUserId: 7_150,
+        currency: 'XTR',
+        totalAmount: gift.amount,
+      },
+      crypto.randomUUID(),
+    );
+    const completed = await executeOperation(
+      env,
+      'payments.completeStars',
+      {
+        orderId: gift.orderId,
+        telegramPaymentChargeId: 'premium-gift-charge-1',
+        providerPaymentChargeId: '',
+        totalAmount: gift.amount,
+        isRecurring: false,
+        isFirstRecurring: false,
+        telegramUpdateId: 8_150,
+      },
+      crypto.randomUUID(),
+    );
+    expect(completed).toMatchObject({
+      duplicate: false,
+      gifted: true,
+      durationDays: product.duration_days,
+      giftRecipientTelegramUserId: 7_151,
+    });
+    expect(
+      sqlite
+        .prepare(
+          `SELECT user_id, source, auto_renew FROM premium_entitlements
+           WHERE payment_order_id = ?`,
+        )
+        .get(gift.orderId),
+    ).toEqual({ user_id: recipientId, source: 'stars_gift', auto_renew: 0 });
+    expect(
+      sqlite
+        .prepare('SELECT user_id FROM star_transactions WHERE payment_order_id = ?')
+        .get(gift.orderId),
+    ).toEqual({ user_id: payerId });
   });
 
   it('shows a mandatory posting subscription after three posts and supports snooze/verify', async () => {

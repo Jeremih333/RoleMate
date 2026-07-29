@@ -23,6 +23,7 @@ import { assertCsrf, createSession, getSession } from './session.js';
 import { TelegramStarsProvider } from './payments/telegram-stars.js';
 import { dispatchBroadcastBatch } from './broadcast.js';
 import { validateUserContentLinks } from './content-policy.js';
+import { InlineKeyboard, InputFile } from 'grammy';
 
 const authBodySchema = z.object({ initData: z.string().min(1).max(8_192) });
 const swipeBodySchema = z.object({
@@ -68,6 +69,12 @@ const settingsBodySchema = z.object({
   hideDemographics: z.boolean().default(false),
   theme: z.enum(['telegram', 'light', 'dark']),
 });
+const chatMediaBodySchema = z.object({
+  kind: z.enum(['photo', 'animation', 'video', 'audio', 'voice', 'video_note']),
+  fileName: z.string().trim().min(1).max(180),
+  mimeType: z.string().trim().min(3).max(120),
+  dataBase64: z.string().min(1).max(22_500_000),
+});
 
 async function verifyTurnstile(secret: string, token: string, remoteIp?: string): Promise<boolean> {
   if (!secret) return false;
@@ -112,6 +119,7 @@ export async function buildServer(
                 'req.headers.cookie',
                 'req.body.initData',
                 'req.body.token',
+                'req.body.dataBase64',
                 'res.headers["set-cookie"]',
               ],
               censor: '[REDACTED]',
@@ -373,6 +381,10 @@ export async function buildServer(
     const session = await authenticate(request);
     return dataApi.execute('profiles.getOwn', { userId: session.userId });
   });
+  app.get('/api/profile/preview', async (request) => {
+    const session = await authenticate(request);
+    return dataApi.execute('profiles.previewOwn', { userId: session.userId });
+  });
   app.put('/api/profile', async (request) => {
     const session = await mutateSafe(request);
     const profile = profileSchema.parse(request.body);
@@ -433,12 +445,13 @@ export async function buildServer(
       mediaId,
     });
     const file = await bot.api.getFile(media.telegram_file_id);
-    if (!file.file_path) throw new DataApiError('MEDIA_UNAVAILABLE', 'Image unavailable', 404);
+    if (!file.file_path) throw new DataApiError('MEDIA_UNAVAILABLE', ru.api.mediaUnavailable, 404);
     const telegramResponse = await fetch(
       `https://api.telegram.org/file/bot${env.TELEGRAM_BOT_TOKEN}/${file.file_path}`,
-      { signal: AbortSignal.timeout(8_000) },
+      { signal: AbortSignal.timeout(20_000) },
     );
-    if (!telegramResponse.ok) throw new DataApiError('MEDIA_UNAVAILABLE', 'Image unavailable', 502);
+    if (!telegramResponse.ok)
+      throw new DataApiError('MEDIA_UNAVAILABLE', ru.api.mediaUnavailable, 502);
     const contentType =
       telegramResponse.headers.get('content-type') ??
       (
@@ -468,6 +481,10 @@ export async function buildServer(
       limit: query.limit,
       query: query.q,
     });
+  });
+  app.get('/api/search/availability', async (request) => {
+    const session = await authenticate(request);
+    return dataApi.execute('search.availability', { userId: session.userId });
   });
   app.get('/api/search/preferences', async (request) => {
     const session = await authenticate(request);
@@ -556,7 +573,20 @@ export async function buildServer(
   app.post('/api/promotions/apply', async (request) => {
     const session = await mutateSafe(request);
     const { code } = z.object({ code: z.string().trim().min(3).max(40) }).parse(request.body);
-    return dataApi.execute('promotions.apply', { userId: session.userId, code });
+    const result = await dataApi.execute<{
+      type: 'discount' | 'premium_days';
+      premiumDays?: number;
+      discountStars?: number;
+      discountRubles?: number;
+      eligibleProductIds?: string[];
+    }>('promotions.apply', { userId: session.userId, code });
+    if (result.type === 'premium_days') {
+      await bot.api.sendMessage(
+        session.telegramUserId,
+        ru.bot.premiumGranted(result.premiumDays ?? 0),
+      );
+    }
+    return result;
   });
   app.post('/api/premium/boost', async (request) => {
     const session = await mutateSafe(request);
@@ -601,6 +631,248 @@ export async function buildServer(
   app.get('/api/conversations', async (request) => {
     const session = await authenticate(request);
     return dataApi.execute('conversations.list', { userId: session.userId, limit: 50 });
+  });
+  app.post(
+    '/api/conversations/:conversationId/media',
+    {
+      bodyLimit: 24 * 1024 * 1024,
+      config: { rateLimit: { max: 6, timeWindow: '1 minute' } },
+    },
+    async (request) => {
+      const session = await mutateSafe(request);
+      const { conversationId } = z
+        .object({ conversationId: z.string().uuid() })
+        .parse(request.params);
+      const body = chatMediaBodySchema.parse(request.body);
+      const premium = await dataApi.execute<{ premium: boolean }>('premium.status', {
+        userId: session.userId,
+      });
+      if (body.kind !== 'photo' && !premium.premium) {
+        throw new DataApiError('PREMIUM_REQUIRED', ru.api.premiumRequired, 403);
+      }
+      const allowedMimeTypes: Record<typeof body.kind, readonly string[]> = {
+        photo: ['image/jpeg', 'image/png', 'image/webp'],
+        animation: ['image/gif'],
+        video: ['video/mp4', 'video/webm', 'video/quicktime'],
+        audio: ['audio/mpeg', 'audio/mp4', 'audio/ogg', 'audio/webm'],
+        voice: ['audio/mpeg', 'audio/mp4', 'audio/ogg', 'audio/webm'],
+        video_note: ['video/mp4'],
+      };
+      if (!allowedMimeTypes[body.kind].includes(body.mimeType.toLowerCase())) {
+        throw new DataApiError('UNSUPPORTED_CHAT_MEDIA', ru.api.unsupportedChatMedia, 400);
+      }
+      const bytes = Uint8Array.from(atob(body.dataBase64), (character) => character.charCodeAt(0));
+      const maxBytes = body.kind === 'photo' ? 8 * 1024 * 1024 : 16 * 1024 * 1024;
+      if (!bytes.byteLength || bytes.byteLength > maxBytes) {
+        throw new DataApiError('CHAT_MEDIA_TOO_LARGE', ru.api.chatMediaTooLarge, 413);
+      }
+      const relay = await dataApi.execute<{
+        destination_chat_id: number;
+        recipient_muted: number;
+        notify_message: number;
+      }>('conversations.resolveMiniAppRelay', {
+        userId: session.userId,
+        conversationId,
+      });
+      if (relay.notify_message) {
+        await bot.api.sendMessage(relay.destination_chat_id, ru.bot.newMessageNotification, {
+          protect_content: true,
+          reply_markup: new InlineKeyboard().webApp(
+            ru.bot.menu.chats,
+            `${env.MINI_APP_URL}/chats?conversation=${encodeURIComponent(conversationId)}`,
+          ),
+        });
+      }
+      const file = new InputFile(bytes, body.fileName);
+      const common = {
+        protect_content: true,
+        disable_notification: Boolean(relay.recipient_muted),
+      };
+      const delivered =
+        body.kind === 'photo'
+          ? await bot.api.sendPhoto(relay.destination_chat_id, file, common)
+          : body.kind === 'animation'
+            ? await bot.api.sendAnimation(relay.destination_chat_id, file, common)
+            : body.kind === 'video'
+              ? body.mimeType === 'video/webm'
+                ? await bot.api.sendDocument(relay.destination_chat_id, file, common)
+                : await bot.api.sendVideo(relay.destination_chat_id, file, common)
+              : body.kind === 'audio'
+                ? body.mimeType === 'audio/webm'
+                  ? await bot.api.sendDocument(relay.destination_chat_id, file, common)
+                  : await bot.api.sendAudio(relay.destination_chat_id, file, common)
+                : body.kind === 'voice'
+                  ? body.mimeType === 'audio/webm'
+                    ? await bot.api.sendDocument(relay.destination_chat_id, file, common)
+                    : await bot.api.sendVoice(relay.destination_chat_id, file, common)
+                  : await bot.api.sendVideoNote(relay.destination_chat_id, file, common);
+      await dataApi.execute('conversations.recordMiniAppMessage', {
+        userId: session.userId,
+        conversationId,
+        destinationMessageId: delivered.message_id,
+        messageType: body.kind,
+      });
+      return { sent: true, messageType: body.kind };
+    },
+  );
+  app.post('/api/conversations/:conversationId/profile-share', async (request) => {
+    const session = await mutateSafe(request);
+    const { conversationId } = z
+      .object({ conversationId: z.string().uuid() })
+      .parse(request.params);
+    const relay = await dataApi.execute<{
+      destination_chat_id: number;
+      recipient_muted: number;
+      notify_message: number;
+    }>('conversations.resolveMiniAppRelay', {
+      userId: session.userId,
+      conversationId,
+    });
+    if (relay.notify_message) {
+      await bot.api.sendMessage(relay.destination_chat_id, ru.bot.newMessageNotification, {
+        protect_content: true,
+        reply_markup: new InlineKeyboard().webApp(
+          ru.bot.menu.chats,
+          `${env.MINI_APP_URL}/chats?conversation=${encodeURIComponent(conversationId)}`,
+        ),
+      });
+    }
+    const profile = await dataApi.execute<{
+      display_name: string;
+      short_headline: string;
+      about: string;
+      fandoms: string;
+      genres: string;
+      tags: string;
+    }>('profiles.getOwn', { userId: session.userId });
+    const delivered = await bot.api.sendMessage(
+      relay.destination_chat_id,
+      ru.bot.sharedProfile(profile),
+      {
+        protect_content: true,
+        disable_notification: Boolean(relay.recipient_muted),
+      },
+    );
+    await dataApi.execute('conversations.recordMiniAppMessage', {
+      userId: session.userId,
+      conversationId,
+      destinationMessageId: delivered.message_id,
+      messageType: 'profile',
+    });
+    return { sent: true };
+  });
+  app.get('/api/conversations/:conversationId/calls/poll', async (request) => {
+    const session = await authenticate(request);
+    const { conversationId } = z
+      .object({ conversationId: z.string().uuid() })
+      .parse(request.params);
+    const { afterSequence } = z
+      .object({ afterSequence: z.coerce.number().int().nonnegative().default(0) })
+      .parse(request.query);
+    return dataApi.execute('calls.poll', {
+      userId: session.userId,
+      conversationId,
+      afterSequence,
+    });
+  });
+  app.get('/api/conversations/:conversationId/calls/turn-credentials', async (request) => {
+    const session = await authenticate(request);
+    const { conversationId } = z
+      .object({ conversationId: z.string().uuid() })
+      .parse(request.params);
+    await dataApi.execute('conversations.resolveMiniAppRelay', {
+      userId: session.userId,
+      conversationId,
+    });
+    const premium = await dataApi.execute<{ premium: boolean }>('premium.status', {
+      userId: session.userId,
+    });
+    if (!premium.premium) {
+      throw new DataApiError('PREMIUM_REQUIRED', ru.api.premiumRequired, 403);
+    }
+    if (!env.TURN_KEY_ID || !env.TURN_KEY_SECRET) {
+      throw new DataApiError('CALLS_NOT_CONFIGURED', ru.api.callsNotConfigured, 503);
+    }
+    const response = await fetch(
+      `https://rtc.live.cloudflare.com/v1/turn/keys/${encodeURIComponent(env.TURN_KEY_ID)}/credentials/generate`,
+      {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${env.TURN_KEY_SECRET}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ ttl: 3_600 }),
+        signal: AbortSignal.timeout(8_000),
+      },
+    );
+    if (!response.ok) {
+      throw new DataApiError('TURN_CREDENTIALS_FAILED', ru.api.callsUnavailable, 502);
+    }
+    const parsed = z
+      .object({
+        iceServers: z.object({
+          urls: z.array(z.string().min(1)),
+          username: z.string().min(1),
+          credential: z.string().min(1),
+        }),
+      })
+      .parse(await response.json());
+    return {
+      iceServers: [
+        {
+          urls: parsed.iceServers.urls.filter((url) => !url.includes(':53')),
+          username: parsed.iceServers.username,
+          credential: parsed.iceServers.credential,
+        },
+      ],
+      iceTransportPolicy: 'relay' as const,
+    };
+  });
+  app.post('/api/conversations/:conversationId/calls', async (request) => {
+    const session = await mutateSafe(request);
+    const { conversationId } = z
+      .object({ conversationId: z.string().uuid() })
+      .parse(request.params);
+    const { kind } = z.object({ kind: z.enum(['audio', 'video']) }).parse(request.body);
+    const call = await dataApi.execute<{ id: string }>('calls.start', {
+      userId: session.userId,
+      conversationId,
+      kind,
+    });
+    const relay = await dataApi.execute<{ destination_chat_id: number }>(
+      'conversations.resolveMiniAppRelay',
+      { userId: session.userId, conversationId },
+    );
+    await bot.api.sendMessage(relay.destination_chat_id, ru.bot.incomingAnonymousCall(kind), {
+      protect_content: true,
+      reply_markup: new InlineKeyboard().webApp(
+        ru.bot.buttons.openCall,
+        `${env.MINI_APP_URL}/chats?conversation=${encodeURIComponent(conversationId)}`,
+      ),
+    });
+    return call;
+  });
+  app.post('/api/calls/:callId/respond', async (request) => {
+    const session = await mutateSafe(request);
+    const { callId } = z.object({ callId: z.string().uuid() }).parse(request.params);
+    const { accept } = z.object({ accept: z.boolean() }).parse(request.body);
+    return dataApi.execute('calls.respond', { userId: session.userId, callId, accept });
+  });
+  app.post('/api/calls/:callId/signal', async (request) => {
+    const session = await mutateSafe(request);
+    const { callId } = z.object({ callId: z.string().uuid() }).parse(request.params);
+    const body = z
+      .object({
+        type: z.enum(['offer', 'answer', 'ice']),
+        payload: z.string().min(2).max(64_000),
+      })
+      .parse(request.body);
+    return dataApi.execute('calls.signal', { userId: session.userId, callId, ...body });
+  });
+  app.post('/api/calls/:callId/end', async (request) => {
+    const session = await mutateSafe(request);
+    const { callId } = z.object({ callId: z.string().uuid() }).parse(request.params);
+    return dataApi.execute('calls.end', { userId: session.userId, callId });
   });
   app.get('/api/matches', async (request) => {
     const session = await authenticate(request);
@@ -670,7 +942,13 @@ export async function buildServer(
       evidenceSnapshot: [],
     });
   });
-  app.get('/api/products', async () => dataApi.execute('products.list', { activeOnly: true }));
+  app.get('/api/products', async (request) => {
+    const session = await authenticate(request);
+    return dataApi.execute('products.listForUser', {
+      userId: session.userId,
+      activeOnly: true,
+    });
+  });
   app.post('/api/payments/invoice', async (request) => {
     const session = await mutateSafe(request);
     const body = z.object({ productId: z.string().uuid() }).parse(request.body);
@@ -703,6 +981,45 @@ export async function buildServer(
       currency: 'XTR',
       invoicePayload: order.invoicePayload,
       ...(product.billing_type === 'subscription' ? { subscriptionPeriod: 2_592_000 } : {}),
+    });
+  });
+  app.post('/api/conversations/:conversationId/premium-gift/invoice', async (request) => {
+    const session = await mutateSafe(request);
+    const { conversationId } = z
+      .object({ conversationId: z.string().uuid() })
+      .parse(request.params);
+    const body = z.object({ productId: z.string().uuid() }).parse(request.body);
+    const products = await dataApi.execute<
+      Array<{
+        id: string;
+        name: string;
+        description: string;
+        stars_amount: number;
+        billing_type: string;
+      }>
+    >('products.list', { activeOnly: true });
+    const product = products.find(
+      (item) => item.id === body.productId && item.billing_type === 'one_time',
+    );
+    if (!product) throw new DataApiError('GIFT_PRODUCT_NOT_FOUND', ru.api.giftProductNotFound, 404);
+    const order = await dataApi.execute<{ invoicePayload: string; amount: number }>(
+      'payments.createGift',
+      {
+        userId: session.userId,
+        conversationId,
+        productId: product.id,
+        idempotencyKey: request.id,
+      },
+    );
+    return stars.createPayment({
+      userId: session.userId,
+      telegramUserId: session.telegramUserId,
+      productId: product.id,
+      title: ru.bot.premiumGiftInvoiceTitle(product.name),
+      description: ru.bot.premiumGiftInvoiceDescription(product.description),
+      amount: order.amount,
+      currency: 'XTR',
+      invoicePayload: order.invoicePayload,
     });
   });
   app.get('/api/referrals', async (request) => {
@@ -887,11 +1204,31 @@ export async function buildServer(
   app.put('/api/admin/promotions/:promotionId', async (request) => {
     const session = await requireAdmin(request, true);
     const { promotionId } = z.object({ promotionId: z.string().uuid() }).parse(request.params);
-    const { isActive } = z.object({ isActive: z.boolean() }).parse(request.body);
+    const body = z
+      .object({
+        code: z.string().trim().min(3).max(40),
+        type: z.enum(['discount', 'premium_days']),
+        discountStars: z.number().int().min(0).max(10_000),
+        discountRubles: z.number().int().min(0).max(1_000_000),
+        premiumDays: z.number().int().min(0).max(3_650),
+        eligibleProductIds: z.array(z.string().uuid()).max(100),
+        expiresAt: z.string().datetime().nullable(),
+        maxActivations: z.number().int().min(1).max(1_000_000).nullable(),
+        isActive: z.boolean(),
+      })
+      .parse(request.body);
     return dataApi.execute('admin.promotions.update', {
       adminUserId: session.userId,
       promotionId,
-      isActive,
+      ...body,
+    });
+  });
+  app.delete('/api/admin/promotions/:promotionId', async (request) => {
+    const session = await requireAdmin(request, true);
+    const { promotionId } = z.object({ promotionId: z.string().uuid() }).parse(request.params);
+    return dataApi.execute('admin.promotions.delete', {
+      adminUserId: session.userId,
+      promotionId,
     });
   });
   app.get('/api/admin/posting-requirements', async (request) => {
@@ -1118,7 +1455,10 @@ export async function buildServer(
         bannedUntil: z.string().datetime().optional(),
       })
       .parse(request.body);
-    const result = await dataApi.execute('admin.user.moderate', {
+    const result = await dataApi.execute<{
+      updated: true;
+      notifyTelegramUserId: number | null;
+    }>('admin.user.moderate', {
       adminUserId: session.userId,
       targetUserId: params.userId,
       ...body,
@@ -1130,6 +1470,20 @@ export async function buildServer(
       body.reason,
       params.userId,
     );
+    if (body.action === 'warn' && result.notifyTelegramUserId) {
+      await bot.api.sendMessage(
+        result.notifyTelegramUserId,
+        ru.bot.moderationWarning(body.reason),
+        env.MINI_APP_URL
+          ? {
+              reply_markup: new InlineKeyboard().webApp(
+                ru.bot.buttons.rules,
+                `${env.MINI_APP_URL}/rules`,
+              ),
+            }
+          : undefined,
+      );
+    }
     return result;
   });
   app.post('/api/admin/profiles/:profileId/moderate', async (request) => {
@@ -1205,7 +1559,12 @@ export async function buildServer(
         reason: z.string().min(3).max(1_000),
       })
       .parse(request.body);
-    const result = await dataApi.execute('admin.premium.grant', {
+    const result = await dataApi.execute<{
+      granted: true;
+      grantId: string;
+      durationDays: number;
+      notifyTelegramUserId: number;
+    }>('admin.premium.grant', {
       adminUserId: session.userId,
       targetUserId: params.userId,
       durationDays: body.durationDays,
@@ -1213,6 +1572,18 @@ export async function buildServer(
       idempotencyKey: request.id,
     });
     await writeAdminAudit(request, session.userId, 'premium.grant', body.reason, params.userId);
+    await bot.api.sendMessage(
+      result.notifyTelegramUserId,
+      ru.bot.premiumGranted(result.durationDays),
+      env.MINI_APP_URL
+        ? {
+            reply_markup: new InlineKeyboard().webApp(
+              ru.bot.menu.premium,
+              `${env.MINI_APP_URL}/premium`,
+            ),
+          }
+        : undefined,
+    );
     return result;
   });
   app.post('/api/admin/users/:userId/premium/revoke', async (request) => {
@@ -1378,7 +1749,17 @@ export async function buildServer(
                     ? ru.api.promoAlreadyUsed
                     : code === 'PROMO_EXHAUSTED'
                       ? ru.api.promoExhausted
-                      : errorMessage,
+                      : code === 'PROMO_PENDING_DISCOUNT'
+                        ? ru.api.promoPendingDiscount
+                        : code === 'PROMO_PRODUCTS_REQUIRED'
+                          ? ru.api.promoProductsRequired
+                          : code === 'PROMO_PRODUCT_INVALID'
+                            ? ru.api.promoProductInvalid
+                            : code === 'PROMO_EXPIRY_INVALID'
+                              ? ru.api.promoExpiryInvalid
+                              : code === 'PROMO_CODE_EXISTS'
+                                ? ru.api.promoCodeExists
+                                : errorMessage,
       requestId: request.id,
     });
   });

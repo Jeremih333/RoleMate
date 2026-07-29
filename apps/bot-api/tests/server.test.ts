@@ -1,6 +1,6 @@
 import { webcrypto } from 'node:crypto';
 import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
-import { ru } from '@rolemate/shared';
+import { ru, sha256 } from '@rolemate/shared';
 import { DataApiClient } from '../src/d1-client.js';
 import { readEnv } from '../src/env.js';
 import { buildServer } from '../src/server.js';
@@ -71,7 +71,39 @@ function startUpdate(updateId: number) {
   };
 }
 
-function telegramAndDataFetch(options: { duplicate?: boolean } = {}) {
+function successfulPaymentUpdate(updateId: number) {
+  return {
+    update_id: updateId,
+    message: {
+      message_id: updateId,
+      date: 1_753_000_000,
+      chat: { id: 42, type: 'private' as const, first_name: 'Тест' },
+      from: { id: 42, is_bot: false, first_name: 'Тест', language_code: 'ru' },
+      successful_payment: {
+        currency: 'XTR',
+        total_amount: 75,
+        invoice_payload: `order-${updateId}`,
+        telegram_payment_charge_id: `telegram-charge-${updateId}`,
+        provider_payment_charge_id: '',
+        is_recurring: false,
+        is_first_recurring: false,
+      },
+    },
+  };
+}
+
+interface FetchOptions {
+  duplicate?: boolean;
+  paymentResult?: {
+    duplicate: boolean;
+    gifted?: boolean;
+    durationDays: number;
+    giftRecipientTelegramUserId?: number;
+  };
+  adminSession?: { csrfHash: string };
+}
+
+function telegramAndDataFetch(options: FetchOptions = {}) {
   const requests: Array<{ url: string; body: Record<string, unknown> }> = [];
   const fetchMock = vi.fn<typeof fetch>((input, init) => {
     const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
@@ -95,7 +127,28 @@ function telegramAndDataFetch(options: { duplicate?: boolean } = {}) {
               ? { userId: '00000000-0000-4000-8000-000000000042', isNew: true, role: 'user' }
               : operation === 'users.get'
                 ? { risk_score: 0 }
-                : null;
+                : operation === 'payments.getByPayload'
+                  ? { id: '00000000-0000-4000-8000-000000000700' }
+                  : operation === 'payments.completeStars'
+                    ? options.paymentResult
+                    : operation === 'sessions.get' && options.adminSession
+                      ? {
+                          user_id: '00000000-0000-4000-8000-000000000001',
+                          telegram_user_id: 1_040_929_628,
+                          role: 'admin',
+                          risk_score: 0,
+                          csrf_hash: options.adminSession.csrfHash,
+                        }
+                      : operation === 'admin.premium.grant' && options.adminSession
+                        ? {
+                            granted: true,
+                            grantId: '00000000-0000-4000-8000-000000000701',
+                            durationDays: 14,
+                            notifyTelegramUserId: 777,
+                          }
+                        : operation === 'admin.audit'
+                          ? { written: true }
+                          : null;
       return Promise.resolve(
         new Response(JSON.stringify({ ok: true, data, requestId: 'request' }), {
           status: 200,
@@ -215,6 +268,67 @@ describe('Telegram webhook integration', () => {
     });
     await app.close();
   });
+
+  it('notifies the buyer with the exact granted Premium duration after Stars payment', async () => {
+    const { fetchMock, requests } = telegramAndDataFetch({
+      paymentResult: { duplicate: false, durationDays: 30 },
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    const app = await buildServer(testEnv());
+
+    const response = await app.inject({
+      method: 'POST',
+      url: '/telegram/webhook',
+      headers: { 'x-telegram-bot-api-secret-token': 'test-webhook-secret-value' },
+      payload: successfulPaymentUpdate(104),
+    });
+
+    expect(response.statusCode, response.body).toBe(200);
+    expect(
+      requests.find(
+        (request) =>
+          request.url.endsWith('/sendMessage') && request.body.text === ru.bot.premiumGranted(30),
+      ),
+    ).toBeDefined();
+    await app.close();
+  });
+
+  it('notifies both payer and recipient after a Premium gift is really paid', async () => {
+    const { fetchMock, requests } = telegramAndDataFetch({
+      paymentResult: {
+        duplicate: false,
+        gifted: true,
+        durationDays: 7,
+        giftRecipientTelegramUserId: 777,
+      },
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    const app = await buildServer(testEnv());
+
+    const response = await app.inject({
+      method: 'POST',
+      url: '/telegram/webhook',
+      headers: { 'x-telegram-bot-api-secret-token': 'test-webhook-secret-value' },
+      payload: successfulPaymentUpdate(105),
+    });
+
+    expect(response.statusCode, response.body).toBe(200);
+    expect(
+      requests.find(
+        (request) =>
+          request.url.endsWith('/sendMessage') && request.body.text === ru.bot.premiumGiftPaid(7),
+      ),
+    ).toBeDefined();
+    expect(
+      requests.find(
+        (request) =>
+          request.url.endsWith('/sendMessage') &&
+          request.body.chat_id === 777 &&
+          request.body.text === ru.bot.premiumGranted(7),
+      ),
+    ).toBeDefined();
+    await app.close();
+  });
 });
 
 describe('Mini App authentication errors', () => {
@@ -234,6 +348,36 @@ describe('Mini App authentication errors', () => {
       error: 'INVALID_INIT_DATA',
       message: ru.miniApp.auth.invalidData,
     });
+    await app.close();
+  });
+
+  it('notifies a user when the owner grants Premium manually', async () => {
+    const csrfToken = 'manual-grant-csrf-token';
+    const { fetchMock, requests } = telegramAndDataFetch({
+      adminSession: { csrfHash: await sha256(csrfToken) },
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    const app = await buildServer(testEnv());
+
+    const response = await app.inject({
+      method: 'POST',
+      url: '/api/admin/users/00000000-0000-4000-8000-000000000777/premium/grant',
+      headers: {
+        cookie: 'rm_session=manual-grant-session-token',
+        'x-csrf-token': csrfToken,
+      },
+      payload: { durationDays: 14, reason: 'Ручная выдача владельцем' },
+    });
+
+    expect(response.statusCode, response.body).toBe(200);
+    expect(
+      requests.find(
+        (request) =>
+          request.url.endsWith('/sendMessage') &&
+          request.body.chat_id === 777 &&
+          request.body.text === ru.bot.premiumGranted(14),
+      ),
+    ).toBeDefined();
     await app.close();
   });
 });

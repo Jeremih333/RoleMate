@@ -3,6 +3,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   ArrowRight,
   Check,
+  ChevronDown,
   Edit3,
   Eye,
   EyeOff,
@@ -11,15 +12,16 @@ import {
   UserRound,
   X,
 } from 'lucide-react';
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useForm, type Resolver } from 'react-hook-form';
-import { Link, useLocation } from 'wouter';
+import { Link } from 'wouter';
 import { profileSchema, ru, type ProfileInput } from '@rolemate/shared';
 import { ApiError, api } from '../api.js';
 import type { ProfileMedia } from '../api.js';
 import { ProfileMarkdown } from '../components/markdown.js';
 import { Button, Card, EmptyState, SectionTitle, Skeleton } from '../components/ui.js';
 import { getTelegram } from '../telegram.js';
+import { ProfileCard } from './search.js';
 
 const defaults: ProfileInput = {
   displayName: '',
@@ -66,6 +68,129 @@ function commaList(value: string): string[] {
     .split(',')
     .map((item) => item.trim())
     .filter(Boolean);
+}
+
+interface CommaTagInputProps {
+  label: string;
+  placeholder: string;
+  value: string[];
+  maxItems: number;
+  onChange: (value: string[]) => void;
+}
+
+function CommaTagInput({ label, placeholder, value, maxItems, onChange }: CommaTagInputProps) {
+  const [draft, setDraft] = useState('');
+  const addItems = (items: string[]) => {
+    const next = [...value];
+    for (const item of items.map((entry) => entry.trim()).filter(Boolean)) {
+      if (next.length >= maxItems) break;
+      if (!next.some((entry) => entry.toLocaleLowerCase() === item.toLocaleLowerCase())) {
+        next.push(item);
+      }
+    }
+    onChange(next);
+  };
+  const commitDraft = () => {
+    addItems(commaList(draft));
+    setDraft('');
+  };
+  return (
+    <div className="tag-input" aria-label={label}>
+      <div className="tag-input-values">
+        {value.map((item) => (
+          <span className="tag tag-removable" key={item}>
+            {item}
+            <button
+              type="button"
+              aria-label={`${ru.miniApp.profile.removeTag}: ${item}`}
+              onClick={() => onChange(value.filter((entry) => entry !== item))}
+            >
+              <X className="h-3 w-3" />
+            </button>
+          </span>
+        ))}
+      </div>
+      <input
+        className="tag-input-control"
+        aria-label={label}
+        value={draft}
+        placeholder={value.length ? ru.miniApp.profile.addAnotherTag : placeholder}
+        onChange={(event) => {
+          const raw = event.target.value;
+          const parts = raw.split(',');
+          if (parts.length === 1) {
+            setDraft(raw);
+            return;
+          }
+          addItems(parts.slice(0, -1));
+          setDraft(parts.at(-1) ?? '');
+        }}
+        onBlur={commitDraft}
+        onKeyDown={(event) => {
+          if (event.key !== 'Enter' && event.key !== ',') return;
+          event.preventDefault();
+          commitDraft();
+        }}
+      />
+    </div>
+  );
+}
+
+interface TimezoneSelectProps {
+  value: string;
+  options: ReadonlyArray<readonly [string, string]>;
+  onChange: (value: string) => void;
+}
+
+function TimezoneSelect({ value, options, onChange }: TimezoneSelectProps) {
+  const [open, setOpen] = useState(false);
+  const rootRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!open) return;
+    const close = (event: MouseEvent | TouchEvent) => {
+      if (!rootRef.current?.contains(event.target as Node)) setOpen(false);
+    };
+    document.addEventListener('mousedown', close);
+    document.addEventListener('touchstart', close);
+    return () => {
+      document.removeEventListener('mousedown', close);
+      document.removeEventListener('touchstart', close);
+    };
+  }, [open]);
+  const selected = options.find(([option]) => option === value)?.[1] ?? value;
+  return (
+    <div className="timezone-picker" ref={rootRef}>
+      <button
+        className="input-field timezone-picker-trigger"
+        type="button"
+        aria-haspopup="listbox"
+        aria-expanded={open}
+        onClick={() => setOpen((current) => !current)}
+      >
+        <span>{selected}</span>
+        <ChevronDown className="h-4 w-4 shrink-0" />
+      </button>
+      {open ? (
+        <div className="timezone-picker-menu" role="listbox">
+          {options.map(([option, label]) => (
+            <button
+              className={option === value ? 'is-selected' : ''}
+              key={option}
+              type="button"
+              role="option"
+              aria-selected={option === value}
+              onClick={() => {
+                onChange(option);
+                setOpen(false);
+              }}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
+      ) : null}
+    </div>
+  );
 }
 
 function validationMessage(message: unknown): string {
@@ -145,7 +270,14 @@ function ProfileMediaPreview({ item }: { item: ProfileMedia }) {
 export function ProfilePage() {
   const queryClient = useQueryClient();
   const [stateMessage, setStateMessage] = useState('');
+  const [previewOpen, setPreviewOpen] = useState(false);
   const profile = useQuery({ queryKey: ['profile'], queryFn: api.profile, retry: false });
+  const preview = useQuery({
+    queryKey: ['profile-preview'],
+    queryFn: api.profilePreview,
+    enabled: previewOpen,
+    retry: false,
+  });
   const media = useQuery({ queryKey: ['profile-media'], queryFn: api.profileMedia, retry: false });
   const removeMedia = useMutation({
     mutationFn: api.deleteProfileMedia,
@@ -186,13 +318,33 @@ export function ProfilePage() {
       <SectionTitle
         eyebrow={ru.miniApp.profile.eyebrow}
         action={
-          <Link href="/profile/edit" className="button button-secondary">
-            <Edit3 className="h-4 w-4" /> {ru.miniApp.profile.edit}
-          </Link>
+          <div className="flex flex-wrap justify-end gap-2">
+            <Button
+              type="button"
+              variant="secondary"
+              onClick={() => setPreviewOpen((current) => !current)}
+            >
+              <Eye className="h-4 w-4" />
+              {previewOpen
+                ? ru.miniApp.profile.closePreview
+                : ru.miniApp.profile.openProfilePreview}
+            </Button>
+            <Link href="/profile/edit" className="button button-secondary">
+              <Edit3 className="h-4 w-4" /> {ru.miniApp.profile.edit}
+            </Link>
+          </div>
         }
       >
         {String(data.display_name)}
       </SectionTitle>
+      {previewOpen ? (
+        <section className="mb-5">
+          <p className="mb-3 text-sm text-muted">{ru.miniApp.profile.previewDescription}</p>
+          {preview.isLoading ? <Skeleton className="h-96" /> : null}
+          {preview.data ? <ProfileCard profile={preview.data} preview /> : null}
+          {preview.isError ? <div className="error-box">{preview.error.message}</div> : null}
+        </section>
+      ) : null}
       <Card className="overflow-hidden">
         <div className="profile-cover min-h-52" />
         <div className="p-6">
@@ -219,14 +371,15 @@ export function ProfilePage() {
         </div>
       </Card>
       <Card className="mt-5 p-5">
-        <div className="flex flex-wrap items-center justify-between gap-4">
-          <div className="min-w-0 flex-1">
+        <div className="profile-state-card">
+          <div className="profile-state-copy">
             <strong className="block">
               {isActive ? ru.miniApp.profile.profileActive : ru.miniApp.profile.profileDisabled}
             </strong>
             {stateMessage ? <p className="mt-2 text-sm text-muted">{stateMessage}</p> : null}
           </div>
           <Button
+            className="profile-state-action"
             type="button"
             variant={isActive ? 'danger' : 'secondary'}
             loading={setActive.isPending}
@@ -282,7 +435,7 @@ export function ProfilePage() {
 }
 
 export function ProfileEditorPage() {
-  const [, navigate] = useLocation();
+  const queryClient = useQueryClient();
   const [languageDraft, setLanguageDraft] = useState('');
   const profile = useQuery({ queryKey: ['profile'], queryFn: api.profile, retry: false });
   const form = useForm<ProfileInput>({
@@ -295,7 +448,12 @@ export function ProfileEditorPage() {
   }, [profile.data, resetForm]);
   const save = useMutation({
     mutationFn: api.saveProfile,
-    onSuccess: () => void navigate('/profile'),
+    onSuccess: (_result, submittedProfile) => {
+      form.reset(submittedProfile);
+      void queryClient.invalidateQueries({ queryKey: ['profile'] });
+      void queryClient.invalidateQueries({ queryKey: ['profile-preview'] });
+      void queryClient.invalidateQueries({ queryKey: ['search'] });
+    },
   });
   const field = 'input-field';
   const selectedAgeGroup = form.watch('ageGroup');
@@ -508,13 +666,13 @@ export function ProfileEditorPage() {
         </label>
         <label>
           <span>{ru.miniApp.profile.timezone}</span>
-          <select className={field} {...form.register('timezone')}>
-            {ru.miniApp.profile.timezoneOptions.map(([value, label]) => (
-              <option key={value} value={value}>
-                {label}
-              </option>
-            ))}
-          </select>
+          <TimezoneSelect
+            value={form.watch('timezone')}
+            options={ru.miniApp.profile.timezoneOptions}
+            onChange={(value) =>
+              form.setValue('timezone', value, { shouldDirty: true, shouldValidate: true })
+            }
+          />
           <small>{validationMessage(form.formState.errors.timezone?.message)}</small>
         </label>
         <label>
@@ -523,35 +681,39 @@ export function ProfileEditorPage() {
         </label>
         <label>
           <span>{ru.miniApp.profile.fandoms}</span>
-          <input
-            className={field}
+          <CommaTagInput
+            label={ru.miniApp.profile.fandoms}
             placeholder={ru.miniApp.profile.fandomsPlaceholder}
-            value={form.watch('fandoms').join(', ')}
-            onChange={(event) => form.setValue('fandoms', commaList(event.target.value))}
+            value={form.watch('fandoms')}
+            maxItems={20}
+            onChange={(value) =>
+              form.setValue('fandoms', value, { shouldDirty: true, shouldValidate: true })
+            }
           />
           <small>{validationMessage(form.formState.errors.fandoms?.message)}</small>
         </label>
         <label>
           <span>{ru.miniApp.profile.genres}</span>
-          <input
-            className={field}
+          <CommaTagInput
+            label={ru.miniApp.profile.genres}
             placeholder={ru.miniApp.profile.genresPlaceholder}
-            value={form.watch('genres').join(', ')}
-            onChange={(event) => form.setValue('genres', commaList(event.target.value))}
+            value={form.watch('genres')}
+            maxItems={16}
+            onChange={(value) =>
+              form.setValue('genres', value, { shouldDirty: true, shouldValidate: true })
+            }
           />
           <small>{validationMessage(form.formState.errors.genres?.message)}</small>
         </label>
         <label>
           <span>{ru.miniApp.profile.tags}</span>
-          <input
-            className={field}
+          <CommaTagInput
+            label={ru.miniApp.profile.tags}
             placeholder={ru.miniApp.profile.tagsPlaceholder}
-            value={form.watch('tags').join(', ')}
-            onChange={(event) =>
-              form.setValue('tags', commaList(event.target.value), {
-                shouldDirty: true,
-                shouldValidate: true,
-              })
+            value={form.watch('tags')}
+            maxItems={20}
+            onChange={(value) =>
+              form.setValue('tags', value, { shouldDirty: true, shouldValidate: true })
             }
           />
           <small className="text-muted">{ru.miniApp.profile.tagsHint}</small>
@@ -567,10 +729,14 @@ export function ProfileEditorPage() {
         </label>
         <label>
           <span>{ru.miniApp.profile.lookingFor}</span>
-          <input
-            className={field}
-            value={form.watch('lookingFor').join(', ')}
-            onChange={(event) => form.setValue('lookingFor', commaList(event.target.value))}
+          <CommaTagInput
+            label={ru.miniApp.profile.lookingFor}
+            placeholder={ru.miniApp.profile.lookingForPlaceholder}
+            value={form.watch('lookingFor')}
+            maxItems={8}
+            onChange={(value) =>
+              form.setValue('lookingFor', value, { shouldDirty: true, shouldValidate: true })
+            }
           />
           <small>{validationMessage(form.formState.errors.lookingFor?.message)}</small>
         </label>
@@ -592,11 +758,11 @@ export function ProfileEditorPage() {
           </select>
         </label>
       </Card>
-      <Card className="flex items-center gap-4 p-5">
+      <Card className="profile-media-upload-card p-5">
         <div className="rounded-2xl bg-violet-500/10 p-3 text-lilac">
           <ImagePlus />
         </div>
-        <div className="flex-1">
+        <div className="profile-media-upload-copy">
           <strong>{ru.miniApp.profile.images}</strong>
           <p className="text-sm text-muted">{ru.miniApp.profile.imagesDescription}</p>
         </div>
@@ -624,9 +790,19 @@ export function ProfileEditorPage() {
         </div>
       ) : null}
       <div className="sticky-submit">
-        <Button type="submit" className="w-full" loading={save.isPending}>
-          <Check className="h-4 w-4" /> {ru.miniApp.profile.submit}{' '}
-          <ArrowRight className="h-4 w-4" />
+        <Button
+          type="submit"
+          className={`w-full ${
+            save.isSuccess && !form.formState.isDirty ? 'profile-publish-success' : ''
+          }`}
+          loading={save.isPending}
+          aria-live="polite"
+        >
+          <Check className="h-4 w-4" />
+          {save.isSuccess && !form.formState.isDirty
+            ? ru.miniApp.profile.published
+            : ru.miniApp.profile.submit}
+          {save.isSuccess && !form.formState.isDirty ? null : <ArrowRight className="h-4 w-4" />}
         </Button>
       </div>
     </form>

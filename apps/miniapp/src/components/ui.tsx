@@ -1,9 +1,17 @@
-import type { ButtonHTMLAttributes, PropsWithChildren, ReactNode } from 'react';
+import type { ButtonHTMLAttributes, HTMLAttributes, PropsWithChildren, ReactNode } from 'react';
 import { LoaderCircle } from 'lucide-react';
 import { ru } from '@rolemate/shared';
 
-export function Card({ children, className = '' }: PropsWithChildren<{ className?: string }>) {
-  return <div className={`glass-card ${className}`}>{children}</div>;
+export function Card({
+  children,
+  className = '',
+  ...props
+}: PropsWithChildren<HTMLAttributes<HTMLDivElement>>) {
+  return (
+    <div className={`glass-card ${className}`} {...props}>
+      {children}
+    </div>
+  );
 }
 
 export function Button({

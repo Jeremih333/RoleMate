@@ -24,7 +24,9 @@ import { Redirect } from 'wouter';
 import {
   api,
   type AdminConfig,
+  type AdminPromotion,
   type AdminPromotionInput,
+  type AdminPromotionUpdateInput,
   type PostingRequirementInput,
   type Product,
 } from '../api.js';
@@ -302,6 +304,9 @@ function UsersQueue({ isOwner }: { isOwner: boolean }) {
               </Button>
               <Button
                 variant="secondary"
+                data-testid={`moderation-warn-${user.id}`}
+                loading={moderate.isPending}
+                disabled={moderate.isPending}
                 onClick={() => {
                   const reason = window.prompt(ru.miniApp.admin.warningReasonPrompt);
                   if (reason) moderate.mutate({ userId: user.id, action: 'warn', reason });
@@ -387,6 +392,8 @@ function ProfilesQueue() {
           <p className="mt-2 line-clamp-4 text-sm text-soft">{profile.about}</p>
           <div className="mt-3 flex flex-wrap gap-2">
             <Button
+              loading={moderate.isPending}
+              disabled={moderate.isPending}
               onClick={() =>
                 moderate.mutate({
                   profileId: profile.id,
@@ -399,6 +406,8 @@ function ProfilesQueue() {
             </Button>
             <Button
               variant="secondary"
+              loading={moderate.isPending}
+              disabled={moderate.isPending}
               onClick={() => {
                 const reason = window.prompt(ru.miniApp.admin.rejectionReasonPrompt);
                 if (reason) moderate.mutate({ profileId: profile.id, status: 'rejected', reason });
@@ -408,6 +417,8 @@ function ProfilesQueue() {
             </Button>
             <Button
               variant="secondary"
+              loading={moderate.isPending}
+              disabled={moderate.isPending}
               onClick={() =>
                 moderate.mutate({
                   profileId: profile.id,
@@ -420,6 +431,8 @@ function ProfilesQueue() {
             </Button>
             <Button
               variant="secondary"
+              loading={moderate.isPending}
+              disabled={moderate.isPending}
               onClick={() =>
                 moderate.mutate({
                   profileId: profile.id,
@@ -458,31 +471,7 @@ function MediaQueue() {
       <div className="mt-3 grid gap-3 sm:grid-cols-2">
         {media.data?.map((item) => (
           <Card className="overflow-hidden" key={item.id}>
-            {item.media_type === 'video' ? (
-              <video
-                className="aspect-square w-full bg-black object-contain"
-                src={`/api/profile-media/${item.id}`}
-                controls
-              />
-            ) : item.media_type === 'audio' || item.media_type === 'voice' ? (
-              <div className="flex aspect-square items-center p-4">
-                <audio className="w-full" src={`/api/profile-media/${item.id}`} controls />
-              </div>
-            ) : item.media_type === 'document' ? (
-              <a
-                className="flex aspect-square items-center justify-center p-4 text-lilac underline"
-                href={`/api/profile-media/${item.id}`}
-              >
-                {ru.miniApp.profile.openMedia}
-              </a>
-            ) : (
-              <img
-                className="aspect-square w-full object-cover"
-                src={`/api/profile-media/${item.id}`}
-                alt=""
-                loading="lazy"
-              />
-            )}
+            <ModerationMediaPreview item={item} />
             <div className="p-4">
               <strong>{item.display_name}</strong>
               <p className="text-xs text-muted">
@@ -490,6 +479,8 @@ function MediaQueue() {
               </p>
               <div className="mt-3 flex gap-2">
                 <Button
+                  loading={moderate.isPending}
+                  disabled={moderate.isPending}
                   onClick={() =>
                     moderate.mutate({
                       mediaId: item.id,
@@ -502,6 +493,8 @@ function MediaQueue() {
                 </Button>
                 <Button
                   variant="secondary"
+                  loading={moderate.isPending}
+                  disabled={moderate.isPending}
                   onClick={() => {
                     const reason = window.prompt(ru.miniApp.admin.mediaRejectedReasonPrompt);
                     if (reason) moderate.mutate({ mediaId: item.id, status: 'rejected', reason });
@@ -516,6 +509,80 @@ function MediaQueue() {
       </div>
       <MutationFeedback states={[moderate]} success={ru.miniApp.admin.actionCompleted} />
     </section>
+  );
+}
+
+function ModerationMediaPreview({
+  item,
+}: {
+  item: {
+    id: string;
+    media_type: 'photo' | 'animation' | 'video' | 'audio' | 'voice' | 'document';
+  };
+}) {
+  const [failed, setFailed] = useState(false);
+  const [attempt, setAttempt] = useState(0);
+  const source = `/api/profile-media/${item.id}?attempt=${attempt}`;
+  if (failed) {
+    return (
+      <div className="flex aspect-square flex-col items-center justify-center gap-3 p-4 text-center">
+        <AlertTriangle className="h-7 w-7 text-red-300" />
+        <p className="text-sm text-soft">{ru.miniApp.admin.mediaLoadFailed}</p>
+        <Button
+          variant="secondary"
+          onClick={() => {
+            setAttempt((value) => value + 1);
+            setFailed(false);
+          }}
+        >
+          {ru.miniApp.admin.retryMedia}
+        </Button>
+      </div>
+    );
+  }
+  if (item.media_type === 'video') {
+    return (
+      <video
+        className="aspect-square w-full bg-black object-contain"
+        src={source}
+        controls
+        playsInline
+        preload="metadata"
+        onError={() => setFailed(true)}
+      />
+    );
+  }
+  if (item.media_type === 'audio' || item.media_type === 'voice') {
+    return (
+      <div className="flex aspect-square items-center p-4">
+        <audio
+          className="w-full"
+          src={source}
+          controls
+          preload="metadata"
+          onError={() => setFailed(true)}
+        />
+      </div>
+    );
+  }
+  if (item.media_type === 'document') {
+    return (
+      <a
+        className="flex aspect-square items-center justify-center p-4 text-lilac underline"
+        href={source}
+      >
+        {ru.miniApp.profile.openMedia}
+      </a>
+    );
+  }
+  return (
+    <img
+      className="aspect-square w-full object-cover"
+      src={source}
+      alt=""
+      loading="lazy"
+      onError={() => setFailed(true)}
+    />
   );
 }
 
@@ -1197,38 +1264,72 @@ function Promotions() {
   const queryClient = useQueryClient();
   const promotions = useQuery({ queryKey: ['admin-promotions'], queryFn: api.adminPromotions });
   const products = useQuery({ queryKey: ['admin-products'], queryFn: api.adminProducts });
-  const [form, setForm] = useState<AdminPromotionInput>({
+  const emptyForm: AdminPromotionInput = {
     code: '',
     type: 'discount',
     discountStars: 0,
     discountRubles: 0,
     premiumDays: 0,
     eligibleProductIds: [],
-  });
+  };
+  const [form, setForm] = useState<AdminPromotionInput>(emptyForm);
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [editingActive, setEditingActive] = useState(true);
+  const promotionInput = (
+    promotion: AdminPromotion,
+    isActive = Boolean(promotion.is_active),
+  ): AdminPromotionUpdateInput => {
+    let eligibleProductIds: string[] = [];
+    try {
+      const parsed: unknown = JSON.parse(promotion.eligible_product_ids);
+      if (Array.isArray(parsed))
+        eligibleProductIds = parsed.filter((item): item is string => typeof item === 'string');
+    } catch {
+      eligibleProductIds = [];
+    }
+    return {
+      code: promotion.code,
+      type: promotion.type,
+      discountStars: promotion.discount_stars,
+      discountRubles: promotion.discount_rubles,
+      premiumDays: promotion.premium_days,
+      eligibleProductIds,
+      expiresAt: promotion.expires_at ?? null,
+      maxActivations: promotion.max_activations ?? null,
+      isActive,
+    };
+  };
+  const resetForm = () => {
+    setForm(emptyForm);
+    setEditingId(null);
+    setEditingActive(true);
+  };
   const create = useMutation({
     mutationFn: api.adminCreatePromotion,
     onSuccess: () => {
-      setForm({
-        code: '',
-        type: 'discount',
-        discountStars: 0,
-        discountRubles: 0,
-        premiumDays: 0,
-        eligibleProductIds: [],
-      });
+      resetForm();
       void queryClient.invalidateQueries({ queryKey: ['admin-promotions'] });
     },
   });
   const update = useMutation({
-    mutationFn: ({ id, active }: { id: string; active: boolean }) =>
-      api.adminUpdatePromotion(id, active),
+    mutationFn: ({ id, input }: { id: string; input: AdminPromotionUpdateInput }) =>
+      api.adminUpdatePromotion(id, input),
+    onSuccess: () => {
+      resetForm();
+      void queryClient.invalidateQueries({ queryKey: ['admin-promotions'] });
+    },
+  });
+  const remove = useMutation({
+    mutationFn: api.adminDeletePromotion,
     onSuccess: () => void queryClient.invalidateQueries({ queryKey: ['admin-promotions'] }),
   });
   if (promotions.isLoading || products.isLoading) return <Skeleton className="h-72" />;
   return (
     <div className="space-y-4">
       <Card className="space-y-3 p-4">
-        <h2 className="font-display text-2xl">{ru.miniApp.admin.promoCreate}</h2>
+        <h2 className="font-display text-2xl">
+          {editingId ? ru.miniApp.admin.promoEdit : ru.miniApp.admin.promoCreate}
+        </h2>
         <input
           className="input-field"
           value={form.code}
@@ -1301,6 +1402,7 @@ function Promotions() {
         <input
           className="input-field"
           type="datetime-local"
+          value={form.expiresAt ? form.expiresAt.slice(0, 16) : ''}
           onChange={(event) => {
             const next = { ...form };
             if (event.target.value) next.expiresAt = new Date(event.target.value).toISOString();
@@ -1312,6 +1414,7 @@ function Promotions() {
           className="input-field"
           type="number"
           min={1}
+          value={form.maxActivations ?? ''}
           onChange={(event) => {
             const next = { ...form };
             if (event.target.value) next.maxActivations = Number(event.target.value);
@@ -1320,10 +1423,38 @@ function Promotions() {
           }}
           placeholder={ru.miniApp.admin.maxActivations}
         />
-        <Button onClick={() => create.mutate(form)} loading={create.isPending}>
-          {ru.miniApp.admin.create}
+        <Button
+          data-testid={editingId ? 'promotion-save' : 'promotion-create'}
+          onClick={() =>
+            editingId
+              ? update.mutate({
+                  id: editingId,
+                  input: {
+                    ...form,
+                    expiresAt: form.expiresAt ?? null,
+                    maxActivations: form.maxActivations ?? null,
+                    isActive: editingActive,
+                  },
+                })
+              : create.mutate(form)
+          }
+          loading={create.isPending || update.isPending}
+          disabled={
+            form.code.trim().length < 3 ||
+            (form.type === 'discount' &&
+              (form.eligibleProductIds.length === 0 ||
+                (form.discountStars === 0 && form.discountRubles === 0))) ||
+            (form.type === 'premium_days' && form.premiumDays === 0)
+          }
+        >
+          {editingId ? ru.miniApp.admin.savePromo : ru.miniApp.admin.create}
         </Button>
-        <MutationFeedback states={[create]} success={ru.miniApp.admin.actionCompleted} />
+        {editingId ? (
+          <Button variant="secondary" onClick={resetForm}>
+            {ru.miniApp.admin.cancelPromoEdit}
+          </Button>
+        ) : null}
+        <MutationFeedback states={[create, update]} success={ru.miniApp.admin.actionCompleted} />
       </Card>
       {promotions.data?.map((promotion) => (
         <Card className="p-4" key={promotion.id}>
@@ -1338,15 +1469,53 @@ function Promotions() {
                 {promotion.activation_count}/{promotion.max_activations ?? '∞'}
               </p>
             </div>
-            <Button
-              variant="secondary"
-              onClick={() => update.mutate({ id: promotion.id, active: !promotion.is_active })}
-            >
-              {promotion.is_active ? ru.miniApp.admin.deactivate : ru.miniApp.admin.activate}
-            </Button>
+            <div className="flex flex-wrap gap-2">
+              <Button
+                variant="secondary"
+                onClick={() =>
+                  update.mutate({
+                    id: promotion.id,
+                    input: promotionInput(promotion, !promotion.is_active),
+                  })
+                }
+              >
+                {promotion.is_active ? ru.miniApp.admin.deactivate : ru.miniApp.admin.activate}
+              </Button>
+              <Button
+                variant="secondary"
+                data-testid={`promotion-edit-${promotion.id}`}
+                onClick={() => {
+                  const input = promotionInput(promotion);
+                  const { isActive, expiresAt, maxActivations, ...editable } = input;
+                  setForm({
+                    ...editable,
+                    ...(expiresAt ? { expiresAt } : {}),
+                    ...(maxActivations ? { maxActivations } : {}),
+                  });
+                  setEditingId(promotion.id);
+                  setEditingActive(isActive);
+                  window.scrollTo({ top: 0, behavior: 'smooth' });
+                }}
+              >
+                {ru.miniApp.admin.editPromo}
+              </Button>
+              <Button
+                variant="secondary"
+                data-testid={`promotion-delete-${promotion.id}`}
+                onClick={() => {
+                  if (window.confirm(ru.miniApp.admin.deletePromoConfirm)) {
+                    remove.mutate(promotion.id);
+                  }
+                }}
+                loading={remove.isPending}
+              >
+                {ru.miniApp.admin.deletePromo}
+              </Button>
+            </div>
           </div>
         </Card>
       ))}
+      <MutationFeedback states={[remove]} success={ru.miniApp.admin.promoDeleted} />
     </div>
   );
 }

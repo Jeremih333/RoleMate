@@ -1,7 +1,18 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { motion, AnimatePresence } from 'framer-motion';
-import { Ban, Flag, Heart, RotateCcw, Search, SlidersHorizontal, Star, X } from 'lucide-react';
-import { useState } from 'react';
+import {
+  Ban,
+  ChevronLeft,
+  ChevronRight,
+  Flag,
+  Heart,
+  RotateCcw,
+  Search,
+  SlidersHorizontal,
+  Star,
+  X,
+} from 'lucide-react';
+import { useEffect, useState } from 'react';
 import { ru } from '@rolemate/shared';
 import {
   api,
@@ -53,42 +64,101 @@ const genderLabels: Record<string, string> = {
   not_specified: ru.miniApp.profile.genderOptions[0],
 };
 
-function ProfileCard({ profile }: { profile: SearchProfile }) {
+export function ProfileCard({
+  profile,
+  preview = false,
+}: {
+  profile: SearchProfile;
+  preview?: boolean;
+}) {
   const fandoms = list(profile.fandoms);
   const genres = list(profile.genres);
   const tags = list(profile.tags);
+  type MediaItem = {
+    id: string;
+    media_type: 'photo' | 'animation' | 'video' | 'audio' | 'voice' | 'document';
+  };
+  let media: MediaItem[] = [];
+  try {
+    const parsed: unknown = JSON.parse(profile.media_items ?? '[]');
+    if (Array.isArray(parsed)) {
+      media = parsed.filter(
+        (item): item is MediaItem =>
+          typeof item === 'object' &&
+          item !== null &&
+          typeof (item as Record<string, unknown>).id === 'string' &&
+          typeof (item as Record<string, unknown>).media_type === 'string',
+      );
+    }
+  } catch {
+    media = [];
+  }
+  if (!media.length && profile.media_id && profile.media_type) {
+    media = [{ id: profile.media_id, media_type: profile.media_type }];
+  }
+  const visualMedia = media.filter((item) =>
+    ['photo', 'animation', 'video'].includes(item.media_type),
+  );
+  const audioMedia = media.filter((item) => ['audio', 'voice'].includes(item.media_type));
+  const documents = media.filter((item) => item.media_type === 'document');
+  const [mediaIndex, setMediaIndex] = useState(0);
+  const currentMedia = visualMedia[mediaIndex % Math.max(visualMedia.length, 1)];
   return (
     <Card className="profile-card overflow-hidden">
       <div className="profile-cover">
-        {profile.media_id ? (
-          profile.media_type === 'video' ? (
+        {currentMedia ? (
+          currentMedia.media_type === 'video' ? (
             <video
               className="absolute inset-0 h-full w-full bg-black object-contain"
-              src={`/api/profile-media/${profile.media_id}`}
+              src={`/api/profile-media/${currentMedia.id}`}
               controls
+              playsInline
+              preload="metadata"
             />
-          ) : profile.media_type === 'audio' || profile.media_type === 'voice' ? (
-            <div className="absolute inset-0 flex items-center p-5">
-              <audio className="w-full" src={`/api/profile-media/${profile.media_id}`} controls />
-            </div>
-          ) : profile.media_type === 'document' ? (
-            <a
-              className="absolute inset-0 flex items-center justify-center text-lilac underline"
-              href={`/api/profile-media/${profile.media_id}`}
-            >
-              {ru.miniApp.profile.openMedia}
-            </a>
           ) : (
             <img
               className="absolute inset-0 h-full w-full object-cover"
-              src={`/api/profile-media/${profile.media_id}`}
+              src={`/api/profile-media/${currentMedia.id}`}
               alt=""
               loading="eager"
             />
           )
         ) : null}
+        {visualMedia.length > 1 ? (
+          <>
+            <button
+              className="profile-media-arrow profile-media-arrow-left"
+              type="button"
+              aria-label={ru.miniApp.search.previousMedia}
+              onClick={() =>
+                setMediaIndex((index) => (index - 1 + visualMedia.length) % visualMedia.length)
+              }
+            >
+              <ChevronLeft />
+            </button>
+            <button
+              className="profile-media-arrow profile-media-arrow-right"
+              type="button"
+              aria-label={ru.miniApp.search.nextMedia}
+              onClick={() => setMediaIndex((index) => (index + 1) % visualMedia.length)}
+            >
+              <ChevronRight />
+            </button>
+            <div className="profile-media-dots" aria-hidden>
+              {visualMedia.map((item, index) => (
+                <span className={index === mediaIndex ? 'active' : ''} key={item.id} />
+              ))}
+            </div>
+          </>
+        ) : null}
         <div className="compatibility">
-          {profile.compatibility}%<span>{ru.miniApp.search.matchPercent}</span>
+          {preview ? (
+            <span>{ru.miniApp.profile.previewBadge}</span>
+          ) : (
+            <>
+              {profile.compatibility}%<span>{ru.miniApp.search.matchPercent}</span>
+            </>
+          )}
         </div>
         {profile.is_premium ? (
           <span className="premium-badge">
@@ -117,6 +187,29 @@ function ProfileCard({ profile }: { profile: SearchProfile }) {
         >
           {profile.about}
         </ProfileMarkdown>
+        {audioMedia.length ? (
+          <div className="profile-audio-list">
+            {audioMedia.map((item, index) => (
+              <audio
+                key={item.id}
+                className="w-full"
+                src={`/api/profile-media/${item.id}`}
+                controls
+                preload="none"
+                aria-label={ru.miniApp.search.profileAudio(index + 1)}
+              />
+            ))}
+          </div>
+        ) : null}
+        {documents.map((item) => (
+          <a
+            className="mt-3 block text-sm text-lilac underline"
+            href={`/api/profile-media/${item.id}`}
+            key={item.id}
+          >
+            {ru.miniApp.profile.openMedia}
+          </a>
+        ))}
         <div className="mt-4 flex items-center gap-3 text-xs text-muted">
           <strong className="text-soft">{ru.miniApp.search.rating}:</strong>
           <span>
@@ -161,6 +254,8 @@ export function SearchPage() {
   const queryClient = useQueryClient();
   const [query, setQuery] = useState('');
   const [queryDraft, setQueryDraft] = useState('');
+  const [staffNotice, setStaffNotice] = useState('');
+  const me = useQuery({ queryKey: ['me'], queryFn: api.me });
   const profiles = useQuery({
     queryKey: ['search', query],
     queryFn: () => api.search(query),
@@ -170,9 +265,16 @@ export function SearchPage() {
     queryKey: ['search-preferences'],
     queryFn: api.searchPreferences,
   });
+  const availability = useQuery({
+    queryKey: ['search-availability'],
+    queryFn: api.searchAvailability,
+  });
   const [index, setIndex] = useState(0);
   const [filtersOpen, setFiltersOpen] = useState(false);
   const current = profiles.data?.[index];
+  useEffect(() => {
+    setIndex(0);
+  }, [profiles.dataUpdatedAt, query]);
   const searchForm = (
     <form
       className="search-box"
@@ -220,6 +322,26 @@ export function SearchPage() {
     onSuccess: () => setIndex((value) => value + 1),
   });
   const report = useMutation({ mutationFn: api.report });
+  const staffModeration = useMutation({
+    mutationFn: ({
+      userId,
+      action,
+      reason,
+      bannedUntil,
+    }: {
+      userId: string;
+      action: 'warn' | 'temporary_ban' | 'disable_profile';
+      reason: string;
+      bannedUntil?: string;
+    }) =>
+      api.adminModerateUser(userId, { action, reason, ...(bannedUntil ? { bannedUntil } : {}) }),
+    onSuccess: (_result, variables) => {
+      setStaffNotice(ru.miniApp.search.moderationCompleted);
+      if (variables.action !== 'warn') setIndex((value) => value + 1);
+      void queryClient.invalidateQueries({ queryKey: ['admin-users'] });
+      void queryClient.invalidateQueries({ queryKey: ['admin-profiles'] });
+    },
+  });
 
   if (profiles.isLoading) {
     return (
@@ -230,15 +352,31 @@ export function SearchPage() {
     );
   }
   if (!current) {
+    const emptyDescription =
+      availability.data?.otherProfiles === 0
+        ? ru.miniApp.search.emptyOnlyOwnProfile
+        : availability.data?.otherSearchable === 0
+          ? ru.miniApp.search.emptyProfilesUnavailable
+          : availability.data?.safeCandidates === 0
+            ? ru.miniApp.search.emptySafetyRules
+            : ru.miniApp.search.emptyDescription;
     return (
       <EmptyState
         icon={<Star className="h-7 w-7" />}
         title={ru.miniApp.search.emptyTitle}
-        description={ru.miniApp.search.emptyDescription}
+        description={emptyDescription}
         action={
           <div className="space-y-3">
             {searchForm}
-            <Button onClick={() => void profiles.refetch()}>{ru.miniApp.search.retry}</Button>
+            <Button
+              onClick={() => {
+                setIndex(0);
+                void profiles.refetch();
+                void availability.refetch();
+              }}
+            >
+              {ru.miniApp.search.retry}
+            </Button>
           </div>
         }
       />
@@ -300,6 +438,66 @@ export function SearchPage() {
           <ProfileCard profile={current} />
         </motion.div>
       </AnimatePresence>
+      {me.data?.isAdmin ? (
+        <Card className="mt-3 p-4" data-testid="search-moderation-panel">
+          <strong className="text-sm">{ru.miniApp.search.quickModeration}</strong>
+          <p className="mt-1 text-xs text-muted">{ru.miniApp.search.quickModerationHint}</p>
+          <div className="mt-3 flex flex-wrap gap-2">
+            <Button
+              variant="secondary"
+              loading={staffModeration.isPending}
+              onClick={() => {
+                const reason = window.prompt(ru.miniApp.admin.warningReasonPrompt)?.trim();
+                if (reason && reason.length >= 3) {
+                  setStaffNotice('');
+                  staffModeration.mutate({ userId: current.user_id, action: 'warn', reason });
+                }
+              }}
+            >
+              {ru.miniApp.admin.warn}
+            </Button>
+            <Button
+              variant="secondary"
+              loading={staffModeration.isPending}
+              onClick={() => {
+                const reason = window.prompt(ru.miniApp.admin.temporaryBanReasonPrompt)?.trim();
+                if (reason && reason.length >= 3) {
+                  setStaffNotice('');
+                  staffModeration.mutate({
+                    userId: current.user_id,
+                    action: 'temporary_ban',
+                    reason,
+                    bannedUntil: new Date(Date.now() + 86_400_000).toISOString(),
+                  });
+                }
+              }}
+            >
+              {ru.miniApp.admin.temporaryBan}
+            </Button>
+            <Button
+              variant="danger"
+              loading={staffModeration.isPending}
+              onClick={() => {
+                const reason = window.prompt(ru.miniApp.search.disableReasonPrompt)?.trim();
+                if (reason && reason.length >= 3) {
+                  setStaffNotice('');
+                  staffModeration.mutate({
+                    userId: current.user_id,
+                    action: 'disable_profile',
+                    reason,
+                  });
+                }
+              }}
+            >
+              {ru.miniApp.admin.disableProfile}
+            </Button>
+          </div>
+          {staffNotice ? <p className="mt-3 text-sm text-lilac">{staffNotice}</p> : null}
+          {staffModeration.isError ? (
+            <div className="error-box mt-3">{staffModeration.error.message}</div>
+          ) : null}
+        </Card>
+      ) : null}
       <div className="swipe-actions">
         <Button
           variant="ghost"

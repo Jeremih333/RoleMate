@@ -86,6 +86,7 @@ export const workerOperations = {
   'users.delete': z.object({ userId: z.string().uuid() }),
   'profiles.upsert': z.object({ userId: z.string().uuid(), profile: profileSchema }),
   'profiles.getOwn': z.object({ userId: z.string().uuid() }),
+  'profiles.previewOwn': z.object({ userId: z.string().uuid() }),
   'profiles.setActive': z.object({ userId: z.string().uuid(), active: z.boolean() }),
   'profiles.media.list': z.object({ userId: z.string().uuid() }),
   'profiles.media.add': z.object({
@@ -105,6 +106,7 @@ export const workerOperations = {
   'search.list': z
     .object({ userId: z.string().uuid(), query: z.string().trim().max(80).default('') })
     .merge(paginationSchema),
+  'search.availability': z.object({ userId: z.string().uuid() }),
   'search.preferences.get': z.object({ userId: z.string().uuid() }),
   'search.preferences.update': z.object({
     userId: z.string().uuid(),
@@ -149,6 +151,10 @@ export const workerOperations = {
   }),
   'swipes.rewind': z.object({ userId: z.string().uuid() }),
   'swipes.incoming': z.object({ userId: z.string().uuid() }).merge(paginationSchema),
+  'notifications.deliveryTarget': z.object({
+    userId: z.string().uuid(),
+    kind: z.enum(['like', 'message']),
+  }),
   'premium.status': z.object({ userId: z.string().uuid() }),
   'promotions.apply': z.object({
     userId: z.string().uuid(),
@@ -178,6 +184,16 @@ export const workerOperations = {
     telegramUserId: z.number().int().positive(),
     conversationId: z.string().uuid().optional(),
   }),
+  'conversations.resolveMiniAppRelay': z.object({
+    userId: z.string().uuid(),
+    conversationId: z.string().uuid(),
+  }),
+  'conversations.recordMiniAppMessage': z.object({
+    userId: z.string().uuid(),
+    conversationId: z.string().uuid(),
+    destinationMessageId: z.number().int().positive(),
+    messageType: z.string().min(1).max(32),
+  }),
   'conversations.resolveReply': z.object({
     conversationId: z.string().uuid(),
     replyChatId: z.number().int(),
@@ -202,6 +218,32 @@ export const workerOperations = {
     conversationId: z.string().uuid(),
     action: z.enum(['mute', 'unmute', 'pause', 'resume', 'close']),
   }),
+  'calls.start': z.object({
+    userId: z.string().uuid(),
+    conversationId: z.string().uuid(),
+    kind: z.enum(['audio', 'video']),
+  }),
+  'calls.poll': z.object({
+    userId: z.string().uuid(),
+    conversationId: z.string().uuid(),
+    afterSequence: z.number().int().nonnegative().default(0),
+  }),
+  'calls.respond': z.object({
+    userId: z.string().uuid(),
+    callId: z.string().uuid(),
+    accept: z.boolean(),
+  }),
+  'calls.signal': z.object({
+    userId: z.string().uuid(),
+    callId: z.string().uuid(),
+    type: z.enum(['offer', 'answer', 'ice']),
+    payload: z.string().min(2).max(64_000),
+  }),
+  'calls.end': z.object({
+    userId: z.string().uuid(),
+    callId: z.string().uuid(),
+  }),
+  'calls.expire': z.object({}),
   'ratings.create': z.object({
     userId: z.string().uuid(),
     conversationId: z.string().uuid(),
@@ -269,7 +311,17 @@ export const workerOperations = {
   'telegramUpdates.claim': z.object({ updateId: z.number().int().nonnegative() }),
   'telegramUpdates.release': z.object({ updateId: z.number().int().nonnegative() }),
   'products.list': z.object({ activeOnly: z.boolean().default(true) }),
+  'products.listForUser': z.object({
+    userId: z.string().uuid(),
+    activeOnly: z.boolean().default(true),
+  }),
   'payments.create': z.object({ userId: z.string().uuid() }).merge(createPaymentSchema),
+  'payments.createGift': z.object({
+    userId: z.string().uuid(),
+    conversationId: z.string().uuid(),
+    productId: z.string().uuid(),
+    idempotencyKey: z.string().min(16).max(128),
+  }),
   'payments.expirePending': z.object({}),
   'payments.getByPayload': z.object({ invoicePayload: z.string().min(1).max(128) }),
   'payments.markPrecheckout': z.object({
@@ -487,7 +539,19 @@ export const workerOperations = {
   'admin.promotions.update': z.object({
     adminUserId: z.string().uuid(),
     promotionId: z.string().uuid(),
+    code: z.string().trim().min(3).max(40),
+    type: z.enum(['discount', 'premium_days']),
+    discountStars: z.number().int().min(0).max(10_000),
+    discountRubles: z.number().int().min(0).max(1_000_000),
+    premiumDays: z.number().int().min(0).max(3_650),
+    eligibleProductIds: z.array(z.string().uuid()).max(100),
+    expiresAt: z.string().datetime().nullable(),
+    maxActivations: z.number().int().min(1).max(1_000_000).nullable(),
     isActive: z.boolean(),
+  }),
+  'admin.promotions.delete': z.object({
+    adminUserId: z.string().uuid(),
+    promotionId: z.string().uuid(),
   }),
   'admin.postingRequirements.list': z
     .object({ adminUserId: z.string().uuid() })

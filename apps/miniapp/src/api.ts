@@ -1,4 +1,4 @@
-import { ru } from '@rolemate/shared';
+import { ru, type ProfileInput } from '@rolemate/shared';
 
 const API_BASE = '/api';
 
@@ -59,8 +59,9 @@ export const api = {
       isOwner: boolean;
       riskScore: number;
     }>('/me'),
-  profile: () => request<Record<string, unknown>>('/profile'),
-  saveProfile: (profile: unknown) =>
+  profile: () => request<UserProfileSummary>('/profile'),
+  profilePreview: () => request<SearchProfile>('/profile/preview'),
+  saveProfile: (profile: ProfileInput) =>
     request<{ profileId: string; moderationStatus: string; completion: number }>('/profile', {
       method: 'PUT',
       body: JSON.stringify(profile),
@@ -75,6 +76,7 @@ export const api = {
     request<{ deleted: true }>(`/profile/media/${mediaId}`, { method: 'DELETE' }),
   search: (query = '') =>
     request<SearchProfile[]>(`/search?limit=20&q=${encodeURIComponent(query)}`),
+  searchAvailability: () => request<SearchAvailability>('/search/availability'),
   searchPreferences: () => request<SearchPreferences>('/search/preferences'),
   saveSearchPreferences: (preferences: SearchPreferencesInput) =>
     request<{ updated: true }>('/search/preferences', {
@@ -112,6 +114,7 @@ export const api = {
       discountStars?: number;
       discountRubles?: number;
       premiumDays?: number;
+      eligibleProductIds?: string[];
     }>('/promotions/apply', {
       method: 'POST',
       body: JSON.stringify({ code }),
@@ -136,6 +139,53 @@ export const api = {
   deleteProfileVariant: (variantId: string) =>
     request<{ deleted: true }>(`/premium/profile-variants/${variantId}`, { method: 'DELETE' }),
   conversations: () => request<Conversation[]>('/conversations'),
+  sendConversationMedia: (
+    conversationId: string,
+    input: {
+      kind: ChatMediaKind;
+      fileName: string;
+      mimeType: string;
+      dataBase64: string;
+    },
+  ) =>
+    request<{ sent: true; messageType: ChatMediaKind }>(`/conversations/${conversationId}/media`, {
+      method: 'POST',
+      body: JSON.stringify(input),
+    }),
+  shareConversationProfile: (conversationId: string) =>
+    request<{ sent: true }>(`/conversations/${conversationId}/profile-share`, {
+      method: 'POST',
+      body: '{}',
+    }),
+  giftPremiumInvoice: (conversationId: string, productId: string) =>
+    request<{ invoiceLink?: string }>(`/conversations/${conversationId}/premium-gift/invoice`, {
+      method: 'POST',
+      body: JSON.stringify({ productId }),
+    }),
+  callTurnCredentials: (conversationId: string) =>
+    request<TurnCredentials>(`/conversations/${conversationId}/calls/turn-credentials`),
+  startCall: (conversationId: string, kind: 'audio' | 'video') =>
+    request<AnonymousCall>(`/conversations/${conversationId}/calls`, {
+      method: 'POST',
+      body: JSON.stringify({ kind }),
+    }),
+  pollCall: (conversationId: string, afterSequence: number) =>
+    request<CallPoll>(`/conversations/${conversationId}/calls/poll?afterSequence=${afterSequence}`),
+  respondCall: (callId: string, accept: boolean) =>
+    request<{ status: string }>(`/calls/${callId}/respond`, {
+      method: 'POST',
+      body: JSON.stringify({ accept }),
+    }),
+  signalCall: (callId: string, type: CallSignal['type'], payload: string) =>
+    request<{ sequence: number }>(`/calls/${callId}/signal`, {
+      method: 'POST',
+      body: JSON.stringify({ type, payload }),
+    }),
+  endCall: (callId: string) =>
+    request<{ status: string }>(`/calls/${callId}/end`, {
+      method: 'POST',
+      body: '{}',
+    }),
   matches: () => request<Match[]>('/matches'),
   block: (blockedUserId: string, reason = 'user_request') =>
     request<{ blocked: true }>('/blocks', {
@@ -229,10 +279,15 @@ export const api = {
       method: 'POST',
       body: JSON.stringify(input),
     }),
-  adminUpdatePromotion: (promotionId: string, isActive: boolean) =>
+  adminUpdatePromotion: (promotionId: string, input: AdminPromotionUpdateInput) =>
     request<{ updated: true }>(`/admin/promotions/${promotionId}`, {
       method: 'PUT',
-      body: JSON.stringify({ isActive }),
+      body: JSON.stringify(input),
+    }),
+  adminDeletePromotion: (promotionId: string) =>
+    request<{ deleted: true; archived: boolean }>(`/admin/promotions/${promotionId}`, {
+      method: 'DELETE',
+      body: '{}',
     }),
   adminPostingRequirements: () => request<PostingRequirement[]>('/admin/posting-requirements'),
   adminCreatePostingRequirement: (input: PostingRequirementInput) =>
@@ -367,9 +422,23 @@ export interface SearchProfile {
   has_premium: number;
   media_id?: string | null;
   media_type?: ProfileMedia['media_type'] | null;
+  media_items?: string;
   rating_likes: number;
   rating_dislikes: number;
   rating_score: number;
+}
+
+export interface UserProfileSummary extends Record<string, unknown> {
+  profile_completion_percent: number;
+  in_search_pool: number;
+  is_active: number;
+  moderation_status: string;
+}
+
+export interface SearchAvailability {
+  otherProfiles: number;
+  otherSearchable: number;
+  safeCandidates: number;
 }
 
 export interface ProfileMedia {
@@ -463,6 +532,31 @@ export interface Conversation {
   last_message_at?: string;
 }
 
+export type ChatMediaKind = 'photo' | 'animation' | 'video' | 'audio' | 'voice' | 'video_note';
+
+export interface AnonymousCall {
+  id: string;
+  kind: 'audio' | 'video';
+  status: 'ringing' | 'active' | 'declined' | 'ended' | 'missed';
+  isInitiator: boolean;
+}
+
+export interface CallSignal {
+  sequence: number;
+  type: 'offer' | 'answer' | 'ice';
+  payload: string;
+}
+
+export interface CallPoll {
+  call: AnonymousCall | null;
+  signals: CallSignal[];
+}
+
+export interface TurnCredentials {
+  iceServers: RTCIceServer[];
+  iceTransportPolicy: 'relay';
+}
+
 export interface Match {
   id: string;
   status: string;
@@ -537,6 +631,15 @@ export interface AdminPromotionInput {
   maxActivations?: number;
 }
 
+export type AdminPromotionUpdateInput = Omit<
+  AdminPromotionInput,
+  'expiresAt' | 'maxActivations'
+> & {
+  expiresAt: string | null;
+  maxActivations: number | null;
+  isActive: boolean;
+};
+
 export interface PostingRequirement {
   id: string;
   type: 'channel' | 'supergroup' | 'bot';
@@ -569,6 +672,9 @@ export interface Product {
   billing_type: string;
   duration_days: number;
   stars_amount: number;
+  original_stars_amount?: number;
+  effective_stars_amount?: number;
+  applied_discount_stars?: number;
   is_active: number;
 }
 

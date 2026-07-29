@@ -39,6 +39,13 @@ describe('D1 migrations', () => {
       '0009_promotions_posting_requirements.sql',
       '0010_moderator_assignments.sql',
       '0011_profile_discovery_and_media.sql',
+      '0012_anonymous_calls.sql',
+      '0013_promotion_reservations.sql',
+      '0014_premium_gifts.sql',
+      '0015_promotion_editing.sql',
+      '0016_auto_publish_profile_media.sql',
+      '0017_daily_profile_boost.sql',
+      '0018_referral_abuse_protection.sql',
     ]);
     expect(() => applyMigrations()).not.toThrow();
     const tables = database
@@ -68,6 +75,7 @@ describe('D1 migrations', () => {
         'posting_requirements',
         'posting_requirement_checks',
         'moderator_assignments',
+        'referral_identity_claims',
       ]),
     );
     expect(tables.length).toBeGreaterThanOrEqual(35);

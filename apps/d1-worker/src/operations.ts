@@ -33,6 +33,24 @@ function parseJsonArray(value: string): string[] {
   }
 }
 
+async function referralIdentityHash(env: Env, telegramUserId: number): Promise<string> {
+  const key = await crypto.subtle.importKey(
+    'raw',
+    new TextEncoder().encode(env.REFERRAL_IDENTITY_SECRET),
+    { name: 'HMAC', hash: 'SHA-256' },
+    false,
+    ['sign'],
+  );
+  const signature = await crypto.subtle.sign(
+    'HMAC',
+    key,
+    new TextEncoder().encode(`rolemate-referral:${telegramUserId}`),
+  );
+  return Array.from(new Uint8Array(signature), (byte) => byte.toString(16).padStart(2, '0')).join(
+    '',
+  );
+}
+
 async function assertAdmin(env: Env, adminUserId: string): Promise<void> {
   const admin = await env.DB.prepare('SELECT role, telegram_user_id FROM users WHERE id = ?1')
     .bind(adminUserId)
@@ -174,19 +192,70 @@ const handlers: { [K in WorkerOperation]: Handler<K> } = {
       env.DB.prepare('INSERT OR IGNORE INTO user_settings (user_id) VALUES (?1)').bind(userId),
     ]);
 
-    if (input.referralCode && !existing) {
-      const code = await env.DB.prepare(
-        'SELECT user_id FROM referral_codes WHERE code = ?1 AND is_active = 1',
+    const identityHash = await referralIdentityHash(env, input.telegramUser.id);
+    const priorReferral = await env.DB.prepare(
+      'SELECT id, status FROM referrals WHERE referred_user_id = ?1',
+    )
+      .bind(userId)
+      .first<{ id: string; status: 'pending' | 'qualified' | 'rejected' }>();
+    if (existing) {
+      await env.DB.prepare(
+        `INSERT OR IGNORE INTO referral_identity_claims
+           (identity_hash, status, referral_id, qualified_at)
+         VALUES (?1, ?2, ?3, CASE WHEN ?2 = 'qualified' THEN CURRENT_TIMESTAMP ELSE NULL END)`,
       )
-        .bind(input.referralCode)
-        .first<{ user_id: string }>();
-      if (code && code.user_id !== userId) {
-        await env.DB.prepare(
-          `INSERT OR IGNORE INTO referrals
-             (id, referrer_user_id, referred_user_id, referral_code)
-           VALUES (?1, ?2, ?3, ?4)`,
+        .bind(
+          identityHash,
+          priorReferral?.status === 'qualified' ? 'qualified' : 'ineligible',
+          priorReferral?.id ?? null,
         )
-          .bind(crypto.randomUUID(), code.user_id, userId, input.referralCode)
+        .run();
+    } else {
+      const code = input.referralCode
+        ? await env.DB.prepare(
+            `SELECT referral_codes.user_id
+             FROM referral_codes
+             JOIN users referrer ON referrer.id = referral_codes.user_id
+             WHERE referral_codes.code = ?1 AND referral_codes.is_active = 1
+               AND referrer.is_banned = 0 AND referrer.deleted_at IS NULL`,
+          )
+            .bind(input.referralCode)
+            .first<{ user_id: string }>()
+        : null;
+      if (code && code.user_id !== userId) {
+        const claim = await env.DB.prepare(
+          `INSERT OR IGNORE INTO referral_identity_claims (identity_hash, status)
+           VALUES (?1, 'pending')`,
+        )
+          .bind(identityHash)
+          .run();
+        if (claim.meta.changes === 1) {
+          const referralId = crypto.randomUUID();
+          const inserted = await env.DB.prepare(
+            `INSERT OR IGNORE INTO referrals
+               (id, referrer_user_id, referred_user_id, referral_code)
+             VALUES (?1, ?2, ?3, ?4)`,
+          )
+            .bind(referralId, code.user_id, userId, input.referralCode)
+            .run();
+          await env.DB.prepare(
+            `UPDATE referral_identity_claims
+             SET status = ?2, referral_id = ?3
+             WHERE identity_hash = ?1`,
+          )
+            .bind(
+              identityHash,
+              inserted.meta.changes === 1 ? 'pending' : 'ineligible',
+              inserted.meta.changes === 1 ? referralId : null,
+            )
+            .run();
+        }
+      } else {
+        await env.DB.prepare(
+          `INSERT OR IGNORE INTO referral_identity_claims (identity_hash, status)
+           VALUES (?1, 'ineligible')`,
+        )
+          .bind(identityHash)
           .run();
       }
     }
@@ -318,6 +387,25 @@ const handlers: { [K in WorkerOperation]: Handler<K> } = {
       .first<{ telegram_user_id: number }>();
     if (identity?.telegram_user_id === 1_040_929_628) {
       throw new ApiError(403, 'OWNER_ACCOUNT_PROTECTED', 'Owner account cannot be self-deleted');
+    }
+    if (identity?.telegram_user_id) {
+      const identityHash = await referralIdentityHash(env, identity.telegram_user_id);
+      const referral = await env.DB.prepare(
+        'SELECT id, status FROM referrals WHERE referred_user_id = ?1',
+      )
+        .bind(input.userId)
+        .first<{ id: string; status: string }>();
+      await env.DB.prepare(
+        `INSERT OR IGNORE INTO referral_identity_claims
+           (identity_hash, status, referral_id, qualified_at)
+         VALUES (?1, ?2, ?3, CASE WHEN ?2 = 'qualified' THEN CURRENT_TIMESTAMP ELSE NULL END)`,
+      )
+        .bind(
+          identityHash,
+          referral?.status === 'qualified' ? 'qualified' : 'ineligible',
+          referral?.id ?? null,
+        )
+        .run();
     }
     await env.DB.batch([
       env.DB.prepare(
@@ -492,7 +580,7 @@ const handlers: { [K in WorkerOperation]: Handler<K> } = {
       .run();
 
     const referral = await env.DB.prepare(
-      `SELECT r.id, r.referrer_user_id
+      `SELECT r.id, r.referrer_user_id, u.telegram_user_id
        FROM referrals r
        JOIN users u ON u.id = r.referred_user_id
        WHERE r.referred_user_id = ?1 AND r.status = 'pending'
@@ -501,9 +589,17 @@ const handlers: { [K in WorkerOperation]: Handler<K> } = {
        LIMIT 1`,
     )
       .bind(input.userId)
-      .first<{ id: string; referrer_user_id: string }>();
+      .first<{ id: string; referrer_user_id: string; telegram_user_id: number }>();
 
     if (referral) {
+      const identityHash = await referralIdentityHash(env, referral.telegram_user_id);
+      await env.DB.prepare(
+        `INSERT OR IGNORE INTO referral_identity_claims
+           (identity_hash, status, referral_id)
+         VALUES (?1, 'pending', ?2)`,
+      )
+        .bind(identityHash, referral.id)
+        .run();
       await env.DB.batch([
         env.DB.prepare(
           `INSERT OR IGNORE INTO premium_grants
@@ -533,6 +629,11 @@ const handlers: { [K in WorkerOperation]: Handler<K> } = {
              qualified_at = CURRENT_TIMESTAMP, reward_grant_id = ?1
            WHERE id = ?1 AND status = 'pending'`,
         ).bind(referral.id),
+        env.DB.prepare(
+          `UPDATE referral_identity_claims
+           SET status = 'qualified', qualified_at = CURRENT_TIMESTAMP
+           WHERE identity_hash = ?1`,
+        ).bind(identityHash),
       ]);
     }
     return { profileId, moderationStatus: 'approved', completion };
@@ -549,6 +650,73 @@ const handlers: { [K in WorkerOperation]: Handler<K> } = {
                 AND u.is_search_enabled = 1 AND u.is_banned = 0
               THEN 1 ELSE 0 END AS in_search_pool
        FROM profiles p JOIN users u ON u.id = p.user_id
+       WHERE p.user_id = ?1`,
+    )
+      .bind(input.userId)
+      .first();
+    if (!profile) throw new ApiError(404, 'PROFILE_NOT_FOUND', 'Profile not found');
+    return profile;
+  },
+  'profiles.previewOwn': async (env, input) => {
+    const profile = await env.DB.prepare(
+      `SELECT p.id, p.user_id, p.display_name,
+              CASE WHEN EXISTS (
+                SELECT 1 FROM premium_entitlements hidden_pe
+                JOIN user_settings hidden_settings ON hidden_settings.user_id = p.user_id
+                WHERE hidden_pe.user_id = p.user_id AND hidden_pe.status = 'active'
+                  AND hidden_pe.ends_at > CURRENT_TIMESTAMP
+                  AND hidden_settings.hide_demographics = 1
+              ) THEN NULL ELSE p.age_group END AS age_group,
+              CASE WHEN EXISTS (
+                SELECT 1 FROM premium_entitlements hidden_pe
+                JOIN user_settings hidden_settings ON hidden_settings.user_id = p.user_id
+                WHERE hidden_pe.user_id = p.user_id AND hidden_pe.status = 'active'
+                  AND hidden_pe.ends_at > CURRENT_TIMESTAMP
+                  AND hidden_settings.hide_demographics = 1
+              ) THEN NULL ELSE p.gender END AS gender,
+              p.short_headline, p.about, p.fandoms, p.genres, p.tags,
+              p.writing_style, p.average_post_length, p.activity_frequency,
+              EXISTS (
+                SELECT 1 FROM premium_entitlements active_pe
+                WHERE active_pe.user_id = p.user_id AND active_pe.status = 'active'
+                  AND active_pe.ends_at > CURRENT_TIMESTAMP
+              ) AS has_premium,
+              COALESCE((
+                SELECT json_group_array(json_object(
+                  'id', visible_media.id,
+                  'media_type', visible_media.media_type
+                ))
+                FROM (
+                  SELECT pm.id, pm.media_type
+                  FROM profile_media pm
+                  WHERE pm.profile_id = p.id AND pm.moderation_status = 'approved'
+                    AND (
+                      pm.media_type = 'photo'
+                      OR EXISTS (
+                        SELECT 1 FROM premium_entitlements media_pe
+                        WHERE media_pe.user_id = p.user_id AND media_pe.status = 'active'
+                          AND media_pe.ends_at > CURRENT_TIMESTAMP
+                      )
+                    )
+                  ORDER BY pm.sort_order, pm.created_at
+                  LIMIT 8
+                ) visible_media
+              ), '[]') AS media_items,
+              CASE WHEN EXISTS (
+                SELECT 1 FROM premium_entitlements badge_pe
+                JOIN user_settings badge_settings ON badge_settings.user_id = p.user_id
+                WHERE badge_pe.user_id = p.user_id AND badge_pe.status = 'active'
+                  AND badge_pe.ends_at > CURRENT_TIMESTAMP
+                  AND badge_settings.show_premium_badge = 1
+              ) THEN 1 ELSE 0 END AS is_premium,
+              (SELECT COUNT(*) FROM conversation_ratings cr
+               WHERE cr.rated_user_id = p.user_id AND cr.value = 1) AS rating_likes,
+              (SELECT COUNT(*) FROM conversation_ratings cr
+               WHERE cr.rated_user_id = p.user_id AND cr.value = -1) AS rating_dislikes,
+              COALESCE((SELECT SUM(cr.value) FROM conversation_ratings cr
+               WHERE cr.rated_user_id = p.user_id), 0) AS rating_score,
+              100 AS compatibility
+       FROM profiles p
        WHERE p.user_id = ?1`,
     )
       .bind(input.userId)
@@ -661,7 +829,7 @@ const handlers: { [K in WorkerOperation]: Handler<K> } = {
       `INSERT INTO profile_media
          (id, profile_id, telegram_file_id, telegram_file_unique_id, media_type,
           sort_order, moderation_status)
-       VALUES (?1, ?2, ?3, ?4, ?5, ?6, 'pending')`,
+       VALUES (?1, ?2, ?3, ?4, ?5, ?6, 'approved')`,
     )
       .bind(
         id,
@@ -672,7 +840,7 @@ const handlers: { [K in WorkerOperation]: Handler<K> } = {
         total,
       )
       .run();
-    return { id, moderationStatus: 'pending' };
+    return { id, moderationStatus: 'approved' };
   },
   'profiles.media.delete': async (env, input) => {
     const result = await env.DB.prepare(
@@ -691,11 +859,15 @@ const handlers: { [K in WorkerOperation]: Handler<K> } = {
        JOIN profiles p ON p.id = pm.profile_id
        JOIN users u ON u.id = p.user_id
        WHERE pm.id = ?1 AND (
-           EXISTS (
-             SELECT 1 FROM users requester
-             WHERE requester.id = ?2 AND requester.role = 'admin'
-               AND requester.telegram_user_id = 1040929628
-           )
+            EXISTS (
+              SELECT 1 FROM users requester
+              LEFT JOIN moderator_assignments assignment
+                ON assignment.user_id = requester.id AND assignment.is_active = 1
+              WHERE requester.id = ?2 AND (
+                (requester.role = 'admin' AND requester.telegram_user_id = 1040929628)
+                OR assignment.user_id IS NOT NULL
+              )
+            )
            OR (
              (
                p.user_id = ?2
@@ -881,12 +1053,32 @@ const handlers: { [K in WorkerOperation]: Handler<K> } = {
     return { deleted: true };
   },
   'search.list': async (env, input) => {
-    const viewer = await env.DB.prepare(
-      'SELECT age_group, fandoms, genres, languages FROM profiles WHERE user_id = ?1',
+    const profileViewer = await env.DB.prepare(
+      'SELECT age_group, fandoms, genres, languages, tags FROM profiles WHERE user_id = ?1',
     )
       .bind(input.userId)
-      .first<{ age_group: string; fandoms: string; genres: string; languages: string }>();
-    if (!viewer) throw new ApiError(409, 'PROFILE_REQUIRED', 'Create a profile first');
+      .first<{
+        age_group: string;
+        fandoms: string;
+        genres: string;
+        languages: string;
+        tags: string;
+      }>();
+    const acceptedAge = profileViewer
+      ? null
+      : await env.DB.prepare(`SELECT value FROM app_config WHERE key = 'age_group:' || ?1`)
+          .bind(input.userId)
+          .first<{ value: string }>();
+    if (!profileViewer && !acceptedAge) {
+      throw new ApiError(409, 'PROFILE_REQUIRED', 'Confirm age or create a profile first');
+    }
+    const viewer = profileViewer ?? {
+      age_group: acceptedAge?.value ?? '',
+      fandoms: '[]',
+      genres: '[]',
+      languages: '[]',
+      tags: '[]',
+    };
     const premium = Boolean(await premiumEnd(env, input.userId));
     const preferences = premium
       ? await env.DB.prepare(
@@ -924,6 +1116,7 @@ const handlers: { [K in WorkerOperation]: Handler<K> } = {
     const fandoms = preferences?.fandoms ?? '[]';
     const writingStyles = preferences?.writing_styles ?? '[]';
     const activityLevels = preferences?.activity_levels ?? '[]';
+    const languages = preferences?.languages ?? '[]';
     const queryLike = `%${input.query
       .replaceAll('~', '~~')
       .replaceAll('%', '~%')
@@ -945,7 +1138,8 @@ const handlers: { [K in WorkerOperation]: Handler<K> } = {
                   AND hidden_settings.hide_demographics = 1
               ) THEN NULL ELSE p.gender END AS gender,
               p.short_headline,
-              p.about, p.fandoms, p.genres, p.tags, p.writing_style, p.average_post_length,
+              p.about, p.fandoms, p.genres, p.tags, p.languages,
+              p.writing_style, p.average_post_length,
               p.activity_frequency, u.last_activity_at,
               EXISTS (
                 SELECT 1 FROM premium_entitlements active_pe
@@ -974,6 +1168,27 @@ const handlers: { [K in WorkerOperation]: Handler<K> } = {
                    )
                  )
                ORDER BY pm.sort_order, pm.created_at LIMIT 1) AS media_type,
+              COALESCE((
+                SELECT json_group_array(json_object(
+                  'id', visible_media.id,
+                  'media_type', visible_media.media_type
+                ))
+                FROM (
+                  SELECT pm.id, pm.media_type
+                  FROM profile_media pm
+                  WHERE pm.profile_id = p.id AND pm.moderation_status = 'approved'
+                    AND (
+                      pm.media_type = 'photo'
+                      OR EXISTS (
+                        SELECT 1 FROM premium_entitlements media_pe
+                        WHERE media_pe.user_id = p.user_id AND media_pe.status = 'active'
+                          AND media_pe.ends_at > CURRENT_TIMESTAMP
+                      )
+                    )
+                  ORDER BY pm.sort_order, pm.created_at
+                  LIMIT 8
+                ) visible_media
+              ), '[]') AS media_items,
               CASE WHEN EXISTS (
                 SELECT 1 FROM premium_entitlements pe
                 JOIN user_settings settings ON settings.user_id = p.user_id
@@ -985,7 +1200,18 @@ const handlers: { [K in WorkerOperation]: Handler<K> } = {
               (SELECT COUNT(*) FROM conversation_ratings cr
                WHERE cr.rated_user_id = p.user_id AND cr.value = -1) AS rating_dislikes,
               COALESCE((SELECT SUM(cr.value) FROM conversation_ratings cr
-               WHERE cr.rated_user_id = p.user_id), 0) AS rating_score
+               WHERE cr.rated_user_id = p.user_id), 0) AS rating_score,
+              (
+                CASE WHEN p.age_group = ?12 THEN 30 ELSE 0 END
+                + (SELECT COUNT(*) FROM json_each(p.fandoms) candidate
+                   WHERE candidate.value IN (SELECT value FROM json_each(?15))) * 18
+                + (SELECT COUNT(*) FROM json_each(p.genres) candidate
+                   WHERE candidate.value IN (SELECT value FROM json_each(?16))) * 10
+                + (SELECT COUNT(*) FROM json_each(p.languages) candidate
+                   WHERE candidate.value IN (SELECT value FROM json_each(?17))) * 6
+                + (SELECT COUNT(*) FROM json_each(p.tags) candidate
+                   WHERE candidate.value IN (SELECT value FROM json_each(?18))) * 8
+              ) AS relevance_score
        FROM profiles p
        JOIN users u ON u.id = p.user_id
        WHERE p.user_id <> ?1 AND p.moderation_status = 'approved' AND p.is_active = 1
@@ -1015,30 +1241,47 @@ const handlers: { [K in WorkerOperation]: Handler<K> } = {
          AND (json_array_length(?8) = 0 OR p.activity_frequency IN (
            SELECT value FROM json_each(?8)
          ))
-         AND (?9 = 0 OR u.last_activity_at >= datetime('now', '-15 minutes'))
-         AND (?10 = 0 OR EXISTS (
+         AND (json_array_length(?9) = 0 OR EXISTS (
+           SELECT 1 FROM json_each(p.languages) candidate
+           WHERE candidate.value IN (SELECT value FROM json_each(?9))
+         ))
+         AND (?10 = 0 OR u.last_activity_at >= datetime('now', '-15 minutes'))
+         AND (?11 = 0 OR EXISTS (
            SELECT 1 FROM profile_media pm
            WHERE pm.profile_id = p.id AND pm.moderation_status = 'approved'
          ))
          AND (
-           p.age_group = ?11
-           OR (
-             ?11 IN ('18_20', '21_25', '26_plus')
-             AND p.age_group IN ('18_20', '21_25', '26_plus')
-           )
+           (?12 IN ('under_16', '16_17') AND p.age_group IN ('under_16', '16_17'))
+           OR (?12 IN ('18_20', '21_25', '26_plus')
+             AND p.age_group IN ('18_20', '21_25', '26_plus'))
          )
          AND (
-           ?12 = ''
-           OR p.display_name LIKE ?13 ESCAPE '~'
-           OR p.short_headline LIKE ?13 ESCAPE '~'
-           OR p.about LIKE ?13 ESCAPE '~'
-           OR p.fandoms LIKE ?13 ESCAPE '~'
-           OR p.genres LIKE ?13 ESCAPE '~'
-           OR p.tags LIKE ?13 ESCAPE '~'
-           OR p.settings LIKE ?13 ESCAPE '~'
-           OR p.plots LIKE ?13 ESCAPE '~'
+           ?13 = ''
+           OR p.display_name LIKE ?14 ESCAPE '~'
+           OR p.short_headline LIKE ?14 ESCAPE '~'
+           OR p.about LIKE ?14 ESCAPE '~'
+           OR p.fandoms LIKE ?14 ESCAPE '~'
+           OR p.genres LIKE ?14 ESCAPE '~'
+           OR p.tags LIKE ?14 ESCAPE '~'
+           OR p.settings LIKE ?14 ESCAPE '~'
+           OR p.plots LIKE ?14 ESCAPE '~'
          )
-       ORDER BY CASE WHEN p.last_boosted_at >= datetime('now', '-7 day') THEN 1 ELSE 0 END DESC,
+       ORDER BY CASE
+                  WHEN ?13 <> '' AND p.display_name = ?13 COLLATE NOCASE THEN 1
+                  ELSE 0
+                END DESC,
+                relevance_score DESC,
+                CASE WHEN p.last_boosted_at >= datetime(
+                  'now',
+                  printf(
+                    '-%d day',
+                    COALESCE((
+                      SELECT CAST(value AS INTEGER)
+                      FROM app_config
+                      WHERE key = 'boost_cooldown_days'
+                    ), 1)
+                  )
+                ) THEN 1 ELSE 0 END DESC,
                 rating_score DESC, is_premium DESC, u.last_activity_at DESC
        LIMIT min(
          ?2, ?3,
@@ -1056,22 +1299,21 @@ const handlers: { [K in WorkerOperation]: Handler<K> } = {
         fandoms,
         writingStyles,
         activityLevels,
+        languages,
         preferences?.only_online ?? 0,
         preferences?.only_with_photo ?? 0,
         viewer.age_group,
         input.query,
         queryLike,
+        viewer.fandoms,
+        viewer.genres,
+        viewer.languages,
+        viewer.tags,
       )
       .all<Record<string, unknown>>();
-    const viewerFandoms = parseJsonArray(viewer.fandoms);
-    const viewerGenres = parseJsonArray(viewer.genres);
     const response = results.results.map((row) => {
-      const fandoms = parseJsonArray(typeof row.fandoms === 'string' ? row.fandoms : '[]');
-      const genres = parseJsonArray(typeof row.genres === 'string' ? row.genres : '[]');
-      const shared =
-        fandoms.filter((item) => viewerFandoms.includes(item)).length * 18 +
-        genres.filter((item) => viewerGenres.includes(item)).length * 10;
-      return { ...row, compatibility: Math.min(100, 35 + shared) };
+      const relevance = typeof row.relevance_score === 'number' ? row.relevance_score : 0;
+      return { ...row, compatibility: Math.min(100, 35 + relevance) };
     });
     if (response.length) {
       await env.DB.batch(
@@ -1089,6 +1331,54 @@ const handlers: { [K in WorkerOperation]: Handler<K> } = {
       );
     }
     return response;
+  },
+  'search.availability': async (env, input) => {
+    const profileViewer = await env.DB.prepare('SELECT age_group FROM profiles WHERE user_id = ?1')
+      .bind(input.userId)
+      .first<{ age_group: string }>();
+    const acceptedAge = profileViewer
+      ? null
+      : await env.DB.prepare(`SELECT value FROM app_config WHERE key = 'age_group:' || ?1`)
+          .bind(input.userId)
+          .first<{ value: string }>();
+    if (!profileViewer && !acceptedAge) {
+      throw new ApiError(409, 'PROFILE_REQUIRED', 'Confirm age or create a profile first');
+    }
+    const viewerAgeGroup = profileViewer?.age_group ?? acceptedAge?.value ?? '';
+    const row = await env.DB.prepare(
+      `SELECT
+         SUM(CASE WHEN p.user_id <> ?1 THEN 1 ELSE 0 END) AS other_profiles,
+         SUM(CASE WHEN p.user_id <> ?1
+           AND p.moderation_status = 'approved' AND p.is_active = 1
+           AND u.is_banned = 0 AND u.is_search_enabled = 1 AND u.deleted_at IS NULL
+           THEN 1 ELSE 0 END) AS other_searchable,
+         SUM(CASE WHEN p.user_id <> ?1
+           AND p.moderation_status = 'approved' AND p.is_active = 1
+           AND u.is_banned = 0 AND u.is_search_enabled = 1 AND u.deleted_at IS NULL
+           AND (
+             (?2 IN ('under_16', '16_17') AND p.age_group IN ('under_16', '16_17'))
+             OR (?2 IN ('18_20', '21_25', '26_plus')
+               AND p.age_group IN ('18_20', '21_25', '26_plus'))
+           )
+           AND NOT EXISTS (
+             SELECT 1 FROM blocks b WHERE
+               (b.blocker_user_id = ?1 AND b.blocked_user_id = p.user_id)
+               OR (b.blocker_user_id = p.user_id AND b.blocked_user_id = ?1)
+           )
+           THEN 1 ELSE 0 END) AS safe_candidates
+       FROM profiles p JOIN users u ON u.id = p.user_id`,
+    )
+      .bind(input.userId, viewerAgeGroup)
+      .first<{
+        other_profiles: number | null;
+        other_searchable: number | null;
+        safe_candidates: number | null;
+      }>();
+    return {
+      otherProfiles: Number(row?.other_profiles ?? 0),
+      otherSearchable: Number(row?.other_searchable ?? 0),
+      safeCandidates: Number(row?.safe_candidates ?? 0),
+    };
   },
   'swipes.create': async (env, input) => {
     if (input.userId === input.targetUserId) {
@@ -1118,7 +1408,7 @@ const handlers: { [K in WorkerOperation]: Handler<K> } = {
       }
     }
     const swipeId = crypto.randomUUID();
-    await env.DB.prepare(
+    const created = await env.DB.prepare(
       `INSERT OR IGNORE INTO swipes
        (id, actor_user_id, target_user_id, action, source, idempotency_key)
        VALUES (?1, ?2, ?3, ?4, ?5, ?6)`,
@@ -1132,14 +1422,16 @@ const handlers: { [K in WorkerOperation]: Handler<K> } = {
         input.idempotencyKey,
       )
       .run();
-    if (!['like', 'super_like'].includes(input.action)) return { matched: false };
+    if (!['like', 'super_like'].includes(input.action)) {
+      return { created: created.meta.changes === 1, matched: false };
+    }
     const reciprocal = await env.DB.prepare(
       `SELECT id FROM swipes WHERE actor_user_id = ?1 AND target_user_id = ?2
        AND action IN ('like', 'super_like') LIMIT 1`,
     )
       .bind(input.targetUserId, input.userId)
       .first();
-    if (!reciprocal) return { matched: false };
+    if (!reciprocal) return { created: created.meta.changes === 1, matched: false };
     const [userA, userB] = canonicalMatchPair(input.userId, input.targetUserId);
     const matchId = crypto.randomUUID();
     const conversationId = crypto.randomUUID();
@@ -1170,7 +1462,7 @@ const handlers: { [K in WorkerOperation]: Handler<K> } = {
     )
       .bind(userA, userB)
       .first<{ id: string }>();
-    return { matched: true, matchId: match?.id };
+    return { created: created.meta.changes === 1, matched: true, matchId: match?.id };
   },
   'swipes.rewind': async (env, input) => {
     await requirePremium(env, input.userId);
@@ -1212,6 +1504,28 @@ const handlers: { [K in WorkerOperation]: Handler<K> } = {
         .bind(input.userId, input.limit)
         .all()
     ).results;
+  },
+  'notifications.deliveryTarget': async (env, input) => {
+    const target = await env.DB.prepare(
+      `SELECT user.telegram_user_id
+       FROM users user
+       JOIN user_settings settings ON settings.user_id = user.id
+       WHERE user.id = ?1 AND user.is_banned = 0 AND user.deleted_at IS NULL
+         AND settings.notifications_enabled = 1
+         AND (
+           (?2 = 'like' AND settings.match_notifications_enabled = 1)
+           OR (?2 = 'message' AND settings.message_notifications_enabled = 1)
+         )
+         AND NOT EXISTS (
+           SELECT 1 FROM web_sessions session
+           WHERE session.user_id = user.id AND session.revoked_at IS NULL
+             AND session.expires_at > CURRENT_TIMESTAMP
+             AND session.last_seen_at >= datetime('now', '-2 minutes')
+         )`,
+    )
+      .bind(input.userId, input.kind)
+      .first<{ telegram_user_id: number }>();
+    return target ?? null;
   },
   'premium.status': async (env, input) => {
     const endsAt = await premiumEnd(env, input.userId);
@@ -1270,7 +1584,7 @@ const handlers: { [K in WorkerOperation]: Handler<K> } = {
   'promotions.apply': async (env, input) => {
     const promotion = await env.DB.prepare(
       `SELECT * FROM promotions
-       WHERE code = ?1 COLLATE NOCASE AND is_active = 1
+       WHERE code = ?1 COLLATE NOCASE AND is_active = 1 AND deleted_at IS NULL
          AND (expires_at IS NULL OR expires_at > CURRENT_TIMESTAMP)
          AND (max_activations IS NULL OR activation_count < max_activations)`,
     )
@@ -1292,6 +1606,60 @@ const handlers: { [K in WorkerOperation]: Handler<K> } = {
     if (used) throw new ApiError(409, 'PROMO_ALREADY_USED', 'Promo code was already used');
 
     if (promotion.type === 'discount') {
+      const pendingSelection = await env.DB.prepare(
+        `SELECT selection.promotion_id
+         FROM user_promo_selections selection
+         JOIN promotions selected ON selected.id = selection.promotion_id
+         JOIN promo_redemptions redemption
+           ON redemption.promotion_id = selection.promotion_id
+          AND redemption.user_id = selection.user_id
+          AND redemption.payment_order_id IS NULL
+         WHERE selection.user_id = ?1`,
+      )
+        .bind(input.userId)
+        .first<{ promotion_id: string }>();
+      if (pendingSelection) {
+        throw new ApiError(
+          409,
+          'PROMO_PENDING_DISCOUNT',
+          'Use the already activated discount before activating another',
+        );
+      }
+
+      const redemptionId = crypto.randomUUID();
+      const reserved = await env.DB.prepare(
+        `INSERT OR IGNORE INTO promo_redemptions
+           (id, promotion_id, user_id, kind, discount_stars_snapshot,
+            discount_rubles_snapshot, eligible_product_ids_snapshot)
+         VALUES (?1, ?2, ?3, 'discount', ?4, ?5, ?6)`,
+      )
+        .bind(
+          redemptionId,
+          promotion.id,
+          input.userId,
+          promotion.discount_stars,
+          promotion.discount_rubles,
+          promotion.eligible_product_ids,
+        )
+        .run();
+      if (reserved.meta.changes !== 1) {
+        throw new ApiError(409, 'PROMO_ALREADY_USED', 'Promo code was already used');
+      }
+      const claimed = await env.DB.prepare(
+        `UPDATE promotions SET activation_count = activation_count + 1,
+           updated_at = CURRENT_TIMESTAMP
+         WHERE id = ?1 AND is_active = 1
+           AND (expires_at IS NULL OR expires_at > CURRENT_TIMESTAMP)
+           AND (max_activations IS NULL OR activation_count < max_activations)`,
+      )
+        .bind(promotion.id)
+        .run();
+      if (claimed.meta.changes !== 1) {
+        await env.DB.prepare('DELETE FROM promo_redemptions WHERE id = ?1')
+          .bind(redemptionId)
+          .run();
+        throw new ApiError(409, 'PROMO_EXHAUSTED', 'Promo code activation limit reached');
+      }
       await env.DB.prepare(
         `INSERT INTO user_promo_selections (user_id, promotion_id)
          VALUES (?1, ?2)
@@ -1308,6 +1676,16 @@ const handlers: { [K in WorkerOperation]: Handler<K> } = {
       };
     }
 
+    const redemptionId = crypto.randomUUID();
+    const reserved = await env.DB.prepare(
+      `INSERT OR IGNORE INTO promo_redemptions (id, promotion_id, user_id, kind)
+       VALUES (?1, ?2, ?3, 'premium_days')`,
+    )
+      .bind(redemptionId, promotion.id, input.userId)
+      .run();
+    if (reserved.meta.changes !== 1) {
+      throw new ApiError(409, 'PROMO_ALREADY_USED', 'Promo code was already used');
+    }
     const claimed = await env.DB.prepare(
       `UPDATE promotions SET activation_count = activation_count + 1,
          updated_at = CURRENT_TIMESTAMP
@@ -1318,14 +1696,10 @@ const handlers: { [K in WorkerOperation]: Handler<K> } = {
       .bind(promotion.id)
       .run();
     if (claimed.meta.changes !== 1) {
+      await env.DB.prepare('DELETE FROM promo_redemptions WHERE id = ?1').bind(redemptionId).run();
       throw new ApiError(409, 'PROMO_EXHAUSTED', 'Promo code activation limit reached');
     }
-    const redemptionId = crypto.randomUUID();
     await env.DB.batch([
-      env.DB.prepare(
-        `INSERT INTO promo_redemptions (id, promotion_id, user_id, kind)
-         VALUES (?1, ?2, ?3, 'premium_days')`,
-      ).bind(redemptionId, promotion.id, input.userId),
       env.DB.prepare(
         `INSERT INTO premium_grants
            (id, user_id, source, duration_seconds, reference_id)
@@ -1365,13 +1739,13 @@ const handlers: { [K in WorkerOperation]: Handler<K> } = {
       .bind(input.userId)
       .first<{ id: string; last_boosted_at: string | null }>();
     if (!profile) throw new ApiError(404, 'PROFILE_NOT_FOUND', 'Profile not found');
-    const cooldownDays = await configInt(env, 'boost_cooldown_days', 7, 1, 365);
+    const cooldownDays = await configInt(env, 'boost_cooldown_days', 1, 1, 365);
     if (
       profile.last_boosted_at &&
       Date.parse(profile.last_boosted_at.replace(' ', 'T') + 'Z') >
         Date.now() - cooldownDays * 86_400_000
     ) {
-      throw new ApiError(429, 'BOOST_COOLDOWN', 'Boost is available once every seven days');
+      throw new ApiError(429, 'BOOST_COOLDOWN', 'A free boost is available once per day');
     }
     await env.DB.prepare('UPDATE profiles SET last_boosted_at = CURRENT_TIMESTAMP WHERE id = ?1')
       .bind(profile.id)
@@ -1524,6 +1898,15 @@ const handlers: { [K in WorkerOperation]: Handler<K> } = {
       `SELECT c.id AS conversation_id, sender.id AS sender_user_id,
               recipient.telegram_user_id AS destination_chat_id,
               other_cp.is_muted AS recipient_muted,
+              CASE WHEN recipient_settings.notifications_enabled = 1
+                AND recipient_settings.message_notifications_enabled = 1
+                AND NOT EXISTS (
+                  SELECT 1 FROM web_sessions recipient_session
+                  WHERE recipient_session.user_id = recipient.id
+                    AND recipient_session.revoked_at IS NULL
+                    AND recipient_session.expires_at > CURRENT_TIMESTAMP
+                    AND recipient_session.last_seen_at >= datetime('now', '-2 minutes')
+                ) THEN 1 ELSE 0 END AS notify_message,
               COALESCE((
                 SELECT CAST(value AS INTEGER) FROM app_config WHERE key = 'relay_rate_limit'
               ), 20) AS relay_rate_limit
@@ -1533,6 +1916,7 @@ const handlers: { [K in WorkerOperation]: Handler<K> } = {
        JOIN conversation_participants other_cp
          ON other_cp.conversation_id = c.id AND other_cp.user_id <> sender.id
        JOIN users recipient ON recipient.id = other_cp.user_id
+       JOIN user_settings recipient_settings ON recipient_settings.user_id = recipient.id
        WHERE sender.telegram_user_id = ?1
          AND (?2 IS NULL OR c.id = ?2)
          AND c.status = 'active'
@@ -1549,10 +1933,75 @@ const handlers: { [K in WorkerOperation]: Handler<K> } = {
         sender_user_id: string;
         destination_chat_id: number;
         recipient_muted: number;
+        notify_message: number;
         relay_rate_limit: number;
       }>();
     if (!relay) throw new ApiError(404, 'ACTIVE_CHAT_NOT_FOUND', 'Active chat not found');
     return relay;
+  },
+  'conversations.resolveMiniAppRelay': async (env, input) => {
+    const relay = await env.DB.prepare(
+      `SELECT c.id AS conversation_id, sender.id AS sender_user_id,
+              sender.telegram_user_id AS sender_chat_id,
+              recipient.telegram_user_id AS destination_chat_id,
+              other_cp.is_muted AS recipient_muted,
+              CASE WHEN recipient_settings.notifications_enabled = 1
+                AND recipient_settings.message_notifications_enabled = 1
+                AND NOT EXISTS (
+                  SELECT 1 FROM web_sessions recipient_session
+                  WHERE recipient_session.user_id = recipient.id
+                    AND recipient_session.revoked_at IS NULL
+                    AND recipient_session.expires_at > CURRENT_TIMESTAMP
+                    AND recipient_session.last_seen_at >= datetime('now', '-2 minutes')
+                ) THEN 1 ELSE 0 END AS notify_message
+       FROM users sender
+       JOIN conversation_participants own_cp ON own_cp.user_id = sender.id
+       JOIN conversations c ON c.id = own_cp.conversation_id
+       JOIN conversation_participants other_cp
+         ON other_cp.conversation_id = c.id AND other_cp.user_id <> sender.id
+       JOIN users recipient ON recipient.id = other_cp.user_id
+       JOIN user_settings recipient_settings ON recipient_settings.user_id = recipient.id
+       WHERE sender.id = ?1 AND c.id = ?2 AND c.status = 'active'
+         AND own_cp.left_at IS NULL AND other_cp.left_at IS NULL
+         AND own_cp.is_blocked = 0 AND other_cp.is_blocked = 0
+         AND sender.is_banned = 0 AND recipient.is_banned = 0
+         AND sender.deleted_at IS NULL AND recipient.deleted_at IS NULL
+       LIMIT 1`,
+    )
+      .bind(input.userId, input.conversationId)
+      .first<{
+        conversation_id: string;
+        sender_user_id: string;
+        sender_chat_id: number;
+        destination_chat_id: number;
+        recipient_muted: number;
+        notify_message: number;
+      }>();
+    if (!relay) throw new ApiError(404, 'ACTIVE_CHAT_NOT_FOUND', 'Active chat not found');
+    return relay;
+  },
+  'conversations.recordMiniAppMessage': async (env, input) => {
+    const participant = await env.DB.prepare(
+      `SELECT 1 AS found
+       FROM conversation_participants cp
+       JOIN conversations c ON c.id = cp.conversation_id
+       WHERE cp.user_id = ?1 AND cp.conversation_id = ?2
+         AND cp.left_at IS NULL AND c.status = 'active'`,
+    )
+      .bind(input.userId, input.conversationId)
+      .first();
+    if (!participant) throw new ApiError(404, 'ACTIVE_CHAT_NOT_FOUND', 'Active chat not found');
+    await env.DB.prepare(
+      `UPDATE conversations SET last_message_at = CURRENT_TIMESTAMP
+       WHERE id = ?1 AND status = 'active'`,
+    )
+      .bind(input.conversationId)
+      .run();
+    return {
+      recorded: true,
+      destinationMessageId: input.destinationMessageId,
+      messageType: input.messageType,
+    };
   },
   'conversations.resolveReply': async (env, input) => {
     const mapping = await env.DB.prepare(
@@ -1696,6 +2145,148 @@ const handlers: { [K in WorkerOperation]: Handler<K> } = {
         : []),
     ]);
     return { status: nextStatus, muted: Boolean(participant.is_muted) };
+  },
+  'calls.start': async (env, input) => {
+    await requirePremium(env, input.userId);
+    const participant = await env.DB.prepare(
+      `SELECT 1 AS found FROM conversation_participants own_cp
+       JOIN conversation_participants other_cp
+         ON other_cp.conversation_id = own_cp.conversation_id
+        AND other_cp.user_id <> own_cp.user_id
+       JOIN conversations c ON c.id = own_cp.conversation_id
+       WHERE own_cp.user_id = ?1 AND own_cp.conversation_id = ?2
+         AND c.status = 'active'
+         AND own_cp.left_at IS NULL AND other_cp.left_at IS NULL
+         AND own_cp.is_blocked = 0 AND other_cp.is_blocked = 0`,
+    )
+      .bind(input.userId, input.conversationId)
+      .first();
+    if (!participant) throw new ApiError(404, 'ACTIVE_CHAT_NOT_FOUND', 'Active chat not found');
+    const existing = await env.DB.prepare(
+      `SELECT id FROM anonymous_calls
+       WHERE conversation_id = ?1 AND status IN ('ringing', 'active') LIMIT 1`,
+    )
+      .bind(input.conversationId)
+      .first();
+    if (existing) throw new ApiError(409, 'CALL_ALREADY_ACTIVE', 'Call is already active');
+    const id = crypto.randomUUID();
+    await env.DB.prepare(
+      `INSERT INTO anonymous_calls (id, conversation_id, initiated_by_user_id, kind)
+       VALUES (?1, ?2, ?3, ?4)`,
+    )
+      .bind(id, input.conversationId, input.userId, input.kind)
+      .run();
+    return { id, kind: input.kind, status: 'ringing', isInitiator: true };
+  },
+  'calls.poll': async (env, input) => {
+    const call = await env.DB.prepare(
+      `SELECT ac.id, ac.kind, ac.status,
+              CASE WHEN ac.initiated_by_user_id = ?1 THEN 1 ELSE 0 END AS is_initiator
+       FROM anonymous_calls ac
+       JOIN conversation_participants cp ON cp.conversation_id = ac.conversation_id
+       WHERE cp.user_id = ?1 AND ac.conversation_id = ?2
+         AND cp.left_at IS NULL
+         AND (ac.status IN ('ringing', 'active')
+           OR ac.ended_at >= datetime('now', '-30 seconds'))
+       ORDER BY ac.created_at DESC LIMIT 1`,
+    )
+      .bind(input.userId, input.conversationId)
+      .first<{
+        id: string;
+        kind: 'audio' | 'video';
+        status: 'ringing' | 'active' | 'declined' | 'ended' | 'missed';
+        is_initiator: number;
+      }>();
+    if (!call) return { call: null, signals: [] };
+    const signals = await env.DB.prepare(
+      `SELECT sequence, type, payload FROM anonymous_call_signals
+       WHERE call_id = ?1 AND sender_user_id <> ?2 AND sequence > ?3
+       ORDER BY sequence ASC LIMIT 100`,
+    )
+      .bind(call.id, input.userId, input.afterSequence)
+      .all<{ sequence: number; type: 'offer' | 'answer' | 'ice'; payload: string }>();
+    return {
+      call: { ...call, isInitiator: Boolean(call.is_initiator) },
+      signals: signals.results,
+    };
+  },
+  'calls.respond': async (env, input) => {
+    await requirePremium(env, input.userId);
+    const nextStatus = input.accept ? 'active' : 'declined';
+    const result = await env.DB.prepare(
+      `UPDATE anonymous_calls
+       SET status = ?3,
+           answered_at = CASE WHEN ?3 = 'active' THEN CURRENT_TIMESTAMP ELSE answered_at END,
+           ended_at = CASE WHEN ?3 = 'declined' THEN CURRENT_TIMESTAMP ELSE ended_at END
+       WHERE id = ?1 AND initiated_by_user_id <> ?2 AND status = 'ringing'
+         AND EXISTS (
+           SELECT 1 FROM conversation_participants
+           WHERE conversation_id = anonymous_calls.conversation_id
+             AND user_id = ?2 AND left_at IS NULL
+         )`,
+    )
+      .bind(input.callId, input.userId, nextStatus)
+      .run();
+    if (result.meta.changes !== 1)
+      throw new ApiError(409, 'CALL_NOT_RINGING', 'Call is no longer ringing');
+    if (!input.accept) {
+      await env.DB.prepare('DELETE FROM anonymous_call_signals WHERE call_id = ?1')
+        .bind(input.callId)
+        .run();
+    }
+    return { status: nextStatus };
+  },
+  'calls.signal': async (env, input) => {
+    await requirePremium(env, input.userId);
+    const call = await env.DB.prepare(
+      `SELECT ac.status FROM anonymous_calls ac
+       JOIN conversation_participants cp ON cp.conversation_id = ac.conversation_id
+       WHERE ac.id = ?1 AND cp.user_id = ?2 AND cp.left_at IS NULL
+         AND ac.status IN ('ringing', 'active')`,
+    )
+      .bind(input.callId, input.userId)
+      .first();
+    if (!call) throw new ApiError(404, 'ACTIVE_CALL_NOT_FOUND', 'Active call not found');
+    const result = await env.DB.prepare(
+      `INSERT INTO anonymous_call_signals (call_id, sender_user_id, type, payload)
+       VALUES (?1, ?2, ?3, ?4)`,
+    )
+      .bind(input.callId, input.userId, input.type, input.payload)
+      .run();
+    return { sequence: Number(result.meta.last_row_id) };
+  },
+  'calls.end': async (env, input) => {
+    const result = await env.DB.prepare(
+      `UPDATE anonymous_calls SET status = 'ended', ended_at = CURRENT_TIMESTAMP
+       WHERE id = ?1 AND status IN ('ringing', 'active')
+         AND EXISTS (
+           SELECT 1 FROM conversation_participants
+           WHERE conversation_id = anonymous_calls.conversation_id
+             AND user_id = ?2 AND left_at IS NULL
+         )`,
+    )
+      .bind(input.callId, input.userId)
+      .run();
+    if (result.meta.changes !== 1)
+      throw new ApiError(404, 'ACTIVE_CALL_NOT_FOUND', 'Active call not found');
+    await env.DB.prepare('DELETE FROM anonymous_call_signals WHERE call_id = ?1')
+      .bind(input.callId)
+      .run();
+    return { status: 'ended' };
+  },
+  'calls.expire': async (env) => {
+    await env.DB.prepare(
+      `UPDATE anonymous_calls SET status = 'missed', ended_at = CURRENT_TIMESTAMP
+       WHERE status = 'ringing' AND created_at < datetime('now', '-1 minute')`,
+    ).run();
+    const result = await env.DB.prepare(
+      `DELETE FROM anonymous_call_signals
+       WHERE call_id IN (
+         SELECT id FROM anonymous_calls
+         WHERE status IN ('declined', 'ended', 'missed')
+       )`,
+    ).run();
+    return { deletedSignals: Number(result.meta.changes) };
   },
   'ratings.create': async (env, input) => {
     const participant = await env.DB.prepare(
@@ -2119,11 +2710,83 @@ const handlers: { [K in WorkerOperation]: Handler<K> } = {
       : 'SELECT * FROM products ORDER BY sort_order';
     return (await env.DB.prepare(query).all()).results;
   },
+  'products.listForUser': async (env, input) => {
+    const activeClause = input.activeOnly ? 'WHERE product.is_active = 1' : '';
+    return (
+      await env.DB.prepare(
+        `WITH selected AS (
+           SELECT promo.id,
+                  redemption.discount_stars_snapshot AS discount_stars,
+                  redemption.eligible_product_ids_snapshot AS eligible_product_ids
+           FROM user_promo_selections selection
+           JOIN promotions promo ON promo.id = selection.promotion_id
+           JOIN promo_redemptions redemption
+             ON redemption.promotion_id = promo.id
+            AND redemption.user_id = selection.user_id
+           LEFT JOIN payment_orders reserved_order
+             ON reserved_order.id = redemption.payment_order_id
+           WHERE selection.user_id = ?1 AND promo.type = 'discount'
+             AND (
+               redemption.payment_order_id IS NULL
+               OR reserved_order.status IN ('pending', 'precheckout_approved')
+             )
+           LIMIT 1
+         )
+         SELECT product.*,
+                product.stars_amount AS original_stars_amount,
+                CASE
+                  WHEN selected.id IS NOT NULL AND (
+                    json_array_length(selected.eligible_product_ids) = 0 OR EXISTS (
+                      SELECT 1 FROM json_each(selected.eligible_product_ids)
+                      WHERE json_each.value = product.id
+                    )
+                  )
+                  THEN max(1, product.stars_amount - selected.discount_stars)
+                  ELSE product.stars_amount
+                END AS effective_stars_amount,
+                CASE
+                  WHEN selected.id IS NOT NULL AND (
+                    json_array_length(selected.eligible_product_ids) = 0 OR EXISTS (
+                      SELECT 1 FROM json_each(selected.eligible_product_ids)
+                      WHERE json_each.value = product.id
+                    )
+                  )
+                  THEN min(product.stars_amount - 1, selected.discount_stars)
+                  ELSE 0
+                END AS applied_discount_stars
+         FROM products product
+         LEFT JOIN selected ON 1 = 1
+         ${activeClause}
+         ORDER BY product.sort_order`,
+      )
+        .bind(input.userId)
+        .all()
+    ).results;
+  },
   'payments.create': async (env, input) => {
-    const existing = await env.DB.prepare('SELECT * FROM payment_orders WHERE idempotency_key = ?1')
+    const existing = await env.DB.prepare(
+      `SELECT id, invoice_payload, amount, currency, discount_stars
+       FROM payment_orders WHERE idempotency_key = ?1`,
+    )
       .bind(input.idempotencyKey)
-      .first();
-    if (existing) return existing;
+      .first<{
+        id: string;
+        invoice_payload: string;
+        amount: number;
+        currency: string;
+        discount_stars: number;
+      }>();
+    if (existing) {
+      return {
+        id: existing.id,
+        orderId: existing.id,
+        invoice_payload: existing.invoice_payload,
+        invoicePayload: existing.invoice_payload,
+        amount: existing.amount,
+        currency: existing.currency,
+        discountStars: existing.discount_stars,
+      };
+    }
     const product = await env.DB.prepare(
       'SELECT id, stars_amount FROM products WHERE id = ?1 AND is_active = 1',
     )
@@ -2131,16 +2794,30 @@ const handlers: { [K in WorkerOperation]: Handler<K> } = {
       .first<{ id: string; stars_amount: number }>();
     if (!product) throw new ApiError(404, 'PRODUCT_NOT_FOUND', 'Product not found');
     const selectedPromotion = await env.DB.prepare(
-      `SELECT promo.id, promo.discount_stars, promo.discount_rubles,
-              promo.eligible_product_ids
+      `SELECT promo.id,
+               redemption.discount_stars_snapshot AS discount_stars,
+               redemption.discount_rubles_snapshot AS discount_rubles,
+               redemption.eligible_product_ids_snapshot AS eligible_product_ids,
+               redemption.payment_order_id,
+              reserved_order.product_id AS reserved_product_id,
+              reserved_order.invoice_payload AS reserved_invoice_payload,
+              reserved_order.amount AS reserved_amount,
+              reserved_order.currency AS reserved_currency,
+              reserved_order.discount_stars AS reserved_discount_stars,
+              reserved_order.status AS reserved_status,
+              reserved_order.expires_at AS reserved_expires_at
        FROM user_promo_selections selection
        JOIN promotions promo ON promo.id = selection.promotion_id
-       WHERE selection.user_id = ?1 AND promo.type = 'discount' AND promo.is_active = 1
-         AND (promo.expires_at IS NULL OR promo.expires_at > CURRENT_TIMESTAMP)
-         AND (promo.max_activations IS NULL OR promo.activation_count < promo.max_activations)
-         AND NOT EXISTS (
-           SELECT 1 FROM promo_redemptions redemption
-           WHERE redemption.promotion_id = promo.id AND redemption.user_id = ?1
+       JOIN promo_redemptions redemption
+         ON redemption.promotion_id = promo.id
+        AND redemption.user_id = selection.user_id
+        AND redemption.kind = 'discount'
+       LEFT JOIN payment_orders reserved_order
+         ON reserved_order.id = redemption.payment_order_id
+       WHERE selection.user_id = ?1 AND promo.type = 'discount'
+         AND (
+           redemption.payment_order_id IS NULL
+           OR reserved_order.status IN ('pending', 'precheckout_approved')
          )`,
     )
       .bind(input.userId)
@@ -2149,27 +2826,54 @@ const handlers: { [K in WorkerOperation]: Handler<K> } = {
         discount_stars: number;
         discount_rubles: number;
         eligible_product_ids: string;
+        payment_order_id: string | null;
+        reserved_product_id: string | null;
+        reserved_invoice_payload: string | null;
+        reserved_amount: number | null;
+        reserved_currency: string | null;
+        reserved_discount_stars: number | null;
+        reserved_status: string | null;
+        reserved_expires_at: string | null;
       }>();
     const eligibleProducts = selectedPromotion
       ? parseJsonArray(selectedPromotion.eligible_product_ids)
       : [];
-    const promotion =
+    let promotion =
       selectedPromotion && (eligibleProducts.length === 0 || eligibleProducts.includes(product.id))
         ? selectedPromotion
         : null;
-    if (promotion) {
-      const claimed = await env.DB.prepare(
-        `UPDATE promotions SET activation_count = activation_count + 1,
-           updated_at = CURRENT_TIMESTAMP
-         WHERE id = ?1 AND is_active = 1
-           AND (expires_at IS NULL OR expires_at > CURRENT_TIMESTAMP)
-           AND (max_activations IS NULL OR activation_count < max_activations)`,
-      )
-        .bind(promotion.id)
-        .run();
-      if (claimed.meta.changes !== 1) {
-        throw new ApiError(409, 'PROMO_EXHAUSTED', 'Promo code activation limit reached');
+    if (promotion?.payment_order_id) {
+      const reservationExpired =
+        promotion.reserved_expires_at !== null &&
+        Date.parse(promotion.reserved_expires_at.replace(' ', 'T') + 'Z') <= Date.now();
+      if (
+        !reservationExpired &&
+        promotion.reserved_product_id === product.id &&
+        promotion.reserved_invoice_payload &&
+        promotion.reserved_amount !== null &&
+        promotion.reserved_currency
+      ) {
+        return {
+          id: promotion.payment_order_id,
+          orderId: promotion.payment_order_id,
+          invoice_payload: promotion.reserved_invoice_payload,
+          invoicePayload: promotion.reserved_invoice_payload,
+          amount: promotion.reserved_amount,
+          currency: promotion.reserved_currency,
+          discountStars: promotion.reserved_discount_stars ?? 0,
+        };
       }
+      await env.DB.batch([
+        env.DB.prepare(
+          `UPDATE payment_orders SET status = 'expired', updated_at = CURRENT_TIMESTAMP
+           WHERE id = ?1 AND status IN ('pending', 'precheckout_approved')`,
+        ).bind(promotion.payment_order_id),
+        env.DB.prepare(
+          `UPDATE promo_redemptions SET payment_order_id = NULL
+           WHERE promotion_id = ?1 AND user_id = ?2 AND payment_order_id = ?3`,
+        ).bind(promotion.id, input.userId, promotion.payment_order_id),
+      ]);
+      promotion = { ...promotion, payment_order_id: null };
     }
     const orderId = crypto.randomUUID();
     const random = crypto.getRandomValues(new Uint8Array(12));
@@ -2197,17 +2901,87 @@ const handlers: { [K in WorkerOperation]: Handler<K> } = {
       ...(promotion
         ? [
             env.DB.prepare(
-              `INSERT INTO promo_redemptions
-                 (id, promotion_id, user_id, payment_order_id, kind)
-               VALUES (?1, ?2, ?3, ?4, 'discount')`,
-            ).bind(crypto.randomUUID(), promotion.id, input.userId, orderId),
-            env.DB.prepare('DELETE FROM user_promo_selections WHERE user_id = ?1').bind(
-              input.userId,
-            ),
+              `UPDATE promo_redemptions SET payment_order_id = ?3
+               WHERE promotion_id = ?1 AND user_id = ?2 AND kind = 'discount'
+                 AND payment_order_id IS NULL`,
+            ).bind(promotion.id, input.userId, orderId),
           ]
         : []),
     ]);
     return { orderId, invoicePayload: payload, amount, currency: 'XTR', discountStars };
+  },
+  'payments.createGift': async (env, input) => {
+    const existing = await env.DB.prepare(
+      `SELECT id, invoice_payload, amount, currency
+       FROM payment_orders
+       WHERE idempotency_key = ?1 AND user_id = ?2 AND gift_recipient_user_id IS NOT NULL`,
+    )
+      .bind(input.idempotencyKey, input.userId)
+      .first<{
+        id: string;
+        invoice_payload: string;
+        amount: number;
+        currency: string;
+      }>();
+    if (existing) {
+      return {
+        orderId: existing.id,
+        invoicePayload: existing.invoice_payload,
+        amount: existing.amount,
+        currency: existing.currency,
+      };
+    }
+    const target = await env.DB.prepare(
+      `SELECT recipient.user_id AS recipient_user_id
+       FROM conversations conversation
+       JOIN conversation_participants sender
+         ON sender.conversation_id = conversation.id AND sender.user_id = ?1
+       JOIN conversation_participants recipient
+         ON recipient.conversation_id = conversation.id AND recipient.user_id <> ?1
+       JOIN users recipient_user ON recipient_user.id = recipient.user_id
+       WHERE conversation.id = ?2 AND conversation.status = 'active'
+         AND recipient_user.deleted_at IS NULL AND recipient_user.is_banned = 0`,
+    )
+      .bind(input.userId, input.conversationId)
+      .first<{ recipient_user_id: string }>();
+    if (!target) {
+      throw new ApiError(404, 'ACTIVE_CHAT_NOT_FOUND', 'Active conversation not found');
+    }
+    const product = await env.DB.prepare(
+      `SELECT id, stars_amount FROM products
+       WHERE id = ?1 AND is_active = 1 AND billing_type = 'one_time'`,
+    )
+      .bind(input.productId)
+      .first<{ id: string; stars_amount: number }>();
+    if (!product) {
+      throw new ApiError(404, 'GIFT_PRODUCT_NOT_FOUND', 'Gift product not found');
+    }
+    const orderId = crypto.randomUUID();
+    const random = crypto.getRandomValues(new Uint8Array(12));
+    const payload = createInvoicePayload(orderId, random);
+    await env.DB.prepare(
+      `INSERT INTO payment_orders (
+         id, user_id, provider, product_id, currency, amount, invoice_payload,
+         idempotency_key, expires_at, gift_recipient_user_id
+       ) VALUES (?1, ?2, 'telegram_stars', ?3, 'XTR', ?4, ?5, ?6,
+         datetime('now', '+30 minutes'), ?7)`,
+    )
+      .bind(
+        orderId,
+        input.userId,
+        product.id,
+        product.stars_amount,
+        payload,
+        input.idempotencyKey,
+        target.recipient_user_id,
+      )
+      .run();
+    return {
+      orderId,
+      invoicePayload: payload,
+      amount: product.stars_amount,
+      currency: 'XTR',
+    };
   },
   'payments.expirePending': async (env) => {
     const reservedPromotions = await env.DB.prepare(
@@ -2223,12 +2997,13 @@ const handlers: { [K in WorkerOperation]: Handler<K> } = {
       ),
       ...reservedPromotions.results.flatMap((order) => [
         env.DB.prepare(
-          `UPDATE promotions SET activation_count = max(0, activation_count - 1),
-             updated_at = CURRENT_TIMESTAMP WHERE id = ?1`,
-        ).bind(order.promotion_id),
-        env.DB.prepare(
-          `DELETE FROM promo_redemptions
+          `UPDATE promo_redemptions SET payment_order_id = NULL
            WHERE payment_order_id = ?1 AND kind = 'discount'`,
+        ).bind(order.id),
+        env.DB.prepare(
+          `INSERT OR IGNORE INTO user_promo_selections (user_id, promotion_id)
+           SELECT user_id, promotion_id FROM payment_orders
+           WHERE id = ?1`,
         ).bind(order.id),
       ]),
     ]);
@@ -2261,20 +3036,33 @@ const handlers: { [K in WorkerOperation]: Handler<K> } = {
   },
   'payments.completeStars': async (env, input) => {
     const order = await env.DB.prepare(
-      `SELECT po.*, p.duration_days FROM payment_orders po
-       JOIN products p ON p.id = po.product_id WHERE po.id = ?1`,
+      `SELECT po.*, p.duration_days,
+              recipient.telegram_user_id AS gift_recipient_telegram_user_id
+       FROM payment_orders po
+       JOIN products p ON p.id = po.product_id
+       LEFT JOIN users recipient ON recipient.id = po.gift_recipient_user_id
+       WHERE po.id = ?1`,
     )
       .bind(input.orderId)
       .first<Record<string, string | number | null>>();
     if (!order) throw new ApiError(404, 'ORDER_NOT_FOUND', 'Order not found');
-    if (order.status === 'paid') return { duplicate: true, orderId: input.orderId };
+    const durationDays = Number(order.duration_days);
+    if (order.status === 'paid')
+      return order.gift_recipient_user_id
+        ? {
+            duplicate: true,
+            orderId: input.orderId,
+            gifted: true,
+            durationDays,
+            giftRecipientTelegramUserId: order.gift_recipient_telegram_user_id ?? null,
+          }
+        : { duplicate: true, orderId: input.orderId, durationDays };
     if (order.status !== 'precheckout_approved' || order.amount !== input.totalAmount) {
       throw new ApiError(409, 'PAYMENT_MISMATCH', 'Payment does not match order');
     }
     const entitlementId = crypto.randomUUID();
     const transactionId = crypto.randomUUID();
     const eventId = crypto.randomUUID();
-    const durationDays = Number(order.duration_days);
     await env.DB.batch([
       env.DB.prepare(
         `UPDATE payment_orders SET status = 'paid', telegram_payment_charge_id = ?2,
@@ -2305,8 +3093,12 @@ const handlers: { [K in WorkerOperation]: Handler<K> } = {
             ?6, ?7, ?8)`,
       ).bind(
         entitlementId,
-        String(order.user_id),
-        input.isRecurring ? 'stars_subscription' : 'stars_purchase',
+        String(order.gift_recipient_user_id ?? order.user_id),
+        order.gift_recipient_user_id
+          ? 'stars_gift'
+          : input.isRecurring
+            ? 'stars_subscription'
+            : 'stars_purchase',
         input.subscriptionExpirationDate ?? null,
         durationDays,
         input.isRecurring ? 1 : 0,
@@ -2319,8 +3111,20 @@ const handlers: { [K in WorkerOperation]: Handler<K> } = {
             payload_hash, processing_status
           ) VALUES (?1, ?2, 'telegram_stars', 'successful_payment', ?3, ?3, 'processed')`,
       ).bind(eventId, input.orderId, `telegram-update:${input.telegramUpdateId}`),
+      env.DB.prepare(
+        `DELETE FROM user_promo_selections
+         WHERE user_id = ?1 AND promotion_id = ?2`,
+      ).bind(String(order.user_id), order.promotion_id),
     ]);
-    return { duplicate: false, orderId: input.orderId };
+    return order.gift_recipient_user_id
+      ? {
+          duplicate: false,
+          orderId: input.orderId,
+          gifted: true,
+          durationDays,
+          giftRecipientTelegramUserId: order.gift_recipient_telegram_user_id ?? null,
+        }
+      : { duplicate: false, orderId: input.orderId, durationDays };
   },
   'payments.getForRefund': async (env, input) => {
     const order = await env.DB.prepare(
@@ -3259,10 +4063,17 @@ const handlers: { [K in WorkerOperation]: Handler<K> } = {
     await assertModerationAccess(env, input.adminUserId);
     await assertMayModerateTarget(env, input.adminUserId, input.targetUserId);
     const oldState = await env.DB.prepare(
-      'SELECT status, is_banned, ban_reason, banned_until FROM users WHERE id = ?1',
+      `SELECT status, is_banned, ban_reason, banned_until, telegram_user_id
+       FROM users WHERE id = ?1`,
     )
       .bind(input.targetUserId)
-      .first();
+      .first<{
+        status: string;
+        is_banned: number;
+        ban_reason: string | null;
+        banned_until: string | null;
+        telegram_user_id: number;
+      }>();
     if (!oldState) throw new ApiError(404, 'USER_NOT_FOUND', 'User not found');
     const statements: D1PreparedStatement[] = [];
     if (input.action === 'temporary_ban' || input.action === 'permanent_ban') {
@@ -3341,7 +4152,10 @@ const handlers: { [K in WorkerOperation]: Handler<K> } = {
       ),
     );
     await env.DB.batch(statements);
-    return { updated: true };
+    return {
+      updated: true,
+      notifyTelegramUserId: input.action === 'warn' ? oldState.telegram_user_id : null,
+    };
   },
   'admin.profile.moderate': async (env, input, requestId) => {
     await assertModerationAccess(env, input.adminUserId);
@@ -3447,6 +4261,10 @@ const handlers: { [K in WorkerOperation]: Handler<K> } = {
   },
   'admin.premium.grant': async (env, input, requestId) => {
     await assertAdmin(env, input.adminUserId);
+    const target = await env.DB.prepare('SELECT telegram_user_id FROM users WHERE id = ?1')
+      .bind(input.targetUserId)
+      .first<{ telegram_user_id: number }>();
+    if (!target) throw new ApiError(404, 'USER_NOT_FOUND', 'User not found');
     const grantId = crypto.randomUUID();
     await env.DB.batch([
       env.DB.prepare(
@@ -3483,7 +4301,12 @@ const handlers: { [K in WorkerOperation]: Handler<K> } = {
         requestId,
       ),
     ]);
-    return { granted: true, grantId };
+    return {
+      granted: true,
+      grantId,
+      durationDays: input.durationDays,
+      notifyTelegramUserId: target.telegram_user_id,
+    };
   },
   'admin.premium.revoke': async (env, input, requestId) => {
     await assertAdmin(env, input.adminUserId);
@@ -3534,7 +4357,9 @@ const handlers: { [K in WorkerOperation]: Handler<K> } = {
         `SELECT promotion.*,
                 (SELECT COUNT(*) FROM promo_redemptions redemption
                  WHERE redemption.promotion_id = promotion.id) AS redemptions
-         FROM promotions promotion ORDER BY promotion.created_at DESC LIMIT ?1`,
+         FROM promotions promotion
+         WHERE promotion.deleted_at IS NULL
+         ORDER BY promotion.created_at DESC LIMIT ?1`,
       )
         .bind(input.limit)
         .all()
@@ -3548,6 +4373,34 @@ const handlers: { [K in WorkerOperation]: Handler<K> } = {
     ) {
       throw new ApiError(400, 'PROMO_VALUE_REQUIRED', 'Promo value is required');
     }
+    if (input.type === 'discount' && input.eligibleProductIds.length === 0) {
+      throw new ApiError(
+        400,
+        'PROMO_PRODUCTS_REQUIRED',
+        'Select at least one eligible product for a discount promo code',
+      );
+    }
+    if (input.expiresAt && Date.parse(input.expiresAt) <= Date.now()) {
+      throw new ApiError(400, 'PROMO_EXPIRY_INVALID', 'Promo expiry must be in the future');
+    }
+    const uniqueProductIds = [...new Set(input.eligibleProductIds)];
+    if (input.type === 'discount') {
+      const placeholders = uniqueProductIds.map((_, index) => `?${index + 1}`).join(', ');
+      const products = await env.DB.prepare(
+        `SELECT COUNT(*) AS total FROM products WHERE id IN (${placeholders})`,
+      )
+        .bind(...uniqueProductIds)
+        .first<{ total: number }>();
+      if (Number(products?.total ?? 0) !== uniqueProductIds.length) {
+        throw new ApiError(400, 'PROMO_PRODUCT_INVALID', 'One or more products do not exist');
+      }
+    }
+    const duplicate = await env.DB.prepare(
+      'SELECT 1 AS found FROM promotions WHERE code = ?1 COLLATE NOCASE',
+    )
+      .bind(input.code)
+      .first();
+    if (duplicate) throw new ApiError(409, 'PROMO_CODE_EXISTS', 'Promo code already exists');
     const id = crypto.randomUUID();
     await env.DB.batch([
       env.DB.prepare(
@@ -3562,7 +4415,7 @@ const handlers: { [K in WorkerOperation]: Handler<K> } = {
         input.type === 'discount' ? input.discountStars : 0,
         input.type === 'discount' ? input.discountRubles : 0,
         input.type === 'premium_days' ? input.premiumDays : 0,
-        json(input.eligibleProductIds),
+        json(uniqueProductIds),
         input.expiresAt ?? null,
         input.maxActivations ?? null,
         input.adminUserId,
@@ -3582,25 +4435,129 @@ const handlers: { [K in WorkerOperation]: Handler<K> } = {
   },
   'admin.promotions.update': async (env, input, requestId) => {
     await assertAdmin(env, input.adminUserId);
-    const result = await env.DB.prepare(
-      `UPDATE promotions SET is_active = ?2, updated_at = CURRENT_TIMESTAMP WHERE id = ?1`,
+    if (
+      (input.type === 'discount' && input.discountStars === 0 && input.discountRubles === 0) ||
+      (input.type === 'premium_days' && input.premiumDays === 0)
+    ) {
+      throw new ApiError(400, 'PROMO_VALUE_REQUIRED', 'Promo value is required');
+    }
+    if (input.type === 'discount' && input.eligibleProductIds.length === 0) {
+      throw new ApiError(
+        400,
+        'PROMO_PRODUCTS_REQUIRED',
+        'Select at least one eligible product for a discount promo code',
+      );
+    }
+    const oldState = await env.DB.prepare(
+      'SELECT * FROM promotions WHERE id = ?1 AND deleted_at IS NULL',
     )
-      .bind(input.promotionId, input.isActive ? 1 : 0)
+      .bind(input.promotionId)
+      .first<Record<string, unknown>>();
+    if (!oldState) throw new ApiError(404, 'PROMO_NOT_FOUND', 'Promo not found');
+    const duplicate = await env.DB.prepare(
+      `SELECT 1 AS found FROM promotions
+       WHERE code = ?1 COLLATE NOCASE AND id <> ?2`,
+    )
+      .bind(input.code, input.promotionId)
+      .first();
+    if (duplicate) throw new ApiError(409, 'PROMO_CODE_EXISTS', 'Promo code already exists');
+    const uniqueProductIds = [...new Set(input.eligibleProductIds)];
+    if (input.type === 'discount') {
+      const placeholders = uniqueProductIds.map((_, index) => `?${index + 1}`).join(', ');
+      const products = await env.DB.prepare(
+        `SELECT COUNT(*) AS total FROM products WHERE id IN (${placeholders})`,
+      )
+        .bind(...uniqueProductIds)
+        .first<{ total: number }>();
+      if (Number(products?.total ?? 0) !== uniqueProductIds.length) {
+        throw new ApiError(400, 'PROMO_PRODUCT_INVALID', 'One or more products do not exist');
+      }
+    }
+    const result = await env.DB.prepare(
+      `UPDATE promotions SET
+         code = upper(?2), type = ?3, discount_stars = ?4, discount_rubles = ?5,
+         premium_days = ?6, eligible_product_ids = ?7, expires_at = ?8,
+         max_activations = ?9, is_active = ?10, updated_at = CURRENT_TIMESTAMP
+       WHERE id = ?1 AND deleted_at IS NULL`,
+    )
+      .bind(
+        input.promotionId,
+        input.code,
+        input.type,
+        input.type === 'discount' ? input.discountStars : 0,
+        input.type === 'discount' ? input.discountRubles : 0,
+        input.type === 'premium_days' ? input.premiumDays : 0,
+        json(input.type === 'discount' ? uniqueProductIds : []),
+        input.expiresAt,
+        input.maxActivations,
+        input.isActive ? 1 : 0,
+      )
       .run();
     if (result.meta.changes !== 1) throw new ApiError(404, 'PROMO_NOT_FOUND', 'Promo not found');
     await env.DB.prepare(
       `INSERT INTO admin_audit_logs
-         (id, admin_user_id, action, reason, new_state, request_id, result)
-       VALUES (?1, ?2, 'promotion.update', 'admin_update', ?3, ?4, 'success')`,
+         (id, admin_user_id, action, reason, old_state, new_state, request_id, result)
+       VALUES (?1, ?2, 'promotion.update', 'admin_update', ?3, ?4, ?5, 'success')`,
     )
       .bind(
         crypto.randomUUID(),
         input.adminUserId,
-        json({ promotionId: input.promotionId, isActive: input.isActive }),
+        json(oldState),
+        json({
+          promotionId: input.promotionId,
+          code: input.code,
+          type: input.type,
+          discountStars: input.discountStars,
+          discountRubles: input.discountRubles,
+          premiumDays: input.premiumDays,
+          eligibleProductIds: uniqueProductIds,
+          expiresAt: input.expiresAt,
+          maxActivations: input.maxActivations,
+          isActive: input.isActive,
+        }),
         requestId,
       )
       .run();
     return { updated: true };
+  },
+  'admin.promotions.delete': async (env, input, requestId) => {
+    await assertAdmin(env, input.adminUserId);
+    const promotion = await env.DB.prepare(
+      'SELECT * FROM promotions WHERE id = ?1 AND deleted_at IS NULL',
+    )
+      .bind(input.promotionId)
+      .first<Record<string, unknown>>();
+    if (!promotion) throw new ApiError(404, 'PROMO_NOT_FOUND', 'Promo not found');
+    const links = await env.DB.prepare(
+      `SELECT
+         (SELECT COUNT(*) FROM promo_redemptions WHERE promotion_id = ?1)
+         + (SELECT COUNT(*) FROM payment_orders WHERE promotion_id = ?1)
+         + (SELECT COUNT(*) FROM user_promo_selections WHERE promotion_id = ?1) AS total`,
+    )
+      .bind(input.promotionId)
+      .first<{ total: number }>();
+    const archived = Number(links?.total ?? 0) > 0;
+    await env.DB.batch([
+      archived
+        ? env.DB.prepare(
+            `UPDATE promotions SET is_active = 0, deleted_at = CURRENT_TIMESTAMP,
+               updated_at = CURRENT_TIMESTAMP WHERE id = ?1`,
+          ).bind(input.promotionId)
+        : env.DB.prepare('DELETE FROM promotions WHERE id = ?1').bind(input.promotionId),
+      env.DB.prepare(
+        `INSERT INTO admin_audit_logs
+           (id, admin_user_id, action, reason, old_state, new_state, request_id, result)
+         VALUES (?1, ?2, 'promotion.delete', ?3, ?4, ?5, ?6, 'success')`,
+      ).bind(
+        crypto.randomUUID(),
+        input.adminUserId,
+        archived ? 'archive_linked_history' : 'delete_unused',
+        json(promotion),
+        json({ promotionId: input.promotionId, archived }),
+        requestId,
+      ),
+    ]);
+    return { deleted: true, archived };
   },
   'admin.postingRequirements.list': async (env, input) => {
     await assertAdmin(env, input.adminUserId);
@@ -3715,7 +4672,7 @@ const handlers: { [K in WorkerOperation]: Handler<K> } = {
              ('premium_daily_profile_limit', '100'),
              ('free_super_like_limit', '1'),
              ('premium_super_like_limit', '5'),
-             ('boost_cooldown_days', '7'),
+             ('boost_cooldown_days', '1'),
              ('support_text', ''),
              ('maintenance_text', '')
          )

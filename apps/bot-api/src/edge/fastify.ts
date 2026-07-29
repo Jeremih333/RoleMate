@@ -43,6 +43,7 @@ type ErrorHandler = (error: unknown, request: EdgeRequest, reply: EdgeReply) => 
 type Plugin = (app: EdgeFastify, options: Record<string, unknown>) => unknown;
 
 interface RouteOptions {
+  bodyLimit?: number;
   config?: {
     rateLimit?: {
       max?: number;
@@ -52,6 +53,7 @@ interface RouteOptions {
 }
 
 interface Route {
+  bodyLimit?: number;
   handler: RouteHandler;
   maxRequests?: number;
   method: string;
@@ -287,7 +289,7 @@ export class EdgeFastify {
         };
         state.sent = true;
       }
-      if (!state.sent) request.body = await this.readBody(input);
+      if (!state.sent) request.body = await this.readBody(input, match.route.bodyLimit);
       for (const hook of this.preHandlers) {
         if (state.sent) break;
         await hook(request, reply);
@@ -321,11 +323,13 @@ export class EdgeFastify {
     if (!actualHandler) throw new Error(`Missing handler for ${method} ${path}`);
     const compiled = compilePath(path);
     const maxRequests = typeof options === 'function' ? undefined : options.config?.rateLimit?.max;
+    const bodyLimit = typeof options === 'function' ? undefined : options.bodyLimit;
     this.routes.push({
       method,
       handler: actualHandler,
       rateLimitKey: `${method}:${path}`,
       ...(maxRequests === undefined ? {} : { maxRequests }),
+      ...(bodyLimit === undefined ? {} : { bodyLimit }),
       ...compiled,
     });
   }
@@ -363,12 +367,13 @@ export class EdgeFastify {
     return reply;
   }
 
-  private async readBody(input: Request): Promise<unknown> {
+  private async readBody(input: Request, routeBodyLimit?: number): Promise<unknown> {
     if (input.method === 'GET' || input.method === 'HEAD') return undefined;
+    const bodyLimit = routeBodyLimit ?? BODY_LIMIT;
     const contentLength = Number(input.headers.get('content-length') ?? '0');
-    if (contentLength > BODY_LIMIT) throw new Error('BODY_TOO_LARGE');
+    if (contentLength > bodyLimit) throw new Error('BODY_TOO_LARGE');
     const text = await input.text();
-    if (new TextEncoder().encode(text).byteLength > BODY_LIMIT) throw new Error('BODY_TOO_LARGE');
+    if (new TextEncoder().encode(text).byteLength > bodyLimit) throw new Error('BODY_TOO_LARGE');
     if (!text) return undefined;
     if (input.headers.get('content-type')?.includes('application/json')) {
       try {

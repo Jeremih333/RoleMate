@@ -7,8 +7,13 @@ import { Card, SectionTitle, Skeleton } from '../components/ui.js';
 
 export function HomePage() {
   const me = useQuery({ queryKey: ['me'], queryFn: api.me });
+  const profile = useQuery({ queryKey: ['profile'], queryFn: api.profile, retry: false });
   const chats = useQuery({ queryKey: ['conversations'], queryFn: api.conversations });
   const referrals = useQuery({ queryKey: ['referrals'], queryFn: api.referrals });
+  const completion = Math.max(
+    0,
+    Math.min(100, Number(profile.data?.profile_completion_percent ?? 0)),
+  );
 
   return (
     <div className="space-y-7">
@@ -66,7 +71,7 @@ export function HomePage() {
           {ru.miniApp.home.searchReadiness}
         </SectionTitle>
         <Card className="p-5">
-          {me.isLoading ? (
+          {me.isLoading || profile.isLoading ? (
             <Skeleton className="h-20" />
           ) : (
             <>
@@ -77,19 +82,26 @@ export function HomePage() {
                   </div>
                   <div>
                     <strong className="block">{ru.miniApp.home.tellAboutWorld}</strong>
-                    <span className="text-sm text-muted">{ru.miniApp.home.completeProfile}</span>
+                    <span className="text-sm text-muted">
+                      {profile.data
+                        ? profile.data.in_search_pool
+                          ? ru.miniApp.home.profileReady
+                          : ru.miniApp.home.profileNotInSearch
+                        : ru.miniApp.home.completeProfile}
+                    </span>
                   </div>
                 </div>
-                <span className="text-sm font-semibold text-lilac">0%</span>
+                <span className="text-sm font-semibold text-lilac">{completion}%</span>
               </div>
               <div className="progress mt-4">
-                <span style={{ width: '3%' }} />
+                <span style={{ width: `${completion}%` }} />
               </div>
               <Link
                 href="/profile/edit"
                 className="mt-4 inline-flex items-center gap-2 text-sm font-semibold text-lilac"
               >
-                {ru.miniApp.home.createProfile} <ArrowRight className="h-4 w-4" />
+                {profile.data ? ru.miniApp.home.editProfile : ru.miniApp.home.createProfile}{' '}
+                <ArrowRight className="h-4 w-4" />
               </Link>
             </>
           )}

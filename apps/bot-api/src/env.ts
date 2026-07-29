@@ -33,6 +33,8 @@ export const envSchema = z
     ALLOWED_ORIGINS: z.string().default('http://localhost:5173'),
     TURNSTILE_SITE_KEY: z.string().default(''),
     TURNSTILE_SECRET_KEY: z.string().default(''),
+    TURN_KEY_ID: z.string().default(''),
+    TURN_KEY_SECRET: z.string().default(''),
     YOOKASSA_ENABLED: booleanString,
     YOOKASSA_DIGITAL_PREMIUM_ENABLED: booleanString,
     YOOKASSA_SHOP_ID: z.string().default(''),

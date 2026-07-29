@@ -17,9 +17,10 @@ import {
   ShieldCheck,
   LogOut,
 } from 'lucide-react';
-import { api, type SettingsInput } from '../api.js';
+import { ApiError, api, type SettingsInput } from '../api.js';
 import { Button, Card, EmptyState, SectionTitle, Skeleton } from '../components/ui.js';
 import { getTelegram } from '../telegram.js';
+import { ChatTools } from '../components/chat-tools.js';
 
 export function MatchesPage() {
   const queryClient = useQueryClient();
@@ -101,6 +102,7 @@ export function MatchesPage() {
 export function ChatsPage() {
   const queryClient = useQueryClient();
   const chats = useQuery({ queryKey: ['conversations'], queryFn: api.conversations });
+  const premium = useQuery({ queryKey: ['premium-status'], queryFn: api.premiumStatus });
   const block = useMutation({
     mutationFn: (userId: string) => api.block(userId),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ['conversations'] }),
@@ -247,6 +249,9 @@ export function ChatsPage() {
             ) : reveal.isSuccess ? (
               <p className="mt-3 text-sm text-muted">{ru.miniApp.community.contactPending}</p>
             ) : null}
+            {chat.status === 'active' ? (
+              <ChatTools conversationId={chat.id} premium={premium.data?.premium === true} />
+            ) : null}
             {report.data ? (
               <p className="mt-3 text-sm text-soft">
                 {ru.miniApp.community.reportSent(report.data.reportId)}
@@ -274,6 +279,7 @@ export function PremiumPage() {
     mutationFn: api.applyPromotion,
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: ['premium-status'] });
+      void queryClient.invalidateQueries({ queryKey: ['products'] });
     },
   });
   const invoice = useMutation({
@@ -282,6 +288,12 @@ export function PremiumPage() {
       if (result.invoiceLink) getTelegram()?.openInvoice(result.invoiceLink);
     },
   });
+  const premiumEnd =
+    status.data?.premium && status.data.endsAt ? new Date(status.data.endsAt) : null;
+  const premiumEndValid = premiumEnd && !Number.isNaN(premiumEnd.getTime()) ? premiumEnd : null;
+  const premiumDaysRemaining = premiumEndValid
+    ? Math.max(0, Math.ceil((premiumEndValid.getTime() - Date.now()) / 86_400_000))
+    : null;
   return (
     <div className="mx-auto max-w-2xl">
       <section className="premium-hero">
@@ -300,8 +312,27 @@ export function PremiumPage() {
       </div>
       {status.data?.premium ? (
         <Card className="mt-4 p-4">
+          <div className="premium-active-status">
+            <Check className="h-5 w-5" />
+            <div>
+              <strong>{ru.miniApp.community.premiumActive}</strong>
+              {premiumEndValid ? (
+                <p className="mt-1 text-sm text-soft">
+                  {ru.miniApp.community.premiumActiveUntil(
+                    new Intl.DateTimeFormat('ru-RU', {
+                      dateStyle: 'long',
+                      timeStyle: 'short',
+                    }).format(premiumEndValid),
+                  )}
+                  {premiumDaysRemaining === null
+                    ? ''
+                    : ` · ${ru.miniApp.community.premiumDaysRemaining(premiumDaysRemaining)}`}
+                </p>
+              ) : null}
+            </div>
+          </div>
           {stats.data ? (
-            <p className="text-sm text-soft">
+            <p className="mt-3 text-sm text-soft">
               {ru.miniApp.community.premiumStats(
                 stats.data.viewsToday,
                 stats.data.viewsSevenDays,
@@ -313,16 +344,19 @@ export function PremiumPage() {
           {status.data.earlyAccess ? (
             <p className="mt-2 text-sm text-lilac">{ru.miniApp.community.earlyAccessEnabled}</p>
           ) : null}
-          <Button
-            className="mt-3"
-            onClick={() => boost.mutate()}
-            loading={boost.isPending}
-            disabled={boost.isSuccess}
-          >
-            {boost.isSuccess
-              ? ru.miniApp.community.boostActivated
-              : ru.miniApp.community.activateBoost}
+          <Button className="mt-3" onClick={() => boost.mutate()} loading={boost.isPending}>
+            {ru.miniApp.community.activateBoost}
           </Button>
+          {boost.isSuccess ? (
+            <p className="mt-2 text-sm text-lilac">{ru.miniApp.community.boostActivated}</p>
+          ) : null}
+          {boost.isError ? (
+            <p className="mt-2 text-sm text-red-300">
+              {boost.error instanceof ApiError && boost.error.code === 'BOOST_COOLDOWN'
+                ? ru.miniApp.community.boostDailyLimit
+                : boost.error.message}
+            </p>
+          ) : null}
         </Card>
       ) : null}
       {status.data?.premium ? <PremiumProfileVariants /> : null}
@@ -369,7 +403,14 @@ export function PremiumPage() {
               <p>{product.description}</p>
             </div>
             <Button onClick={() => invoice.mutate(product.id)} loading={invoice.isPending}>
-              {product.stars_amount} ⭐
+              {(product.effective_stars_amount ?? product.stars_amount) < product.stars_amount ? (
+                <span className="flex flex-col items-end leading-tight">
+                  <span>{product.effective_stars_amount} ⭐</span>
+                  <span className="text-xs opacity-70 line-through">{product.stars_amount} ⭐</span>
+                </span>
+              ) : (
+                `${product.stars_amount} ⭐`
+              )}
             </Button>
           </Card>
         ))}
@@ -410,6 +451,9 @@ function PremiumProfileVariants() {
   return (
     <Card className="mt-4 space-y-3 p-4">
       <h2 className="font-display text-2xl">{ru.miniApp.community.profileVariantsTitle}</h2>
+      <p className="mt-2 text-sm leading-relaxed text-muted">
+        {ru.miniApp.community.profileVariantsDescription}
+      </p>
       <input
         className="input-field"
         value={name}

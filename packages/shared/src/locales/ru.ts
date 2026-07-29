@@ -61,14 +61,14 @@ export const ru = {
       subscriptionDone: '✅ Я подписался',
       snoozeRequirement: 'Позже',
       disableAds: '⛔ Отключить рекламу',
+      openCall: '📞 Открыть звонок',
     },
     mainMenu: '✨ Главное меню RoleMate',
     profileEditor: `👤 Создай или измени подробную анкету в мастере.\n\n${FULL_FOOTER}`,
     profilePhotoPrompt:
-      '🖼 Отправь медиафайл ответом на это сообщение.\n\nБез Premium доступна 1 фотография. С Premium — до 8 файлов: фото, GIF, видео, музыка или голосовые записи. Файл появится в анкете после модерации.',
+      '🖼 Отправь медиафайл ответом на это сообщение.\n\nБез Premium доступна 1 фотография. С Premium — до 8 файлов: фото, GIF, видео, музыка или голосовые записи. Файл сразу появится в анкете; при нарушении правил модерация может скрыть его.',
     profilePhotoReplyPlaceholder: 'Прикрепи медиафайл',
-    profilePhotoPending:
-      '✅ Медиафайл принят и передан на модерацию. Статус можно посмотреть в разделе анкеты.',
+    profilePhotoPending: '✅ Медиафайл добавлен и уже опубликован в анкете.',
     profilePhotoTooLarge: '⚠️ Файл слишком большой. Отправь фото до 5 МБ или медиа до 20 МБ.',
     profileMediaUnsupported:
       '⚠️ Для анкеты поддерживаются фото, GIF, видео, музыка и голосовые записи.',
@@ -78,6 +78,28 @@ export const ru = {
     roleplayer: 'Со-ролевик',
     matchesTitle: '💞 Твои взаимные симпатии:',
     noChats: '💬 Активных анонимных чатов пока нет.',
+    newLikeNotification: '💜 Ты кому-то понравился',
+    newMessageNotification: '💬 Получено новое сообщение',
+    premiumGranted: (days: number) => {
+      const mod100 = days % 100;
+      const mod10 = days % 10;
+      const word =
+        mod100 >= 11 && mod100 <= 14
+          ? 'дней'
+          : mod10 === 1
+            ? 'день'
+            : mod10 >= 2 && mod10 <= 4
+              ? 'дня'
+              : 'дней';
+      return `🎉 Поздравляем! Вам начислен Premium на ${days} ${word}.`;
+    },
+    premiumGiftPaid: (days: number) =>
+      `🎁 Подарок оплачен. Получателю начислен Premium на ${days} дн.`,
+    premiumGiftInvoiceTitle: (name: string) => `Подарок: ${name}`,
+    premiumGiftInvoiceDescription: (description: string) =>
+      `RoleMate Premium для собеседника. ${description}`,
+    moderationWarning: (reason: string) =>
+      `⚠️ Предупреждение от модерации RoleMate\n\n${reason}\n\nПожалуйста, соблюдай правила сообщества.`,
     selectChat: '🕊 Выбери чат. Следующие сообщения будут отправлены в него анонимно:',
     premiumSelect: `⭐ Выбери тариф Premium.\n\n${FULL_FOOTER}`,
     referral: (link: string, rewardDays: number) =>
@@ -161,6 +183,29 @@ export const ru = {
     ownPostControls: 'Управление твоим постом:',
     postPremiumMedia:
       '⭐ Видео, GIF и аудио можно отправлять в посты и анонимные чаты только с Premium.',
+    incomingAnonymousCall: (kind: 'audio' | 'video') =>
+      `${kind === 'video' ? '📹' : '📞'} Входящий анонимный ${kind === 'video' ? 'видеозвонок' : 'аудиозвонок'} в RoleMate.`,
+    sharedProfile: (profile: {
+      display_name: string;
+      short_headline: string;
+      about: string;
+      fandoms: string;
+      genres: string;
+      tags: string;
+    }) =>
+      [
+        '👤 Пользователь поделился своей анкетой',
+        '',
+        `✨ ${profile.display_name}`,
+        profile.short_headline,
+        '',
+        profile.about,
+        profile.fandoms !== '[]' ? `Фандомы: ${profile.fandoms}` : '',
+        profile.genres !== '[]' ? `Жанры: ${profile.genres}` : '',
+        profile.tags !== '[]' ? `Теги: ${profile.tags}` : '',
+      ]
+        .filter(Boolean)
+        .join('\n'),
     postUnsupportedMedia: 'Для поста отправь текст, фото, документ, видео, GIF или аудио.',
     linksPremiumOnly: '⭐ Ссылки доступны только с RoleMate Premium.',
     linkUnsupported:
@@ -199,6 +244,8 @@ export const ru = {
     promoPremiumApplied: (days: number) => `🎁 Промокод активирован: Premium на ${days} дн.`,
     promoDiscountApplied: (stars: number) =>
       `🎟 Промокод принят. Скидка ${stars} Stars применится к подходящему тарифу.`,
+    premiumDiscountPrice: (price: number, originalPrice: number) =>
+      `${price} ⭐ (вместо ${originalPrice})`,
     ratingSaved: 'Спасибо. Оценка собеседника сохранена.',
     ratingUnavailable: 'Оценить можно только участника своего диалога.',
     reportReason: 'Выбери причину жалобы:',
@@ -220,6 +267,8 @@ export const ru = {
       search: 'Найти со-ролевика',
       matches: 'Взаимные симпатии',
       chats: 'Анонимные чаты',
+      openLikes: 'Открыть симпатии',
+      openChats: 'Открыть чаты',
       posts: 'Лента постов',
       createPost: 'Создать пост',
       myPosts: 'Мои посты',
@@ -255,6 +304,11 @@ export const ru = {
       PROMO_INVALID: '🎟 Промокод не найден, отключён или срок его действия закончился.',
       PROMO_ALREADY_USED: '🎟 Этот промокод уже был использован вами.',
       PROMO_EXHAUSTED: '🎟 Лимит активаций этого промокода исчерпан.',
+      PROMO_PENDING_DISCOUNT: '🎟 Сначала используй уже активированную скидку при покупке Premium.',
+      PROMO_PRODUCTS_REQUIRED: '🎟 Выбери хотя бы один тариф для скидочного промокода.',
+      PROMO_PRODUCT_INVALID: '🎟 Один из выбранных тарифов не найден.',
+      PROMO_EXPIRY_INVALID: '🎟 Срок действия промокода должен быть в будущем.',
+      PROMO_CODE_EXISTS: '🎟 Промокод с таким кодом уже существует.',
       default: '⚠️ Не удалось выполнить действие. Попробуй немного позже.',
     },
   },
@@ -265,11 +319,22 @@ export const ru = {
     internalError: 'Внутренняя ошибка сервиса',
     premiumRequired:
       'Эта возможность доступна только с RoleMate Premium. Откройте раздел «Premium», выберите свой тариф и оплатите его Telegram Stars.',
+    unsupportedChatMedia: 'Этот формат файла нельзя отправить в анонимный чат.',
+    chatMediaTooLarge: 'Файл слишком большой: фото — до 8 МБ, остальные медиа — до 16 МБ.',
+    callsNotConfigured: 'Звонки подготовлены, но безопасный TURN-канал ещё не подключён.',
+    callsUnavailable: 'Не удалось подключить защищённый канал звонка. Попробуйте позже.',
     linkPolicyViolation:
       'Ссылка не разрешена. С Premium можно указывать только проверяемые Telegram-профили и каналы.',
     promoInvalid: 'Промокод не найден, отключён или срок его действия закончился.',
     promoAlreadyUsed: 'Этот промокод уже был использован.',
     promoExhausted: 'Лимит активаций промокода исчерпан.',
+    promoPendingDiscount: 'Сначала используйте уже активированную скидку при покупке Premium.',
+    promoProductsRequired: 'Выберите хотя бы один тариф для скидочного промокода.',
+    promoProductInvalid: 'Один из выбранных тарифов не найден.',
+    promoExpiryInvalid: 'Срок действия промокода должен быть в будущем.',
+    promoCodeExists: 'Промокод с таким кодом уже существует.',
+    giftProductNotFound: 'Тариф для подарка не найден.',
+    mediaUnavailable: 'Медиафайл временно недоступен. Попробуйте загрузить его ещё раз.',
     shortDescription: 'Анонимный поиск со-ролевиков',
     maintenance:
       '🛠 RoleMate временно находится на обслуживании. Основные функции скоро снова будут доступны.',
@@ -310,7 +375,10 @@ export const ru = {
       searchReadiness: 'Готовность к поиску',
       tellAboutWorld: 'Расскажи о своём мире',
       completeProfile: 'Заполни анкету, чтобы попасть в поиск',
+      profileReady: 'Анкета заполнена и участвует в поиске',
+      profileNotInSearch: 'Анкета заполнена, но сейчас не участвует в поиске',
       createProfile: 'Создать анкету',
+      editProfile: 'Редактировать анкету',
       premiumDescription: 'Больше возможностей для поиска',
       inviteFriends: 'Пригласи друзей',
       referralReward: '1 друг = 1 день Premium',
@@ -329,12 +397,21 @@ export const ru = {
       emptyTitle: 'Новые истории скоро появятся',
       emptyDescription:
         'Пока не удалось найти новые подходящие анкеты. Измени фильтры или загляни немного позже.',
+      emptyOnlyOwnProfile:
+        'Твоя анкета опубликована, но собственная анкета не показывается тебе в поиске. Сейчас в базе ещё нет другой анкеты — она появится здесь после регистрации нового пользователя.',
+      emptyProfilesUnavailable:
+        'Другие анкеты в базе есть, но сейчас они отключены, заблокированы или недоступны для поиска.',
+      emptySafetyRules:
+        'Подходящих анкет сейчас нет из-за возрастных правил безопасности или взаимных блокировок.',
       retry: 'Проверить снова',
       eyebrow: 'подобрано для тебя',
       title: 'Поиск',
-      keywordLabel: 'Поиск анкет по ключевым словам и тегам',
-      keywordPlaceholder: 'Например: фэнтези, соавтор, медленные ответы',
+      keywordLabel: 'Поиск анкет по псевдониму, ключевым словам и тегам',
+      keywordPlaceholder: 'Псевдоним, фэнтези, соавтор или тег',
       keywordSubmit: 'Найти',
+      previousMedia: 'Предыдущее медиа',
+      nextMedia: 'Следующее медиа',
+      profileAudio: (index: number) => `Аудио анкеты ${index}`,
       filters: 'Фильтры',
       rewind: 'Вернуть',
       skip: 'Пропустить',
@@ -367,6 +444,11 @@ export const ru = {
       activateFilterSet: 'Применить',
       deleteFilterSet: 'Удалить',
       rewindDone: 'Последняя пропущенная анкета возвращена',
+      quickModeration: 'Быстрая модерация',
+      quickModerationHint:
+        'Эти действия доступны только владельцу и назначенным модераторам и записываются в audit log.',
+      disableReasonPrompt: 'Укажите причину скрытия анкеты',
+      moderationCompleted: 'Модерационное действие выполнено.',
     },
     profile: {
       defaults: {
@@ -380,6 +462,11 @@ export const ru = {
       create: 'Создать анкету',
       eyebrow: 'моя анкета',
       edit: 'Изменить',
+      openProfilePreview: 'Посмотреть глазами других',
+      closePreview: 'Закрыть предпросмотр',
+      previewBadge: 'Предпросмотр',
+      previewDescription:
+        'Так анкета выглядит для других пользователей. Процент совместимости зависит от интересов конкретного человека.',
       editorStep: 'шаг 1 из 4',
       editorTitle: 'Расскажи о себе',
       privacyNotice:
@@ -506,9 +593,12 @@ export const ru = {
       tags: 'Теги анкеты',
       tagsPlaceholder: 'медленные ответы, дарк-фэнтези, ищу соавтора',
       tagsHint: 'Разделяй теги запятыми — по ним твою анкету смогут найти.',
+      addAnotherTag: 'Добавить ещё через запятую',
+      removeTag: 'Удалить тег',
       ideas: 'Идеи и сеттинги',
       settingsField: 'Предпочитаемые сеттинги',
       lookingFor: 'Кого или что ищешь — через запятую',
+      lookingForPlaceholder: 'долгосрочного партнёра, соавтора, сюжет',
       boundaries: 'Границы и нежелательные темы',
       adultTopics: 'Допускаю взрослые темы (только 18+)',
       contactPolicy: 'Обмен контактами',
@@ -545,6 +635,7 @@ export const ru = {
         'Анкета скрыта модерацией. Самостоятельно включить её нельзя — обратись в поддержку.',
       deleteMedia: 'Удалить изображение',
       submit: 'Сохранить и опубликовать',
+      published: 'Опубликовано!',
     },
     community: {
       matchesEmptyTitle: 'Здесь появятся взаимные симпатии',
@@ -581,10 +672,56 @@ export const ru = {
       ratingSaved: 'Оценка сохранена',
       closeChatConfirm:
         'Завершить этот анонимный чат? После этого отправлять новые сообщения будет нельзя.',
+      attach: 'Прикрепить',
+      attachHint: 'Фото и вложения',
+      sendPhoto: 'Фото',
+      sendVideoGif: 'Видео или GIF · Premium',
+      sendAudio: 'Аудиофайл · Premium',
+      recordVoice: 'Голосовое · Premium',
+      recordVideoNote: 'Видеосообщение · Premium',
+      shareProfile: 'Поделиться анкетой',
+      shareProfileConfirm: 'Вы уверены, что хотите поделиться своей анкетой?',
+      profileShared: 'Анкета отправлена собеседнику.',
+      giftPremium: 'Подарить Premium',
+      giftPremiumTitle: 'Выбери подарок',
+      giftPremiumConfirm: (name: string, stars: number) =>
+        `Подарить собеседнику «${name}» за ${stars} ⭐? Premium активируется только после успешной оплаты.`,
+      giftPremiumInvoiceOpened: 'Счёт на подарок открыт в Telegram.',
+      giftPremiumNoPlans: 'Для подарка сейчас нет доступных разовых тарифов.',
+      mediaSent: 'Вложение отправлено анонимно.',
+      sendingMedia: 'Отправляем вложение…',
+      recordingNow: 'Идёт запись. Нажмите «Остановить запись», когда закончите.',
+      stopRecording: 'Остановить запись',
+      recordingUnsupported: 'На этом устройстве запись в поддерживаемом формате недоступна.',
+      videoNoteUnsupported:
+        'Это устройство не записывает MP4-видеосообщения. Можно выбрать готовое видео.',
+      audioCall: 'Аудиозвонок · Premium',
+      videoCall: 'Видеозвонок · Premium',
+      incomingAudioCall: 'Входящий анонимный аудиозвонок',
+      incomingVideoCall: 'Входящий анонимный видеозвонок',
+      acceptCall: 'Ответить',
+      declineCall: 'Отклонить',
+      endCall: 'Завершить звонок',
+      callConnecting: 'Соединяем с собеседником…',
       premiumEyebrow: 'больше пространства для историй',
       premiumTitle: 'RoleMate Premium',
       premiumDescription:
         'Расширенные фильтры, входящие симпатии, возврат анкет и мягкий boost — безопасность и модерация остаются одинаковыми для всех.',
+      premiumActive: 'Premium активен',
+      premiumActiveUntil: (date: string) => `Действует до ${date}`,
+      premiumDaysRemaining: (days: number) => {
+        const mod100 = days % 100;
+        const mod10 = days % 10;
+        const word =
+          mod100 >= 11 && mod100 <= 14
+            ? 'дней'
+            : mod10 === 1
+              ? 'день'
+              : mod10 >= 2 && mod10 <= 4
+                ? 'дня'
+                : 'дней';
+        return `Осталось ${days} ${word}`;
+      },
       premiumFeatures: [
         'Кому я понравился',
         'Расширенные фильтры',
@@ -602,11 +739,15 @@ export const ru = {
       promoDiscountApplied: (stars: number, rubles: number) =>
         `Скидка активирована: ${stars} Stars${rubles ? ` · ${rubles} ₽ для будущих рублёвых способов` : ''}.`,
       activateBoost: 'Активировать бесплатный boost',
-      boostActivated: 'Анкета поднята в приоритетной выдаче на 7 дней.',
+      boostActivated: 'Анкета поднята в приоритетной выдаче на 24 часа.',
+      boostDailyLimit:
+        'Бесплатный boost можно активировать только один раз в день. Попробуй снова завтра.',
       premiumStats: (today: number, sevenDays: number, total: number, incoming: number) =>
         `Просмотры: сегодня ${today}, за 7 дней ${sevenDays}, всего ${total} · входящие симпатии ${incoming}`,
       earlyAccessEnabled: 'Ранний доступ к новым функциям включён.',
       profileVariantsTitle: 'Сюжетные варианты анкеты',
+      profileVariantsDescription:
+        'Сохраняй разные версии заголовка, описания и сюжетных идей для разных фандомов или настроений. При активации выбранный вариант заменит эти поля в основной анкете; остальные данные и медиа останутся прежними.',
       profileVariantName: 'Название варианта',
       profileVariantHeadline: 'Заголовок',
       profileVariantAbout: 'Описание (не менее 20 символов)',
@@ -743,7 +884,9 @@ export const ru = {
       ownerArchivedReason: 'Архивировано владельцем',
       ownerPausedReason: 'Анкета скрыта владельцем',
       pauseProfile: 'Скрыть',
-      mediaQueueTitle: 'Модерация изображений',
+      mediaQueueTitle: 'Модерация медиа',
+      mediaLoadFailed: 'Не удалось загрузить медиафайл.',
+      retryMedia: 'Повторить загрузку',
       mediaApprovedReason: 'Изображение одобрено владельцем',
       mediaRejectedReasonPrompt: 'Укажите причину отклонения изображения',
       archive: 'Архив',
@@ -783,15 +926,23 @@ export const ru = {
       saveProduct: 'Сохранить',
       productSaved: 'Тариф обновлён.',
       promoCreate: 'Новый промокод',
+      promoEdit: 'Редактирование промокода',
       promoCode: 'Код',
       promoDiscount: 'Скидка',
       promoPremiumDays: 'Premium на дни',
       discountStars: 'Скидка в Stars',
       discountRubles: 'Скидка в рублях (задел)',
       premiumDays: 'Количество дней Premium',
-      eligiblePlans: 'Тарифы (ничего не отмечено — все)',
+      eligiblePlans: 'Тарифы, для которых действует скидка',
       maxActivations: 'Максимум активаций',
       create: 'Создать',
+      savePromo: 'Сохранить промокод',
+      editPromo: 'Редактировать',
+      deletePromo: 'Удалить',
+      cancelPromoEdit: 'Отменить редактирование',
+      deletePromoConfirm:
+        'Удалить промокод? Если он уже использовался, он будет скрыт без удаления истории платежей.',
+      promoDeleted: 'Промокод удалён.',
       activate: 'Включить',
       deactivate: 'Отключить',
       requirementCreate: 'Обязательная подписка в ленте постов',

@@ -216,10 +216,22 @@ export function createBot(
       sender_user_id: string;
       destination_chat_id: number;
       recipient_muted: number;
+      notify_message: number;
       relay_rate_limit: number;
     }>('conversations.resolveRelay', {
       telegramUserId,
       ...(conversationId ? { conversationId } : {}),
+    });
+  }
+
+  async function notifyAboutLike(targetUserId: string): Promise<void> {
+    const target = await dataApi.execute<{ telegram_user_id: number } | null>(
+      'notifications.deliveryTarget',
+      { userId: targetUserId, kind: 'like' },
+    );
+    if (!target) return;
+    await bot.api.sendMessage(target.telegram_user_id, ru.bot.newLikeNotification, {
+      reply_markup: new InlineKeyboard().webApp(ru.bot.menu.matches, `${env.MINI_APP_URL}/matches`),
     });
   }
 
@@ -337,12 +349,23 @@ export function createBot(
   }
 
   async function sendPremiumOffers(context: Context): Promise<void> {
+    const user = await upsertUser(context, dataApi);
     const products = await dataApi.execute<
-      Array<{ id: string; name: string; stars_amount: number; billing_type: string }>
-    >('products.list', { activeOnly: true });
+      Array<{
+        id: string;
+        name: string;
+        stars_amount: number;
+        effective_stars_amount: number;
+        billing_type: string;
+      }>
+    >('products.listForUser', { userId: user.userId, activeOnly: true });
     const keyboard = new InlineKeyboard();
     for (const product of products) {
-      keyboard.text(`${product.name} · ${product.stars_amount} ⭐`, `buy:${product.id}`).row();
+      const price =
+        product.effective_stars_amount < product.stars_amount
+          ? ru.bot.premiumDiscountPrice(product.effective_stars_amount, product.stars_amount)
+          : `${product.stars_amount} ⭐`;
+      keyboard.text(`${product.name} · ${price}`, `buy:${product.id}`).row();
     }
     await context.reply(ru.bot.premiumSelect, { reply_markup: keyboard });
   }
@@ -575,7 +598,7 @@ export function createBot(
       premiumDays?: number;
     }>('promotions.apply', { userId: user.userId, code });
     if (result.type === 'premium_days') {
-      await context.reply(ru.bot.promoPremiumApplied(result.premiumDays ?? 0));
+      await context.reply(ru.bot.premiumGranted(result.premiumDays ?? 0));
       return;
     }
     await context.reply(ru.bot.promoDiscountApplied(result.discountStars ?? 0), {
@@ -789,13 +812,20 @@ export function createBot(
     const user = await upsertUser(context, dataApi);
     const action = context.match?.[1] as 'like' | 'skip' | 'super_like';
     const targetUserId = context.match?.[2] ?? '';
-    const result = await dataApi.execute<{ matched: boolean; matchId?: string }>('swipes.create', {
+    const result = await dataApi.execute<{
+      created: boolean;
+      matched: boolean;
+      matchId?: string;
+    }>('swipes.create', {
       userId: user.userId,
       targetUserId,
       action,
       source: 'bot',
       idempotencyKey: `bot:${context.update.update_id}:${targetUserId}`,
     });
+    if (result.created && ['like', 'super_like'].includes(action)) {
+      await notifyAboutLike(targetUserId);
+    }
     await context.answerCallbackQuery(result.matched ? ru.bot.swipeMatched : ru.bot.done);
     await context.editMessageReplyMarkup();
     if (result.matched) await context.reply(ru.match);
@@ -827,13 +857,14 @@ export function createBot(
       userId: user.userId,
       postId: context.match?.[1] ?? '',
     });
-    const result = await dataApi.execute<{ matched: boolean }>('swipes.create', {
+    const result = await dataApi.execute<{ created: boolean; matched: boolean }>('swipes.create', {
       userId: user.userId,
       targetUserId: post.author_user_id,
       action: 'like',
       source: 'bot',
       idempotencyKey: `post:${context.update.update_id}:${post.author_user_id}`,
     });
+    if (result.created) await notifyAboutLike(post.author_user_id);
     await context.answerCallbackQuery(result.matched ? ru.bot.swipeMatched : ru.bot.postLiked);
   });
   bot.callbackQuery(/^postmore:([0-9a-f-]{36})$/, async (context) => {
@@ -1127,7 +1158,12 @@ export function createBot(
     const order = await dataApi.execute<{ id: string }>('payments.getByPayload', {
       invoicePayload: payment.invoice_payload,
     });
-    await dataApi.execute('payments.completeStars', {
+    const result = await dataApi.execute<{
+      duplicate: boolean;
+      gifted?: boolean;
+      durationDays: number;
+      giftRecipientTelegramUserId?: number | null;
+    }>('payments.completeStars', {
       orderId: order.id,
       telegramPaymentChargeId: payment.telegram_payment_charge_id,
       providerPaymentChargeId: payment.provider_payment_charge_id,
@@ -1139,10 +1175,25 @@ export function createBot(
       isFirstRecurring: payment.is_first_recurring ?? false,
       telegramUpdateId: context.update.update_id,
     });
-    const end = payment.subscription_expiration_date
-      ? new Date(payment.subscription_expiration_date * 1_000)
-      : new Date(Date.now() + 30 * 86_400_000);
-    await context.reply(ru.paymentSuccess(end.toLocaleDateString('ru-RU')));
+    await context.reply(
+      result.gifted
+        ? ru.bot.premiumGiftPaid(result.durationDays)
+        : ru.bot.premiumGranted(result.durationDays),
+    );
+    if (!result.duplicate && result.gifted && result.giftRecipientTelegramUserId) {
+      await bot.api.sendMessage(
+        result.giftRecipientTelegramUserId,
+        ru.bot.premiumGranted(result.durationDays),
+        env.MINI_APP_URL
+          ? {
+              reply_markup: new InlineKeyboard().webApp(
+                ru.bot.menu.premium,
+                `${env.MINI_APP_URL}/premium`,
+              ),
+            }
+          : undefined,
+      );
+    }
   });
 
   bot.on('message:text', async (context) => {
@@ -1208,19 +1259,23 @@ export function createBot(
         context.message.reply_to_message?.message_id,
         target.destination_chat_id,
       );
-      const delivered = await bot.api.sendMessage(target.destination_chat_id, text, {
-        protect_content: true,
-        disable_notification: Boolean(target.recipient_muted),
-        entities: [],
-        ...(replyMessageId
-          ? {
-              reply_parameters: {
-                message_id: replyMessageId,
-                allow_sending_without_reply: true,
-              },
-            }
-          : {}),
-      });
+      const delivered = await bot.api.sendMessage(
+        target.destination_chat_id,
+        target.notify_message ? `${ru.bot.newMessageNotification}\n\n${text}` : text,
+        {
+          protect_content: true,
+          disable_notification: Boolean(target.recipient_muted),
+          entities: [],
+          ...(replyMessageId
+            ? {
+                reply_parameters: {
+                  message_id: replyMessageId,
+                  allow_sending_without_reply: true,
+                },
+              }
+            : {}),
+        },
+      );
       await recordRelay(
         target,
         context.chat.id,
@@ -1408,6 +1463,15 @@ export function createBot(
           context.message.reply_to_message?.message_id,
           target.destination_chat_id,
         );
+        if (target.notify_message) {
+          await bot.api.sendMessage(target.destination_chat_id, ru.bot.newMessageNotification, {
+            protect_content: true,
+            reply_markup: new InlineKeyboard().webApp(
+              ru.bot.menu.chats,
+              `${env.MINI_APP_URL}/chats`,
+            ),
+          });
+        }
         const delivered = await bot.api.copyMessage(
           target.destination_chat_id,
           context.chat.id,

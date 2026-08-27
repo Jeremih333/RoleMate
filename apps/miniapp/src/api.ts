@@ -750,6 +750,20 @@ export const api = {
       method: 'POST',
       body: JSON.stringify({ enabled }),
     }),
+  quickStartContext: () =>
+    request<{ ageGroup: string; displayName: string; hasQuestionnaire: boolean }>(
+      '/questionnaires/quick-start',
+    ),
+  quickStart: (input: {
+    lookingFor: string[];
+    formats: string[];
+    hook: string;
+    timezone?: string;
+  }) =>
+    request<{ profileId: string; created: boolean }>('/questionnaires/quick-start', {
+      method: 'POST',
+      body: JSON.stringify(input),
+    }),
   products: () => request<Product[]>('/products'),
   invoice: (productId: string) =>
     request<{ invoiceLink?: string }>('/payments/invoice', {

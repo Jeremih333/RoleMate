@@ -121,6 +121,7 @@ export const workerOperations = {
     userId: z.string().uuid(),
     enabled: z.boolean(),
   }),
+  'users.quickStartContext': z.object({ userId: z.string().uuid() }),
   'settings.get': z.object({ userId: z.string().uuid() }),
   'settings.update': z.object({
     userId: z.string().uuid(),

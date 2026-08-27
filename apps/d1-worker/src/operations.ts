@@ -1006,6 +1006,39 @@ const handlers: { [K in WorkerOperation]: Handler<K> } = {
     ]);
     return { deleted: true };
   },
+  'users.quickStartContext': async (env, input) => {
+    // The quick start builds a whole questionnaire from three answers, so it needs
+    // the age group the user already confirmed and a name to put on the card.
+    const profile = await env.DB.prepare(
+      'SELECT age_group, display_name FROM profiles WHERE user_id = ?1',
+    )
+      .bind(input.userId)
+      .first<{ age_group: string; display_name: string }>();
+    const acceptedAge = profile
+      ? null
+      : await env.DB.prepare(`SELECT value FROM app_config WHERE key = 'age_group:' || ?1`)
+          .bind(input.userId)
+          .first<{ value: string }>();
+    const publicProfile = await env.DB.prepare(
+      'SELECT display_name FROM user_profiles WHERE user_id = ?1',
+    )
+      .bind(input.userId)
+      .first<{ display_name: string }>();
+    const user = await env.DB.prepare(
+      'SELECT telegram_first_name FROM users WHERE id = ?1 AND deleted_at IS NULL',
+    )
+      .bind(input.userId)
+      .first<{ telegram_first_name: string | null }>();
+    return {
+      ageGroup: profile?.age_group ?? acceptedAge?.value ?? '',
+      displayName:
+        profile?.display_name ??
+        publicProfile?.display_name ??
+        user?.telegram_first_name ??
+        ru.miniApp.profile.unknownName,
+      hasQuestionnaire: Boolean(profile),
+    };
+  },
   'profiles.upsert': async (env, input) => {
     const isPremium = Boolean(await premiumEnd(env, input.userId));
     const profileText = [
@@ -4214,6 +4247,15 @@ const handlers: { [K in WorkerOperation]: Handler<K> } = {
          )
        ORDER BY CASE
                   WHEN ?13 <> '' AND p.display_name = ?13 COLLATE NOCASE THEN 1
+                  ELSE 0
+                END DESC,
+                -- Someone who is around and answers is worth more than a perfect
+                -- profile that has not opened the app in two weeks, so candidates
+                -- are bucketed by recent presence before interests are compared.
+                CASE
+                  WHEN u.last_activity_at >= datetime('now', '-2 day') THEN 3
+                  WHEN u.last_activity_at >= datetime('now', '-7 day') THEN 2
+                  WHEN u.last_activity_at >= datetime('now', '-21 day') THEN 1
                   ELSE 0
                 END DESC,
                 relevance_score DESC,

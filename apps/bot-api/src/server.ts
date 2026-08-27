@@ -11,6 +11,7 @@ import swaggerUi from '@fastify/swagger-ui';
 import {
   OWNER_TELEGRAM_ID,
   menuLaunchRouteSchema,
+  ageGroupSchema,
   profileSchema,
   ru,
   sha256,
@@ -19,6 +20,7 @@ import {
 } from '@rolemate/shared';
 import { z } from 'zod';
 import { createBot } from './bot.js';
+import { buildQuickStartProfile } from './quick-start.js';
 import { DataApiError, DataApiClient, findDataApiError } from './d1-client.js';
 import type { AppEnv } from './env.js';
 import { assertCsrf, createSession, getSession, refreshSession } from './session.js';
@@ -1262,6 +1264,47 @@ export async function buildServer(
       sourceKey: `questionnaire:${saved.profileId}:${await sha256(JSON.stringify(profile))}`,
     });
     return saved;
+  });
+  app.get('/api/questionnaires/quick-start', async (request) => {
+    const session = await authenticate(request);
+    return dataApi.execute('users.quickStartContext', { userId: session.userId });
+  });
+  app.post('/api/questionnaires/quick-start', async (request) => {
+    const session = await mutateSafe(request);
+    const body = z
+      .object({
+        lookingFor: z.array(z.string().trim().min(2).max(64)).min(1).max(5),
+        formats: z.array(z.string().trim().min(2).max(64)).min(1).max(6),
+        hook: z.string().trim().min(10).max(120),
+        timezone: z
+          .string()
+          .regex(/^UTC(?:[+-](?:0?\d|1[0-4])(?::(?:15|30|45))?)?$/)
+          .optional(),
+      })
+      .parse(request.body);
+    const context = await dataApi.execute<{
+      ageGroup: string;
+      displayName: string;
+      hasQuestionnaire: boolean;
+    }>('users.quickStartContext', { userId: session.userId });
+    const ageGroup = ageGroupSchema.safeParse(context.ageGroup);
+    if (!ageGroup.success) {
+      throw new DataApiError('AGE_CONFIRMATION_REQUIRED', ru.api.ageConfirmationRequired, 409);
+    }
+    const profile = buildQuickStartProfile({
+      displayName: context.displayName,
+      ageGroup: ageGroup.data,
+      lookingFor: body.lookingFor,
+      formats: body.formats,
+      hook: body.hook,
+      ...(body.timezone ? { timezone: body.timezone } : {}),
+    });
+    const saved = await dataApi.execute<{ profileId: string }>('profiles.upsert', {
+      userId: session.userId,
+      profile,
+    });
+    await dataApi.execute('users.setSearchEnabled', { userId: session.userId, enabled: true });
+    return { ...saved, created: !context.hasQuestionnaire };
   });
   app.put('/api/profile/state', async (request) => {
     const session = await mutateSafe(request);

@@ -1499,15 +1499,20 @@ export function QuestionnairesPage() {
               : ru.miniApp.social.premiumRequired}
         </p>
         {data.questionnaires.length === 0 ? (
-          <Link
-            className="button button-primary mt-4"
-            href="/questionnaires/edit"
-            aria-label={ru.miniApp.social.createFirstQuestionnaire}
-            title={ru.miniApp.social.createFirstQuestionnaire}
-          >
-            <Plus className="h-5 w-5" />
-            <span>{ru.miniApp.social.createFirstQuestionnaire}</span>
-          </Link>
+          <>
+            <Link
+              className="button button-primary mt-4"
+              href="/quick-start"
+              aria-label={ru.miniApp.quickStart.submit}
+              title={ru.miniApp.quickStart.submit}
+            >
+              <Plus className="h-5 w-5" />
+              <span>{ru.miniApp.quickStart.startCta}</span>
+            </Link>
+            <Link className="questionnaire-long-form-link" href="/questionnaires/edit">
+              {ru.miniApp.social.createFirstQuestionnaire}
+            </Link>
+          </>
         ) : (
           <Button
             className="questionnaire-create-icon mt-4"

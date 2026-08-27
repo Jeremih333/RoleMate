@@ -8,6 +8,7 @@ import { MusicPlayerProvider } from './components/music-player.js';
 import { Button } from './components/ui.js';
 import { ViewerTimeProvider } from './components/viewer-time.js';
 import { AdminPage } from './pages/admin.js';
+import { QuickStartPage } from './pages/quick-start.js';
 import {
   ChatsPage,
   MatchesPage,
@@ -171,6 +172,7 @@ export function App() {
       <AuthGate>
         <Switch>
           <Route path="/" component={HomePage} />
+          <Route path="/quick-start" component={QuickStartPage} />
           <Route path="/search" component={SearchPage} />
           <Route path="/matches" component={MatchesPage} />
           <Route path="/chats" component={ChatsPage} />

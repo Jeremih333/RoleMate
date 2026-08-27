@@ -96,7 +96,6 @@ export function ChatTools({ conversationId, premium, onSent, replyToMessageId }:
   const [mediaCaption, setMediaCaption] = useState('');
   const [captionPosition, setCaptionPosition] = useState<'top' | 'bottom'>('bottom');
   const photoRef = useRef<HTMLInputElement>(null);
-  const mediaRef = useRef<HTMLInputElement>(null);
   const audioRef = useRef<HTMLInputElement>(null);
   const products = useQuery({
     queryKey: ['products'],
@@ -297,14 +296,10 @@ export function ChatTools({ conversationId, premium, onSent, replyToMessageId }:
       </button>
       {open ? (
         <Card className="attachment-menu">
+          {/* One entry: the picker already accepted photos, video and GIFs, so the
+              separate "video" item opened the same dialog with a narrower filter. */}
           <button type="button" onClick={() => photoRef.current?.click()}>
-            <Image /> {ru.miniApp.community.sendPhoto}
-          </button>
-          <button
-            type="button"
-            onClick={() => (premium ? mediaRef.current?.click() : premiumMessage())}
-          >
-            <Video /> {ru.miniApp.community.sendVideoGif}
+            <Image /> {premium ? ru.miniApp.community.sendMedia : ru.miniApp.community.sendPhoto}
           </button>
           <button
             type="button"
@@ -370,23 +365,25 @@ export function ChatTools({ conversationId, premium, onSent, replyToMessageId }:
         hidden
         multiple
         type="file"
-        accept="image/jpeg,image/png,image/webp,image/gif,video/mp4,video/webm,video/quicktime"
+        // Free accounts may only send photos. Filtering here means the picker
+        // never offers a file the server would reject with a bare 403.
+        accept={
+          premium
+            ? 'image/jpeg,image/png,image/webp,image/gif,video/mp4,video/webm,video/quicktime'
+            : 'image/jpeg,image/png,image/webp'
+        }
         onChange={(event) => {
           const files = [...(event.target.files ?? [])].slice(0, 10);
-          if (files.length) setPendingMediaFiles(files);
           event.target.value = '';
-        }}
-      />
-      <input
-        ref={mediaRef}
-        hidden
-        multiple
-        type="file"
-        accept="image/gif,video/mp4,video/webm,video/quicktime"
-        onChange={(event) => {
-          const files = [...(event.target.files ?? [])].slice(0, 10);
-          if (files.length) setPendingMediaFiles(files);
-          event.target.value = '';
+          if (!files.length) return;
+          const gated = files.filter(
+            (file) => file.type === 'image/gif' || file.type.startsWith('video/'),
+          );
+          if (gated.length && !premium) {
+            premiumMessage();
+            return;
+          }
+          setPendingMediaFiles(files);
         }}
       />
       {pendingMediaFiles.length ? (

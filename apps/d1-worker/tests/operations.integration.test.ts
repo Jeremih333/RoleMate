@@ -5646,9 +5646,12 @@ describe('D1 domain operations', () => {
     const otherId = await onboard(2_411);
     const matchId = crypto.randomUUID();
     const conversationId = crypto.randomUUID();
+    // matches enforces CHECK (user_a_id < user_b_id), and the two ids are random
+    // UUIDs, so they have to be ordered before the insert.
+    const [firstId, secondId] = [userId, otherId].sort();
     sqlite
       .prepare('INSERT INTO matches (id, user_a_id, user_b_id) VALUES (?, ?, ?)')
-      .run(matchId, userId, otherId);
+      .run(matchId, firstId, secondId);
     sqlite
       .prepare(
         "INSERT INTO conversations (id, match_id, created_at) VALUES (?, ?, datetime('now', '-14 day'))",

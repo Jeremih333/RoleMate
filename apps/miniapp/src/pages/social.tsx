@@ -3,6 +3,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import type { QueryClient } from '@tanstack/react-query';
 import {
   Ban,
+  BookOpen,
   ChevronDown,
   ChevronLeft,
   ChevronRight,
@@ -27,6 +28,7 @@ import {
   Trash2,
   UserMinus,
   UserPlus,
+  Users,
   X,
 } from 'lucide-react';
 import { ru } from '@rolemate/shared';
@@ -38,6 +40,7 @@ import {
   type PublicUserProfile,
   type SocialPost,
 } from '../api.js';
+import { useUserStore } from '../store.js';
 import { ProfileAvatar } from '../components/profile-avatar.js';
 import { ShareToChatsDialog } from '../components/share-to-chats.js';
 import {
@@ -309,23 +312,21 @@ export function PublicProfilePage() {
       <SectionTitle eyebrow={ru.miniApp.social.profileEyebrow}>
         {ru.miniApp.social.profileTitle}
       </SectionTitle>
-      <Card className="public-profile-own-card p-5">
-        <div className="public-profile-header">
+      <Card className="public-profile-own-card profile-sheet">
+        <div className="profile-hero">
           <ProfileAvatarGallery
             items={avatarItems}
             name={displayName}
             className="profile-avatar-large"
           />
-          <div className="public-profile-identity">
-            <strong>
-              {displayName}
-              <VerificationBadge
-                kind={profile.data.verification_kind}
-                premium={profile.data.has_premium}
-              />
-            </strong>
-            <ProfileUsernamesLine aliases={aliases} />
-          </div>
+          <strong className="profile-hero-name">
+            {displayName}
+            <VerificationBadge
+              kind={profile.data.verification_kind}
+              premium={profile.data.has_premium}
+            />
+          </strong>
+          <ProfileUsernamesLine aliases={aliases} />
           <button
             className="profile-id-button"
             type="button"
@@ -335,7 +336,23 @@ export function PublicProfilePage() {
             <Info aria-hidden />
           </button>
         </div>
-        {profile.data.bio ? <p className="profile-bio">{profile.data.bio}</p> : null}
+        {/* Telegram's info list: the value leads, the muted label sits under it. */}
+        {profile.data.bio || aliases.length ? (
+          <div className="profile-info-list">
+            {profile.data.bio ? (
+              <div className="profile-info-row">
+                <span className="profile-info-value">{profile.data.bio}</span>
+                <small>{ru.miniApp.social.aboutLabel}</small>
+              </div>
+            ) : null}
+            {aliases.length ? (
+              <div className="profile-info-row">
+                <span className="profile-info-value profile-info-username">@{aliases[0]}</span>
+                <small>{ru.miniApp.social.usernameLabel}</small>
+              </div>
+            ) : null}
+          </div>
+        ) : null}
         {featuredAudio.length ? (
           <SwipePlaylist
             emptyLabel={ru.miniApp.search.trackUnknown}
@@ -359,29 +376,33 @@ export function PublicProfilePage() {
         {profile.data.owner_liked ? (
           <p className="owner-blessing">{ru.miniApp.social.ownerBlessing}</p>
         ) : null}
-        <div className="profile-stat-row">
+        {/* Counts read as a settings-style list, the way Telegram lists gifts and
+            story archives, instead of four cramped tiles. */}
+        <div className="profile-link-list">
           <button
-            className="profile-stat"
+            className="profile-link-row"
             type="button"
             onClick={() =>
               setOpenPeopleSection((value) => (value === 'followers' ? null : 'followers'))
             }
           >
-            <strong>{profile.data.followers_count ?? 0}</strong>
+            <Users aria-hidden />
             <span>{ru.miniApp.social.followers}</span>
+            <b>{profile.data.followers_count ?? 0}</b>
           </button>
           <button
-            className="profile-stat"
+            className="profile-link-row"
             type="button"
             onClick={() =>
               setOpenPeopleSection((value) => (value === 'following' ? null : 'following'))
             }
           >
-            <strong>{profile.data.following_count ?? 0}</strong>
+            <UserPlus aria-hidden />
             <span>{ru.miniApp.social.following}</span>
+            <b>{profile.data.following_count ?? 0}</b>
           </button>
           <button
-            className="profile-stat"
+            className="profile-link-row"
             type="button"
             onClick={() =>
               document
@@ -389,18 +410,20 @@ export function PublicProfilePage() {
                 ?.scrollIntoView({ behavior: 'smooth' })
             }
           >
-            <strong>{profile.data.questionnaire_count}</strong>
+            <FileText aria-hidden />
             <span>{ru.miniApp.social.questionnairesLabel}</span>
+            <b>{profile.data.questionnaire_count}</b>
           </button>
           <button
-            className="profile-stat"
+            className="profile-link-row"
             type="button"
             onClick={() =>
               document.getElementById('own-profile-posts')?.scrollIntoView({ behavior: 'smooth' })
             }
           >
-            <strong>{profile.data.post_count}</strong>
+            <BookOpen aria-hidden />
             <span>{ru.miniApp.social.postsLabel}</span>
+            <b>{profile.data.post_count}</b>
           </button>
         </div>
         {openPeopleSection ? (
@@ -930,6 +953,10 @@ export function PublicProfileViewerPage() {
       navigate(`/chats?conversation=${encodeURIComponent(conversationId)}`);
     },
   });
+  const viewerIsOwner = useUserStore((state) => Boolean(state.user?.isOwner));
+  // Public rating was dropped from the interface: it added noise and nothing else.
+  // The mechanism stays because the owner's like is what produces the blessing
+  // line, so only the owner keeps a control for it.
   const rate = useMutation({
     mutationFn: (value: -1 | 1) => api.ratePublicProfile(resolvedUserId ?? '', value),
     onSuccess: () =>
@@ -1013,24 +1040,22 @@ export function PublicProfileViewerPage() {
           {profile.data.display_name}
         </SectionTitle>
       </div>
-      <Card className="p-5">
-        <div className="public-profile-header">
+      <Card className="profile-sheet">
+        <div className="profile-hero">
           <ProfileAvatarGallery
             items={avatarItems}
             name={profile.data.display_name}
             className="profile-avatar-large"
             accessVersion={mediaAccessVersion}
           />
-          <div className="public-profile-identity">
-            <strong>
-              {profile.data.display_name}
-              <VerificationBadge
-                kind={profile.data.verification_kind}
-                premium={profile.data.has_premium}
-              />
-            </strong>
-            <ProfileUsernamesLine aliases={aliases} />
-          </div>
+          <strong className="profile-hero-name">
+            {profile.data.display_name}
+            <VerificationBadge
+              kind={profile.data.verification_kind}
+              premium={profile.data.has_premium}
+            />
+          </strong>
+          <ProfileUsernamesLine aliases={aliases} />
           <div className="public-profile-actions-menu">
             <button
               className="icon-button"
@@ -1092,8 +1117,19 @@ export function PublicProfileViewerPage() {
             ) : null}
           </div>
         </div>
-        <div className="profile-bio">
-          <ExpandableText text={profile.data.bio} emptyText={ru.miniApp.social.bioEmpty} />
+        <div className="profile-info-list">
+          <div className="profile-info-row">
+            <span className="profile-info-value">
+              <ExpandableText text={profile.data.bio} emptyText={ru.miniApp.social.bioEmpty} />
+            </span>
+            <small>{ru.miniApp.social.aboutLabel}</small>
+          </div>
+          {aliases.length ? (
+            <div className="profile-info-row">
+              <span className="profile-info-value profile-info-username">@{aliases[0]}</span>
+              <small>{ru.miniApp.social.usernameLabel}</small>
+            </div>
+          ) : null}
         </div>
         {contentAccess && featuredAudio.length ? (
           <SwipePlaylist
@@ -1201,22 +1237,17 @@ export function PublicProfileViewerPage() {
             )}
             {profile.data.is_following ? ru.miniApp.social.unfollow : ru.miniApp.social.follow}
           </Button>
-          <Button
-            variant={profile.data.own_rating === 1 ? 'primary' : 'secondary'}
-            disabled={!contentAccess}
-            loading={rate.isPending}
-            onClick={() => rate.mutate(1)}
-          >
-            <Heart className="h-4 w-4" /> {profile.data.rating_likes}
-          </Button>
-          <Button
-            variant={profile.data.own_rating === -1 ? 'danger' : 'secondary'}
-            disabled={!contentAccess}
-            loading={rate.isPending}
-            onClick={() => rate.mutate(-1)}
-          >
-            <ThumbsDown className="h-4 w-4" /> {profile.data.rating_dislikes}
-          </Button>
+          {viewerIsOwner ? (
+            <Button
+              variant={profile.data.own_rating === 1 ? 'primary' : 'secondary'}
+              loading={rate.isPending}
+              aria-label={ru.miniApp.social.ownerBlessAction}
+              title={ru.miniApp.social.ownerBlessAction}
+              onClick={() => rate.mutate(1)}
+            >
+              <Heart className="h-4 w-4" />
+            </Button>
+          ) : null}
         </div>
         {reportSent ? (
           <p className="mt-3 text-sm text-emerald-400">{ru.miniApp.social.reportSent}</p>

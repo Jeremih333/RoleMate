@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import type { QueryClient } from '@tanstack/react-query';
 import {
   Ban,
   ChevronDown,
@@ -60,6 +61,15 @@ import { getTelegram } from '../telegram.js';
 import { useViewerTime } from '../components/viewer-time.js';
 import { ProfileCard } from './search.js';
 import { Link, useLocation, useRoute } from 'wouter';
+
+const POST_LIST_KEYS = new Set(['posts', 'own-posts', 'public-profile-posts']);
+
+/** Post lists live under several query keys; a change to one post must refresh them all. */
+function invalidatePostLists(queryClient: QueryClient) {
+  void queryClient.invalidateQueries({
+    predicate: (query) => POST_LIST_KEYS.has(String(query.queryKey[0])),
+  });
+}
 
 function formatMetric(value: number | undefined, exact: boolean): string {
   const count = Math.max(0, Number(value ?? 0));
@@ -921,7 +931,7 @@ export function PublicProfileViewerPage() {
       setBlockConfirmOpen(false);
       void refreshProfile();
       void queryClient.invalidateQueries({ queryKey: ['conversations'] });
-      void queryClient.invalidateQueries({ queryKey: ['posts'] });
+      invalidatePostLists(queryClient);
       void queryClient.invalidateQueries({ queryKey: ['search'] });
     },
   });
@@ -1345,9 +1355,20 @@ export function QuestionnairesPage() {
                   {questionnaire.short_headline}
                 </p>
               </div>
-              {questionnaire.is_primary ? (
-                <span className="status-pill">{ru.miniApp.social.primaryQuestionnaire}</span>
-              ) : null}
+              <div className="questionnaire-own-badges">
+                {questionnaire.is_primary ? (
+                  <span className="status-pill">{ru.miniApp.social.primaryQuestionnaire}</span>
+                ) : null}
+                <span
+                  className={`status-pill questionnaire-state-pill${
+                    questionnaire.is_active ? ' is-live' : ' is-hidden'
+                  }`}
+                >
+                  {questionnaire.is_active
+                    ? ru.miniApp.social.questionnaireLive
+                    : ru.miniApp.social.questionnaireHidden}
+                </span>
+              </div>
             </div>
             <div className="mt-4 flex flex-wrap items-center gap-2">
               <a
@@ -1373,20 +1394,25 @@ export function QuestionnairesPage() {
                 <Eye className="h-4 w-4" />
               </Button>
               <Button
-                className="questionnaire-icon-action"
+                className="questionnaire-state-action"
                 variant={questionnaire.is_active ? 'danger' : 'secondary'}
                 loading={setActive.isPending}
-                aria-label={
-                  questionnaire.is_active ? ru.miniApp.social.disable : ru.miniApp.social.enable
-                }
+                aria-pressed={Boolean(questionnaire.is_active)}
                 title={
-                  questionnaire.is_active ? ru.miniApp.social.disable : ru.miniApp.social.enable
+                  questionnaire.is_active
+                    ? ru.miniApp.social.disableQuestionnaire
+                    : ru.miniApp.social.enableQuestionnaire
                 }
                 onClick={() =>
                   setActive.mutate({ id: questionnaire.id, active: !questionnaire.is_active })
                 }
               >
                 <Power className="h-4 w-4" />
+                <span>
+                  {questionnaire.is_active
+                    ? ru.miniApp.social.disableQuestionnaire
+                    : ru.miniApp.social.enableQuestionnaire}
+                </span>
               </Button>
               {data.premium && !questionnaire.is_primary ? (
                 <Button
@@ -1581,13 +1607,13 @@ export function PostCard({
       post.is_following
         ? api.unfollowProfile(post.author_user_id)
         : api.followProfile(post.author_user_id),
-    onSuccess: () => void queryClient.invalidateQueries({ queryKey: ['posts'] }),
+    onSuccess: () => invalidatePostLists(queryClient),
   });
   const hidePost = useMutation({
     mutationFn: () => api.hidePost(post.id),
     onSuccess: () => {
       setPostMenuOpen(false);
-      void queryClient.invalidateQueries({ queryKey: ['posts'] });
+      invalidatePostLists(queryClient);
     },
   });
   const rate = useMutation({
@@ -1609,7 +1635,7 @@ export function PostCard({
     onSuccess: (result) => {
       setRatingPreview((current) => ({ ...current, ownRating: result.value }));
     },
-    onSettled: () => void queryClient.invalidateQueries({ queryKey: ['posts'] }),
+    onSettled: () => invalidatePostLists(queryClient),
   });
   const sharePost = useMutation({
     mutationFn: ({ conversationIds, caption }: { conversationIds: string[]; caption?: string }) =>
@@ -1621,7 +1647,7 @@ export function PostCard({
       }),
     onSuccess: () => {
       setShareOpen(false);
-      void queryClient.invalidateQueries({ queryKey: ['posts'] });
+      invalidatePostLists(queryClient);
     },
   });
   const sharePlaylist = useMutation({
@@ -1635,7 +1661,7 @@ export function PostCard({
       }),
     onSuccess: () => {
       setPlaylistShareTrackIds([]);
-      void queryClient.invalidateQueries({ queryKey: ['posts'] });
+      invalidatePostLists(queryClient);
     },
   });
   const comment = useMutation({
@@ -1644,7 +1670,7 @@ export function PostCard({
       setBody('');
       setReplyTo(null);
       void queryClient.invalidateQueries({ queryKey: ['post-comments', post.id] });
-      void queryClient.invalidateQueries({ queryKey: ['posts'] });
+      invalidatePostLists(queryClient);
     },
   });
   const rateComment = useMutation({
@@ -1660,7 +1686,7 @@ export function PostCard({
       setEditingCommentId(null);
       setEditingCommentBody('');
       void queryClient.invalidateQueries({ queryKey: ['post-comments', post.id] });
-      void queryClient.invalidateQueries({ queryKey: ['posts'] });
+      invalidatePostLists(queryClient);
     },
   });
   const deleteComment = useMutation({
@@ -1668,7 +1694,7 @@ export function PostCard({
       api.adminDeleteComment(commentId, reason),
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: ['post-comments', post.id] });
-      void queryClient.invalidateQueries({ queryKey: ['posts'] });
+      invalidatePostLists(queryClient);
     },
   });
   const deleteOwnComment = useMutation({
@@ -1676,7 +1702,7 @@ export function PostCard({
     onSuccess: () => {
       setOwnCommentToDelete(null);
       void queryClient.invalidateQueries({ queryKey: ['post-comments', post.id] });
-      void queryClient.invalidateQueries({ queryKey: ['posts'] });
+      invalidatePostLists(queryClient);
     },
   });
   const report = useMutation({
@@ -1704,7 +1730,7 @@ export function PostCard({
     onSuccess: () => {
       setSettingsOpen(false);
       void queryClient.invalidateQueries({ queryKey: ['own-posts'] });
-      void queryClient.invalidateQueries({ queryKey: ['posts'] });
+      invalidatePostLists(queryClient);
     },
   });
   const removeMedia = useMutation({
@@ -1713,14 +1739,14 @@ export function PostCard({
       setPostMediaToDelete(null);
       setMediaIndex(0);
       void queryClient.invalidateQueries({ queryKey: ['own-posts'] });
-      void queryClient.invalidateQueries({ queryKey: ['posts'] });
+      invalidatePostLists(queryClient);
     },
   });
   const deletePost = useMutation({
     mutationFn: () => api.deleteOwnPost(post.id),
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: ['own-posts'] });
-      void queryClient.invalidateQueries({ queryKey: ['posts'] });
+      invalidatePostLists(queryClient);
     },
   });
   const moderatePost = useMutation({
@@ -1738,7 +1764,7 @@ export function PostCard({
       ),
     onSuccess: () => {
       setModerationOpen(false);
-      void queryClient.invalidateQueries({ queryKey: ['posts'] });
+      invalidatePostLists(queryClient);
     },
   });
   const addMedia = () => {
@@ -2876,6 +2902,9 @@ export function PostCard({
                   </strong>
                 </Link>
               ))}
+              {!engagement.isLoading && !engagement.data?.length ? (
+                <p className="post-engagement-empty">{ru.miniApp.social.engagementEmpty}</p>
+              ) : null}
             </div>
           </Card>
         </div>

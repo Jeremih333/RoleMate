@@ -92,27 +92,33 @@ export function HomePage() {
           {ru.miniApp.home.today}
         </SectionTitle>
         <div className="stats-grid">
-          <Card>
-            <span className="stat-icon">
-              <Heart />
-            </span>
-            <strong>{incomingLikes.data?.length ?? 0}</strong>
-            <small>{ru.miniApp.home.newLikes}</small>
-          </Card>
-          <Card>
-            <span className="stat-icon">
-              <MessageCircle />
-            </span>
-            <strong>{activeChats ?? 0}</strong>
-            <small>{ru.miniApp.home.activeChats}</small>
-          </Card>
-          <Card>
-            <span className="stat-icon">
-              <Users />
-            </span>
-            <strong>{Number(referrals.data?.qualified ?? 0)}</strong>
-            <small>{ru.miniApp.home.referredFriends}</small>
-          </Card>
+          <Link className="stat-link" href="/matches">
+            <Card>
+              <span className="stat-icon">
+                <Heart />
+              </span>
+              <strong>{incomingLikes.data?.length ?? 0}</strong>
+              <small>{ru.miniApp.home.newLikes}</small>
+            </Card>
+          </Link>
+          <Link className="stat-link" href="/chats">
+            <Card>
+              <span className="stat-icon">
+                <MessageCircle />
+              </span>
+              <strong>{activeChats ?? 0}</strong>
+              <small>{ru.miniApp.home.activeChats}</small>
+            </Card>
+          </Link>
+          <Link className="stat-link" href="/referrals">
+            <Card>
+              <span className="stat-icon">
+                <Users />
+              </span>
+              <strong>{Number(referrals.data?.qualified ?? 0)}</strong>
+              <small>{ru.miniApp.home.referredFriends}</small>
+            </Card>
+          </Link>
         </div>
       </section>
 

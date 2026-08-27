@@ -1429,6 +1429,7 @@ export interface UserSettings {
   hide_forward_author: number;
   quick_reaction: string;
   theme: 'telegram' | 'light' | 'dark';
+  search_enabled: number;
 }
 
 export interface SettingsInput {

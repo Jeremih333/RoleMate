@@ -3209,7 +3209,15 @@ export function SettingsPage() {
       void queryClient.invalidateQueries({ queryKey: ['public-profile'] });
     },
   });
-  const searchState = useMutation({ mutationFn: api.setSearchEnabled });
+  const searchState = useMutation({
+    mutationFn: api.setSearchEnabled,
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ['settings'] });
+    },
+  });
+  const searchEnabled = searchState.isPending
+    ? Boolean(searchState.variables)
+    : Boolean(settings.data?.search_enabled);
   const deleteAccount = useMutation({ mutationFn: api.deleteAccount });
   useEffect(() => {
     if (!settings.data) return;
@@ -3505,14 +3513,42 @@ export function SettingsPage() {
               <p>{ru.miniApp.community.searchSettingsDescription}</p>
             </div>
           </header>
-          <div className="settings-inline-actions">
-            <Button variant="secondary" onClick={() => searchState.mutate(false)}>
-              {ru.miniApp.community.pauseSearch}
-            </Button>
-            <Button variant="secondary" onClick={() => searchState.mutate(true)}>
-              {ru.miniApp.community.resumeSearch}
-            </Button>
+          <div
+            className={`search-state-banner${searchEnabled ? ' is-live' : ' is-paused'}`}
+            role="status"
+          >
+            <span className="search-state-dot" aria-hidden />
+            <span>
+              {searchEnabled
+                ? ru.miniApp.community.searchStateActive
+                : ru.miniApp.community.searchStatePaused}
+            </span>
           </div>
+          <div className="settings-segmented" role="group">
+            <button
+              type="button"
+              className={`settings-segment${searchEnabled ? '' : ' is-selected'}`}
+              aria-pressed={!searchEnabled}
+              disabled={searchState.isPending}
+              onClick={() => searchState.mutate(false)}
+            >
+              {ru.miniApp.community.pauseSearch}
+            </button>
+            <button
+              type="button"
+              className={`settings-segment${searchEnabled ? ' is-selected' : ''}`}
+              aria-pressed={searchEnabled}
+              disabled={searchState.isPending}
+              onClick={() => searchState.mutate(true)}
+            >
+              {ru.miniApp.community.resumeSearch}
+            </button>
+          </div>
+          {searchState.isError ? (
+            <p className="settings-hint settings-hint-error">
+              {ru.miniApp.community.searchStateFailed}
+            </p>
+          ) : null}
         </Card>
       </div>
       <div className="settings-save-bar">

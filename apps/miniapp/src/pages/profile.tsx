@@ -897,6 +897,22 @@ export function ProfileEditorPage() {
     });
     setLanguageDraft('');
   };
+  const activeHoursValue = form.watch('activeHours') ?? '';
+  const [activeHoursCustom, setActiveHoursCustom] = useState(false);
+  const activeHoursIsCustom =
+    activeHoursCustom ||
+    (activeHoursValue.length > 0 &&
+      !ru.miniApp.profile.activeHoursOptions.some((option) => option === activeHoursValue));
+  const languageQuery = languageDraft.trim().toLocaleLowerCase('ru-RU');
+  const languageSuggestions = ru.miniApp.profile.languageOptions
+    .filter(([value]) => !selectedLanguages.includes(value))
+    .filter(([value, label]) =>
+      languageQuery
+        ? label.toLocaleLowerCase('ru-RU').includes(languageQuery) ||
+          value.toLocaleLowerCase('ru-RU').includes(languageQuery)
+        : true,
+    )
+    .slice(0, 24);
   useEffect(() => {
     if (isMinor) form.setValue('adultTopicsAllowed', false);
   }, [form, isMinor]);
@@ -1100,7 +1116,6 @@ export function ProfileEditorPage() {
             </div>
             <input
               className="tag-input-control"
-              list="profile-language-options"
               value={languageDraft}
               placeholder={ru.miniApp.profile.languageInputPlaceholder}
               onChange={(event) => {
@@ -1115,14 +1130,16 @@ export function ProfileEditorPage() {
                 addLanguages(languageDraft);
               }}
             />
-            <datalist id="profile-language-options">
-              {ru.miniApp.profile.languageOptions
-                .filter(([value]) => !selectedLanguages.includes(value))
-                .map(([value, label]) => (
-                  <option key={value} value={label} />
-                ))}
-            </datalist>
           </div>
+          {languageSuggestions.length ? (
+            <SuggestionRail>
+              {languageSuggestions.map(([value, label]) => (
+                <button key={value} type="button" onClick={() => addLanguages(value)}>
+                  + {label}
+                </button>
+              ))}
+            </SuggestionRail>
+          ) : null}
           <p className="mt-2 text-xs text-muted">{ru.miniApp.profile.languageInputHint}</p>
           <small>{validationMessage(form.formState.errors.languages?.message)}</small>
         </label>
@@ -1139,7 +1156,33 @@ export function ProfileEditorPage() {
         </label>
         <label>
           <span>{ru.miniApp.profile.activeHours}</span>
-          <input className={field} {...form.register('activeHours')} />
+          <select
+            className={field}
+            value={activeHoursIsCustom ? '__custom__' : activeHoursValue}
+            onChange={(event) => {
+              const next = event.target.value;
+              if (next === '__custom__') {
+                setActiveHoursCustom(true);
+                return;
+              }
+              setActiveHoursCustom(false);
+              form.setValue('activeHours', next, { shouldDirty: true, shouldValidate: true });
+            }}
+          >
+            {ru.miniApp.profile.activeHoursOptions.map((option) => (
+              <option key={option} value={option}>
+                {option}
+              </option>
+            ))}
+            <option value="__custom__">{ru.miniApp.profile.activeHoursCustom}</option>
+          </select>
+          {activeHoursIsCustom ? (
+            <input
+              className={`${field} mt-2`}
+              placeholder={ru.miniApp.profile.activeHoursCustomPlaceholder}
+              {...form.register('activeHours')}
+            />
+          ) : null}
         </label>
         <label>
           <span>{ru.miniApp.profile.fandoms}</span>

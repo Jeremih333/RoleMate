@@ -785,12 +785,19 @@ const handlers: { [K in WorkerOperation]: Handler<K> } = {
       .bind(input.userId)
       .first();
     if (!settings) throw new ApiError(404, 'SETTINGS_NOT_FOUND', 'Settings not found');
+    const searchRow = await env.DB.prepare(
+      'SELECT is_search_enabled FROM users WHERE id = ?1 AND deleted_at IS NULL',
+    )
+      .bind(input.userId)
+      .first<{ is_search_enabled: number }>();
+    const search_enabled = searchRow?.is_search_enabled ? 1 : 0;
     const premium = Boolean(await premiumEnd(env, input.userId));
     return premium
-      ? { ...settings, premium }
+      ? { ...settings, premium, search_enabled }
       : {
           ...settings,
           premium,
+          search_enabled,
           show_online_status: 1,
           show_premium_badge: 1,
           hide_demographics: 0,

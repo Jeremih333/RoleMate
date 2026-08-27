@@ -413,13 +413,6 @@ export function ProfileCard({
             </a>
           ))}
           <div className="metric-row mt-4 text-xs text-muted">
-            <strong className="text-soft">{ru.miniApp.search.rating}:</strong>
-            <span>
-              👍 {formatMetric(profile.rating_likes, expanded)} {ru.miniApp.search.likes}
-            </span>
-            <span>
-              👎 {formatMetric(profile.rating_dislikes, expanded)} {ru.miniApp.search.dislikes}
-            </span>
             <span
               className="status-pill metric-pill"
               title={formatMetric(Number(profile.view_count ?? 0) + viewDelta, true)}

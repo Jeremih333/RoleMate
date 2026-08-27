@@ -3,6 +3,7 @@ import { ru, type MenuLaunchRoute, type ProfileInput } from '@rolemate/shared';
 const API_BASE = '/api';
 
 let csrfToken = sessionStorage.getItem('rm_csrf') ?? '';
+let csrfRefresh: Promise<string> | null = null;
 
 export class ApiError extends Error {
   constructor(
@@ -14,7 +15,40 @@ export class ApiError extends Error {
   }
 }
 
-async function request<T>(path: string, options: RequestInit & { body?: string } = {}): Promise<T> {
+type ApiErrorPayload = { error?: string; message?: string };
+
+async function renewCsrfToken(): Promise<string> {
+  if (csrfRefresh) return csrfRefresh;
+  csrfRefresh = (async () => {
+    const response = await fetch(`${API_BASE}/auth/session`, {
+      method: 'POST',
+      body: '{}',
+      credentials: 'include',
+      headers: { 'Content-Type': 'application/json' },
+    });
+    if (!response.ok) {
+      const body = (await response.json().catch(() => ({}))) as ApiErrorPayload;
+      throw new ApiError(
+        response.status,
+        body.error ?? 'REQUEST_FAILED',
+        body.message ?? ru.api.requestFailed,
+      );
+    }
+    const result: { csrfToken: string } = await response.json();
+    csrfToken = result.csrfToken;
+    sessionStorage.setItem('rm_csrf', csrfToken);
+    return csrfToken;
+  })().finally(() => {
+    csrfRefresh = null;
+  });
+  return csrfRefresh;
+}
+
+async function request<T>(
+  path: string,
+  options: RequestInit & { body?: string } = {},
+  allowCsrfRecovery = true,
+): Promise<T> {
   const method = options.method ?? 'GET';
   const response = await fetch(`${API_BASE}${path}`, {
     ...options,
@@ -26,10 +60,16 @@ async function request<T>(path: string, options: RequestInit & { body?: string }
     },
   });
   if (!response.ok) {
-    const body = (await response.json().catch(() => ({}))) as {
-      error?: string;
-      message?: string;
-    };
+    const body = (await response.json().catch(() => ({}))) as ApiErrorPayload;
+    if (
+      allowCsrfRecovery &&
+      method !== 'GET' &&
+      path !== '/auth/session' &&
+      body.error === 'INVALID_CSRF'
+    ) {
+      await renewCsrfToken();
+      return request<T>(path, options, false);
+    }
     throw new ApiError(
       response.status,
       body.error ?? 'REQUEST_FAILED',
@@ -38,6 +78,57 @@ async function request<T>(path: string, options: RequestInit & { body?: string }
   }
   const payload: unknown = await response.json();
   return payload as T;
+}
+
+async function uploadJsonWithProgress<T>(
+  path: string,
+  body: string,
+  onProgress: (percent: number) => void,
+  allowCsrfRecovery = true,
+): Promise<T> {
+  const result = await new Promise<
+    { ok: true; value: T } | { ok: false; status: number; error: string; message: string }
+  >((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+    xhr.open('POST', `${API_BASE}${path}`);
+    xhr.withCredentials = true;
+    xhr.timeout = 120_000;
+    xhr.setRequestHeader('Content-Type', 'application/json');
+    if (csrfToken) xhr.setRequestHeader('X-CSRF-Token', csrfToken);
+    xhr.upload.onprogress = (event) => {
+      if (!event.lengthComputable || event.total <= 0) return;
+      onProgress(Math.min(99, Math.max(1, Math.round((event.loaded / event.total) * 100))));
+    };
+    xhr.onerror = () => reject(new ApiError(0, 'REQUEST_FAILED', ru.api.requestFailed));
+    xhr.ontimeout = () => reject(new ApiError(408, 'REQUEST_TIMEOUT', ru.api.requestFailed));
+    xhr.onload = () => {
+      let payload: unknown;
+      try {
+        payload = xhr.responseText ? (JSON.parse(xhr.responseText) as unknown) : {};
+      } catch {
+        payload = {};
+      }
+      if (xhr.status >= 200 && xhr.status < 300) {
+        onProgress(100);
+        resolve({ ok: true, value: payload as T });
+        return;
+      }
+      const errorPayload = payload as ApiErrorPayload;
+      resolve({
+        ok: false,
+        status: xhr.status,
+        error: errorPayload.error ?? 'REQUEST_FAILED',
+        message: errorPayload.message ?? ru.api.requestFailed,
+      });
+    };
+    xhr.send(body);
+  });
+  if (result.ok) return result.value;
+  if (allowCsrfRecovery && result.error === 'INVALID_CSRF') {
+    await renewCsrfToken();
+    return uploadJsonWithProgress<T>(path, body, onProgress, false);
+  }
+  throw new ApiError(result.status, result.error, result.message);
 }
 
 export const api = {
@@ -89,25 +180,54 @@ export const api = {
       method: 'PUT',
       body: '{}',
     }),
+  dismissNotification: (notificationId: string) =>
+    request<{ dismissed: boolean }>(`/notifications/${notificationId}`, { method: 'DELETE' }),
+  dismissAllNotifications: () =>
+    request<{ dismissed: number }>('/notifications', { method: 'DELETE' }),
   resolveMentions: (usernames: string[]) =>
     request<Array<{ username: string; user_id: string }>>(
       `/mentions/resolve?usernames=${encodeURIComponent(usernames.join(','))}`,
     ),
   profile: () => request<UserProfileSummary>('/profile'),
   publicProfile: () => request<PublicUserProfile>('/public-profile'),
-  publicProfileByUsername: (username: string) =>
-    request<PublicUserProfile>(`/profiles/by-username/${encodeURIComponent(username)}`),
+  publicProfileByUsername: (username: string) => {
+    let decodedUsername = username;
+    try {
+      decodedUsername = decodeURIComponent(username);
+    } catch {
+      // The route can already contain a decoded username.
+    }
+    return request<PublicUserProfile>(
+      `/profiles/by-username/${encodeURIComponent(decodedUsername.toLowerCase())}`,
+    );
+  },
   publicProfileByUserId: (userId: string) =>
     request<PublicUserProfile>(`/users/${encodeURIComponent(userId)}/profile`),
   publicQuestionnaires: (userId: string) =>
     request<SearchProfile[]>(`/users/${encodeURIComponent(userId)}/questionnaires?limit=5`),
   publicPosts: (userId: string) =>
     request<SocialPost[]>(`/users/${encodeURIComponent(userId)}/posts?limit=30`),
-  ratePublicProfile: (userId: string, value: -1 | 1) =>
-    request<{ saved: true }>(`/users/${encodeURIComponent(userId)}/profile/rating`, {
-      method: 'PUT',
-      body: JSON.stringify({ value }),
+  followProfile: (userId: string) =>
+    request<{ following: boolean }>(`/users/${encodeURIComponent(userId)}/follow`, {
+      method: 'POST',
+      body: '{}',
     }),
+  unfollowProfile: (userId: string) =>
+    request<{ following: boolean }>(`/users/${encodeURIComponent(userId)}/follow`, {
+      method: 'DELETE',
+    }),
+  profileFollowers: (userId: string) =>
+    request<PublicUserProfile[]>(`/users/${encodeURIComponent(userId)}/followers`),
+  profileFollowing: (userId: string) =>
+    request<PublicUserProfile[]>(`/users/${encodeURIComponent(userId)}/following`),
+  ratePublicProfile: (userId: string, value: -1 | 1) =>
+    request<{ saved: true; removed: boolean }>(
+      `/users/${encodeURIComponent(userId)}/profile/rating`,
+      {
+        method: 'PUT',
+        body: JSON.stringify({ value }),
+      },
+    ),
   publicProfileUsernames: () => request<ProfileUsername[]>('/public-profile/usernames'),
   claimPublicProfileUsername: (username: string) =>
     request<{ claimed: true; username: string }>('/public-profile/usernames', {
@@ -118,14 +238,32 @@ export const api = {
     request<{ released: true }>(`/public-profile/usernames/${encodeURIComponent(username)}`, {
       method: 'DELETE',
     }),
-  savePublicProfile: (input: { displayName: string; bio: string; avatarMediaId: string | null }) =>
+  savePublicProfile: (input: {
+    displayName: string;
+    bio: string;
+    avatarMediaIds: string[];
+    visibilityMode: 'public' | 'following_only';
+    showFollowers: boolean;
+    showFollowing: boolean;
+    showQuestionnaires: boolean;
+    showPosts: boolean;
+    showLastSeen: boolean;
+    directMessagePolicy: 'everyone' | 'following_and_staff';
+  }) =>
     request<{ updated: true }>('/public-profile', {
+      method: 'PUT',
+      body: JSON.stringify(input),
+    }),
+  savePublicProfilePrivacy: (input: PublicProfilePrivacyInput) =>
+    request<{ updated: true }>('/public-profile/privacy', {
       method: 'PUT',
       body: JSON.stringify(input),
     }),
   questionnaires: () => request<QuestionnaireCollection>('/questionnaires'),
   questionnaire: (questionnaireId: string) =>
     request<QuestionnaireSummary>(`/questionnaires/${questionnaireId}`),
+  questionnairePreview: (questionnaireId: string) =>
+    request<SearchProfile>(`/questionnaires/${questionnaireId}/preview`),
   saveQuestionnaire: (questionnaireId: string, title: string, profile: ProfileInput) =>
     request<{ updated: true }>(`/questionnaires/${questionnaireId}`, {
       method: 'PUT',
@@ -136,11 +274,20 @@ export const api = {
       method: 'POST',
       body: JSON.stringify({ title }),
     }),
+  deleteQuestionnaire: (questionnaireId: string) =>
+    request<{ deleted: true }>(`/questionnaires/${questionnaireId}`, {
+      method: 'DELETE',
+    }),
   setQuestionnaireActive: (questionnaireId: string, active: boolean) =>
     request<{ active: boolean }>(`/questionnaires/${questionnaireId}/state`, {
       method: 'PUT',
       body: JSON.stringify({ active }),
     }),
+  setPrimaryQuestionnaire: (questionnaireId: string) =>
+    request<{ primary: true; questionnaireId: string }>(
+      `/questionnaires/${questionnaireId}/primary`,
+      { method: 'PUT', body: '{}' },
+    ),
   profilePreview: () => request<SearchProfile>('/profile/preview'),
   saveProfile: (profile: ProfileInput) =>
     request<{ profileId: string; moderationStatus: string; completion: number }>('/profile', {
@@ -160,6 +307,25 @@ export const api = {
       method: 'PUT',
       body: JSON.stringify({ mediaIds }),
     }),
+  reorderProfileAudio: (mediaIds: string[]) =>
+    request<{ reordered: true; mediaIds: string[] }>('/profile/audio/order', {
+      method: 'PUT',
+      body: JSON.stringify({ mediaIds }),
+    }),
+  questionnaireMedia: (questionnaireId: string) =>
+    request<ProfileMedia[]>(`/questionnaires/${questionnaireId}/media`),
+  deleteQuestionnaireMedia: (questionnaireId: string, mediaId: string) =>
+    request<{ deleted: true }>(`/questionnaires/${questionnaireId}/media/${mediaId}`, {
+      method: 'DELETE',
+    }),
+  reorderQuestionnaireMedia: (questionnaireId: string, mediaIds: string[]) =>
+    request<{ reordered: true; mediaIds: string[] }>(
+      `/questionnaires/${questionnaireId}/media/order`,
+      {
+        method: 'PUT',
+        body: JSON.stringify({ mediaIds }),
+      },
+    ),
   setProfileAvatar: (mediaId: string | null) =>
     request<{ avatarMediaId: string | null; renderMode: 'photo' | 'animation' | null }>(
       '/profile/avatar',
@@ -168,12 +334,47 @@ export const api = {
         body: JSON.stringify({ mediaId }),
       },
     ),
-  search: (query = '') =>
-    request<SearchProfile[]>(`/search?limit=20&q=${encodeURIComponent(query)}`),
+  search: (query = '', cursor = 0) =>
+    request<SearchProfile[]>(
+      `/search?limit=20&q=${encodeURIComponent(query)}&cursor=${encodeURIComponent(String(cursor))}`,
+    ),
   searchPublicProfiles: (query = '') =>
     request<PublicUserProfile[]>(`/search/profiles?limit=20&q=${encodeURIComponent(query)}`),
   searchAvailability: () => request<SearchAvailability>('/search/availability'),
   searchPreferences: () => request<SearchPreferences>('/search/preferences'),
+  taxonomySuggestions: (
+    kind:
+      | 'language'
+      | 'fandom'
+      | 'genre'
+      | 'tag'
+      | 'hashtag'
+      | 'plot'
+      | 'setting'
+      | 'looking_for'
+      | 'boundary',
+    query = '',
+  ) =>
+    request<Array<{ value: string; usage_count: number }>>(
+      `/taxonomy/suggestions?kind=${encodeURIComponent(kind)}&q=${encodeURIComponent(query)}&limit=12`,
+    ),
+  recordTaxonomySelection: (
+    kind:
+      | 'language'
+      | 'fandom'
+      | 'genre'
+      | 'tag'
+      | 'hashtag'
+      | 'plot'
+      | 'setting'
+      | 'looking_for'
+      | 'boundary',
+    value: string,
+  ) =>
+    request<{ recorded: boolean; usage_count: number }>('/taxonomy/selections', {
+      method: 'POST',
+      body: JSON.stringify({ kind, value }),
+    }),
   saveSearchPreferences: (preferences: SearchPreferencesInput) =>
     request<{ updated: true }>('/search/preferences', {
       method: 'PUT',
@@ -197,18 +398,30 @@ export const api = {
     action: 'like' | 'skip' | 'super_like' | 'rewind',
     questionnaireId?: string,
   ) =>
-    request<{ matched: boolean; matchId?: string }>('/swipes', {
-      method: 'POST',
-      body: JSON.stringify({ targetUserId, action, questionnaireId }),
-    }),
+    request<{ created: boolean; matched: boolean; matchId?: string; alreadySent?: boolean }>(
+      '/swipes',
+      {
+        method: 'POST',
+        body: JSON.stringify({ targetUserId, action, questionnaireId }),
+      },
+    ),
   rewind: () =>
     request<{ rewound: true; targetUserId: string }>('/swipes/rewind', {
       method: 'POST',
       body: '{}',
     }),
   incomingLikes: () => request<IncomingLike[]>('/swipes/incoming'),
-  posts: () => request<SocialPost[]>('/posts?limit=30'),
+  posts: (sort: 'interesting' | 'new' = 'interesting', followingOnly = false) =>
+    request<SocialPost[]>(
+      `/posts?limit=30&sort=${encodeURIComponent(sort)}&followingOnly=${String(followingOnly)}`,
+    ),
+  post: (postId: string) => request<SocialPost>(`/posts/${encodeURIComponent(postId)}`),
   ownPosts: () => request<SocialPost[]>('/posts/own?limit=30'),
+  repostPost: (postId: string) =>
+    request<{ reposted: true; postId: string }>(`/posts/${postId}/repost`, {
+      method: 'POST',
+      body: '{}',
+    }),
   updateOwnPost: (
     postId: string,
     input: {
@@ -217,19 +430,35 @@ export const api = {
       tags: string[];
       fandoms: string[];
       hashtags: string[];
+      playlistTitle?: string | null;
     },
   ) =>
     request<{ updated: true }>(`/posts/${postId}`, {
       method: 'PUT',
       body: JSON.stringify(input),
     }),
-  removeOwnPostMedia: (postId: string) =>
-    request<{ removed: true }>(`/posts/${postId}/media`, { method: 'DELETE' }),
-  postComments: (postId: string) => request<PostComment[]>(`/posts/${postId}/comments`),
+  removeOwnPostMedia: (postId: string, mediaId?: string) =>
+    request<{ removed: true }>(
+      mediaId ? `/posts/${postId}/media/${mediaId}` : `/posts/${postId}/media`,
+      { method: 'DELETE' },
+    ),
+  deleteOwnPost: (postId: string) =>
+    request<{ deleted: true }>(`/posts/${postId}`, { method: 'DELETE' }),
+  postComments: (postId: string, sort: 'interesting' | 'new' = 'interesting') =>
+    request<PostComment[]>(`/posts/${postId}/comments?sort=${encodeURIComponent(sort)}`),
   addPostComment: (postId: string, body: string, parentCommentId?: string) =>
     request<{ id: string; created: true }>(`/posts/${postId}/comments`, {
       method: 'POST',
       body: JSON.stringify({ body, ...(parentCommentId ? { parentCommentId } : {}) }),
+    }),
+  updatePostComment: (commentId: string, body: string) =>
+    request<{ updated: true; postId: string }>(`/comments/${commentId}`, {
+      method: 'PUT',
+      body: JSON.stringify({ body }),
+    }),
+  deleteOwnPostComment: (commentId: string) =>
+    request<{ deleted: true; postId: string }>(`/comments/${commentId}`, {
+      method: 'DELETE',
     }),
   ratePostComment: (commentId: string, value: -1 | 1) =>
     request<{ saved: true }>(`/comments/${commentId}/rating`, {
@@ -237,9 +466,28 @@ export const api = {
       body: JSON.stringify({ value }),
     }),
   ratePost: (postId: string, value: -1 | 1) =>
-    request<{ saved: true }>(`/posts/${postId}/rating`, {
+    request<{ saved: true; value: -1 | 1 | null }>(`/posts/${postId}/rating`, {
       method: 'PUT',
       body: JSON.stringify({ value }),
+    }),
+  recordPostView: (postId: string) =>
+    request<{ recorded: boolean }>(`/posts/${postId}/view`, {
+      method: 'POST',
+      body: '{}',
+    }),
+  postEngagement: (postId: string, kind: 'ratings' | 'shares') =>
+    request<PostEngagementUser[]>(
+      `/posts/${encodeURIComponent(postId)}/engagement?kind=${encodeURIComponent(kind)}`,
+    ),
+  hidePost: (postId: string) =>
+    request<{ hidden: true }>(`/posts/${encodeURIComponent(postId)}/hide`, {
+      method: 'POST',
+      body: '{}',
+    }),
+  recordQuestionnaireView: (questionnaireId: string) =>
+    request<{ recorded: boolean }>(`/questionnaires/${questionnaireId}/view`, {
+      method: 'POST',
+      body: '{}',
     }),
   premiumStatus: () => request<PremiumStatus>('/premium/status'),
   applyPromotion: (code: string) =>
@@ -272,16 +520,112 @@ export const api = {
     }),
   deleteProfileVariant: (variantId: string) =>
     request<{ deleted: true }>(`/premium/profile-variants/${variantId}`, { method: 'DELETE' }),
-  conversations: () => request<Conversation[]>('/conversations'),
+  conversations: (archived = false) =>
+    request<Conversation[]>(archived ? '/conversations?archived=1' : '/conversations'),
+  archiveConversation: (conversationId: string, archived: boolean) =>
+    request<{ archived: boolean }>(`/conversations/${conversationId}/archive`, {
+      method: 'PUT',
+      body: JSON.stringify({ archived }),
+    }),
+  pinConversation: (conversationId: string, pinned: boolean) =>
+    request<{ pinned: boolean }>(`/conversations/${conversationId}/pin`, {
+      method: 'PUT',
+      body: JSON.stringify({ pinned }),
+    }),
+  reorderPinnedConversations: (conversationIds: string[]) =>
+    request<{ reordered: true; conversationIds: string[] }>('/conversations/pins/order', {
+      method: 'PUT',
+      body: JSON.stringify({ conversationIds }),
+    }),
+  conversationMessages: (conversationId: string) =>
+    request<ConversationMessage[]>(`/conversations/${conversationId}/messages`),
+  conversationMessage: (conversationId: string, messageId: string) =>
+    request<ConversationMessage>(`/conversations/${conversationId}/messages/${messageId}`),
+  conversationDraft: (conversationId: string) =>
+    request<{ text: string; updatedAt: string | null }>(`/conversations/${conversationId}/draft`),
+  saveConversationDraft: (conversationId: string, text: string) =>
+    request<{ saved?: true; deleted?: true }>(`/conversations/${conversationId}/draft`, {
+      method: 'PUT',
+      body: JSON.stringify({ text }),
+    }),
+  deleteConversationDraft: (conversationId: string) =>
+    request<{ deleted: true }>(`/conversations/${conversationId}/draft`, { method: 'DELETE' }),
+  pinnedConversationMessages: (conversationId: string) =>
+    request<PinnedConversationMessage[]>(`/conversations/${conversationId}/pins`),
+  pinConversationMessage: (
+    conversationId: string,
+    messageId: string,
+    pinned: boolean,
+    sharedWithParticipant = false,
+  ) =>
+    request<{ pinned: boolean; shared: boolean }>(
+      `/conversations/${conversationId}/messages/${messageId}/pin`,
+      {
+        method: 'PUT',
+        body: JSON.stringify({ pinned, sharedWithParticipant }),
+      },
+    ),
+  conversationPresence: (conversationId: string) =>
+    request<{ activity: ChatLiveActivity | null }>(`/conversations/${conversationId}/presence`),
+  setConversationPresence: (conversationId: string, activity: ChatLiveActivity | 'idle') =>
+    request<{ updated: true }>(`/conversations/${conversationId}/presence`, {
+      method: 'PUT',
+      body: JSON.stringify({ activity }),
+    }),
+  deleteConversationMessages: (conversationId: string, messageIds: string[]) =>
+    request<{ deleted: number }>(`/conversations/${conversationId}/messages`, {
+      method: 'DELETE',
+      body: JSON.stringify({ messageIds }),
+    }),
+  forwardConversationMessages: (
+    conversationId: string,
+    messageIds: string[],
+    conversationIds: string[],
+  ) =>
+    request<{ forwarded: number; conversationIds: string[] }>(
+      `/conversations/${conversationId}/messages/forward`,
+      {
+        method: 'POST',
+        body: JSON.stringify({ messageIds, conversationIds }),
+      },
+    ),
+  updateConversationMessageText: (conversationId: string, messageId: string, text: string) =>
+    request<{ updated: true }>(`/conversations/${conversationId}/messages/${messageId}/text`, {
+      method: 'PUT',
+      body: JSON.stringify({ text }),
+    }),
+  reorderConversationMedia: (conversationId: string, mediaGroupId: string, messageIds: string[]) =>
+    request<{ reordered: true }>(
+      `/conversations/${conversationId}/media-groups/${mediaGroupId}/order`,
+      { method: 'PUT', body: JSON.stringify({ messageIds }) },
+    ),
+  replaceConversationMedia: (
+    conversationId: string,
+    messageId: string,
+    input: {
+      kind: ChatMediaKind;
+      fileName: string;
+      mimeType: string;
+      dataBase64: string;
+    },
+  ) =>
+    request<{ replaced: true }>(`/conversations/${conversationId}/messages/${messageId}/media`, {
+      method: 'PUT',
+      body: JSON.stringify(input),
+    }),
+  deleteConversation: (conversationId: string) =>
+    request<{ deleted: true }>(`/conversations/${conversationId}`, {
+      method: 'DELETE',
+    }),
   startDirectConversation: (targetUserId: string) =>
     request<{ conversationId: string }>('/conversations/direct', {
       method: 'POST',
       body: JSON.stringify({ targetUserId }),
     }),
-  sendConversationMessage: (conversationId: string, text: string) =>
-    request<{ sent: true }>(`/conversations/${conversationId}/messages`, {
+  sendConversationMessage: (conversationId: string, text: string, replyToMessageId?: string) =>
+    request<{ sent: true; messageId: string }>(`/conversations/${conversationId}/messages`, {
       method: 'POST',
-      body: JSON.stringify({ text }),
+      body: JSON.stringify({ text, ...(replyToMessageId ? { replyToMessageId } : {}) }),
     }),
   sendConversationMedia: (
     conversationId: string,
@@ -290,51 +634,83 @@ export const api = {
       fileName: string;
       mimeType: string;
       dataBase64: string;
+      mediaGroupId?: string;
+      playlistTitle?: string | null;
+      notifyRecipient?: boolean;
+      replyToMessageId?: string;
+      caption?: string;
+      captionPosition?: 'top' | 'bottom';
     },
+    onProgress?: (percent: number) => void,
+  ) => {
+    const path = `/conversations/${conversationId}/media`;
+    const body = JSON.stringify(input);
+    return onProgress
+      ? uploadJsonWithProgress<{ sent: true; messageType: ChatMediaKind; messageId: string }>(
+          path,
+          body,
+          onProgress,
+        )
+      : request<{ sent: true; messageType: ChatMediaKind; messageId: string }>(path, {
+          method: 'POST',
+          body,
+        });
+  },
+  reactConversationMessage: (conversationId: string, messageId: string, reaction: ChatReaction) =>
+    request<{ reaction: ChatReaction | null }>(
+      `/conversations/${conversationId}/messages/${messageId}/reaction`,
+      { method: 'PUT', body: JSON.stringify({ reaction }) },
+    ),
+  shareConversationProfile: (conversationId: string, replyToMessageId?: string) =>
+    request<{ sent: true; messageId: string }>(`/conversations/${conversationId}/profile-share`, {
+      method: 'POST',
+      body: JSON.stringify(replyToMessageId ? { replyToMessageId } : {}),
+    }),
+  shareConversationScenario: (
+    conversationId: string,
+    variantId: string,
+    replyToMessageId?: string,
   ) =>
-    request<{ sent: true; messageType: ChatMediaKind }>(`/conversations/${conversationId}/media`, {
+    request<{ sent: true; messageId: string }>(`/conversations/${conversationId}/scenario-share`, {
+      method: 'POST',
+      body: JSON.stringify({ variantId, ...(replyToMessageId ? { replyToMessageId } : {}) }),
+    }),
+  shareEntity: (input: {
+    entityType: 'post' | 'questionnaire';
+    entityId: string;
+    conversationIds: string[];
+    caption?: string;
+  }) =>
+    request<{ sent: number }>('/shares/entity', {
       method: 'POST',
       body: JSON.stringify(input),
     }),
-  shareConversationProfile: (conversationId: string) =>
-    request<{ sent: true }>(`/conversations/${conversationId}/profile-share`, {
+  sharePlaylist: (input: {
+    sourceType: 'post' | 'chat';
+    sourceId: string;
+    trackIds: string[];
+    conversationIds: string[];
+    title?: string | null;
+  }) =>
+    request<{ sent: number; tracks: number }>('/shares/playlist', {
       method: 'POST',
-      body: '{}',
+      body: JSON.stringify(input),
     }),
   giftPremiumInvoice: (conversationId: string, productId: string) =>
     request<{ invoiceLink?: string }>(`/conversations/${conversationId}/premium-gift/invoice`, {
       method: 'POST',
       body: JSON.stringify({ productId }),
     }),
-  callTurnCredentials: (conversationId: string) =>
-    request<TurnCredentials>(`/conversations/${conversationId}/calls/turn-credentials`),
-  startCall: (conversationId: string, kind: 'audio' | 'video') =>
-    request<AnonymousCall>(`/conversations/${conversationId}/calls`, {
-      method: 'POST',
-      body: JSON.stringify({ kind }),
-    }),
-  pollCall: (conversationId: string, afterSequence: number) =>
-    request<CallPoll>(`/conversations/${conversationId}/calls/poll?afterSequence=${afterSequence}`),
-  respondCall: (callId: string, accept: boolean) =>
-    request<{ status: string }>(`/calls/${callId}/respond`, {
-      method: 'POST',
-      body: JSON.stringify({ accept }),
-    }),
-  signalCall: (callId: string, type: CallSignal['type'], payload: string) =>
-    request<{ sequence: number }>(`/calls/${callId}/signal`, {
-      method: 'POST',
-      body: JSON.stringify({ type, payload }),
-    }),
-  endCall: (callId: string) =>
-    request<{ status: string }>(`/calls/${callId}/end`, {
-      method: 'POST',
-      body: '{}',
-    }),
   matches: () => request<Match[]>('/matches'),
+  blockedUsers: () => request<BlockedUser[]>('/blocks'),
   block: (blockedUserId: string, reason = 'user_request') =>
     request<{ blocked: true }>('/blocks', {
       method: 'POST',
       body: JSON.stringify({ blockedUserId, reason }),
+    }),
+  unblock: (blockedUserId: string) =>
+    request<{ blocked: false }>(`/blocks/${encodeURIComponent(blockedUserId)}`, {
+      method: 'DELETE',
     }),
   report: (input: {
     reportedUserId: string;
@@ -342,6 +718,7 @@ export const api = {
     postId?: string;
     questionnaireId?: string;
     commentId?: string;
+    profileUserId?: string;
     category: ReportCategory;
     description: string;
   }) =>
@@ -349,11 +726,6 @@ export const api = {
       method: 'POST',
       body: JSON.stringify(input),
     }),
-  requestContactReveal: (conversationId: string) =>
-    request<{ revealed: boolean; contacts?: Array<{ userId: string; username: string | null }> }>(
-      `/conversations/${conversationId}/contact-reveal`,
-      { method: 'POST', body: '{}' },
-    ),
   controlConversation: (
     conversationId: string,
     action: 'mute' | 'unmute' | 'pause' | 'resume' | 'close',
@@ -447,6 +819,11 @@ export const api = {
       method: 'POST',
       body: JSON.stringify({ status, reason }),
     }),
+  adminDeleteComment: (commentId: string, reason: string) =>
+    request<{ deleted: true }>(`/admin/comments/${commentId}`, {
+      method: 'DELETE',
+      body: JSON.stringify({ reason }),
+    }),
   adminMedia: (status = 'pending') =>
     request<AdminMedia[]>(`/admin/media?status=${encodeURIComponent(status)}&limit=50`),
   adminModerateMedia: (mediaId: string, status: 'approved' | 'rejected', reason: string) =>
@@ -455,7 +832,7 @@ export const api = {
       body: JSON.stringify({ status, reason }),
     }),
   adminReports: (status = 'open') =>
-    request<AdminReport[]>(`/admin/reports?status=${encodeURIComponent(status)}&limit=50`),
+    request<AdminReport[]>(`/admin/reports?status=${encodeURIComponent(status)}&limit=100`),
   adminPayments: (status = 'all') =>
     request<AdminPayment[]>(`/admin/payments?status=${encodeURIComponent(status)}&limit=50`),
   adminProducts: () => request<Product[]>('/admin/products'),
@@ -564,10 +941,15 @@ export const api = {
       method: 'POST',
       body: JSON.stringify({ status, resolution }),
     }),
-  adminGrantPremium: (userId: string, durationDays: number, reason: string) =>
+  adminGrantPremium: (
+    userId: string,
+    durationDays: number,
+    reason: string,
+    idempotencyKey: string,
+  ) =>
     request<{ granted: true }>(`/admin/users/${userId}/premium/grant`, {
       method: 'POST',
-      body: JSON.stringify({ durationDays, reason }),
+      body: JSON.stringify({ durationDays, reason, idempotencyKey }),
     }),
   adminRevokePremium: (userId: string, reason: string) =>
     request<{ revoked: true }>(`/admin/users/${userId}/premium/revoke`, {
@@ -585,6 +967,13 @@ export const api = {
     request<{ updated: true }>(`/admin/config/${key}`, {
       method: 'PUT',
       body: JSON.stringify({ value }),
+    }),
+  adminGroupCampaignSettings: () =>
+    request<AdminGroupCampaignSettings>('/admin/group-campaigns/settings'),
+  adminUpdateGroupCampaignSettings: (intervalMinutes: number) =>
+    request<{ updated: true; intervalMinutes: number }>('/admin/group-campaigns/settings', {
+      method: 'PUT',
+      body: JSON.stringify({ intervalMinutes }),
     }),
   adminAudit: () => request<AuditEntry[]>('/admin/audit?limit=50'),
   deleteAccount: () =>
@@ -626,12 +1015,15 @@ export interface SearchProfile {
   media_type?: ProfileMedia['media_type'] | null;
   media_items?: string;
   avatar_media_id?: string | null;
-  avatar_render_mode?: 'photo' | 'animation' | null;
+  avatar_render_mode?: 'photo' | 'animation' | 'still' | null;
   rating_likes: number;
   rating_dislikes: number;
   rating_score: number;
+  own_rating?: -1 | 1 | null;
+  view_count: number;
   username?: string | null;
   verification_kind?: 'owner' | 'moderator' | null;
+  is_online?: number;
 }
 
 export interface UserProfileSummary extends Record<string, unknown> {
@@ -641,12 +1033,22 @@ export interface UserProfileSummary extends Record<string, unknown> {
   moderation_status: string;
 }
 
+export interface BlockedUser {
+  id: string;
+  display_name: string | null;
+  username: string | null;
+  verification_kind: 'owner' | 'moderator' | null;
+  has_premium: number;
+  blocked_at: string;
+}
+
 export interface PublicUserProfile {
   id: string;
   display_name: string;
   bio: string;
   avatar_media_id: string | null;
-  avatar_render_mode: 'photo' | 'animation' | null;
+  avatar_render_mode: 'photo' | 'animation' | 'still' | null;
+  avatar_media_items?: string;
   moderation_status: 'active' | 'blocked';
   moderation_reason: string | null;
   verification_kind: 'owner' | 'moderator' | null;
@@ -658,8 +1060,35 @@ export interface PublicUserProfile {
   rating_dislikes: number;
   rating_score: number;
   own_rating: -1 | 1 | null;
+  owner_liked?: number;
+  visibility_mode: 'public' | 'following_only';
+  followers_count: number;
+  following_count: number;
+  has_premium: number;
+  is_following: number;
+  follows_viewer: number;
+  blocked_by_me: number;
+  blocked_me: number;
+  content_access: number;
+  show_followers: number;
+  show_following: number;
+  show_questionnaires: number;
+  show_posts: number;
+  direct_message_policy: 'everyone' | 'following_and_staff';
+  show_last_seen: number;
+  can_direct_message?: number;
   created_at: string;
   updated_at: string;
+}
+
+export interface PublicProfilePrivacyInput {
+  visibilityMode: 'public' | 'following_only';
+  showFollowers: boolean;
+  showFollowing: boolean;
+  showQuestionnaires: boolean;
+  showPosts: boolean;
+  showLastSeen: boolean;
+  directMessagePolicy: 'everyone' | 'following_and_staff';
 }
 
 export interface UserNotification {
@@ -708,24 +1137,50 @@ export interface SocialPost {
   body_markdown: string;
   text_preview: string;
   media_telegram_file_id: string | null;
+  media_mime_type?: string | null;
   media_thumbnail_file_id: string | null;
   track_title: string | null;
   track_performer: string | null;
+  playlist_title: string | null;
   published_at: string;
   display_name: string;
   avatar_media_id: string | null;
-  avatar_render_mode: 'photo' | 'animation' | null;
+  avatar_render_mode: 'photo' | 'animation' | 'still' | null;
+  verification_kind: 'owner' | 'moderator' | null;
+  has_premium: number;
+  repost_source_post_id?: string | null;
+  original_author_user_id?: string | null;
+  original_author_name?: string | null;
+  original_author_avatar_media_id?: string | null;
+  original_author_avatar_render_mode?: 'photo' | 'animation' | 'still' | null;
   likes: number;
   dislikes: number;
   rating_score: number;
   comment_count: number;
+  share_count?: number;
+  view_count: number;
   own_rating: -1 | 1 | null;
+  owner_liked?: number;
   media_items: string;
   tags: string;
   fandoms: string;
   hashtags: string;
   reach_status: 'normal' | 'limited' | 'shadow_banned';
   affinity_score?: number;
+  is_following?: number;
+  top_comment?: string | null;
+  top_comments?: string | null;
+}
+
+export interface PostEngagementUser {
+  id: string;
+  display_name: string;
+  avatar_media_id: string | null;
+  avatar_render_mode: 'photo' | 'animation' | 'still' | null;
+  verification_kind: 'owner' | 'moderator' | null;
+  has_premium: number;
+  value: -1 | 1 | null;
+  activity_at: string;
 }
 
 export type SearchScope = 'questionnaires' | 'profiles';
@@ -739,11 +1194,14 @@ export interface PostComment {
   created_at: string;
   display_name: string;
   avatar_media_id: string | null;
-  avatar_render_mode: 'photo' | 'animation' | null;
+  avatar_render_mode: 'photo' | 'animation' | 'still' | null;
   verification_kind: 'owner' | 'moderator' | null;
+  has_premium: number;
   likes: number;
   dislikes: number;
   own_rating: -1 | 1 | null;
+  owner_liked?: number;
+  thread_reply_count: number;
 }
 
 export interface SearchAvailability {
@@ -756,6 +1214,7 @@ export interface ProfileMedia {
   id: string;
   media_type: 'photo' | 'animation' | 'video' | 'audio' | 'voice' | 'document';
   sort_order: number;
+  audio_sort_order?: number | null;
   moderation_status: 'pending' | 'approved' | 'rejected';
   created_at: string;
   track_title?: string | null;
@@ -846,34 +1305,81 @@ export interface Conversation {
   other_user_id: string;
   display_name?: string;
   short_headline?: string;
+  avatar_media_id?: string | null;
+  avatar_render_mode?: 'photo' | 'animation' | 'still' | null;
+  verification_kind?: 'owner' | 'moderator' | null;
+  has_premium?: number;
+  own_rating?: -1 | 1 | null;
   contact_reveal_status: string;
   is_muted: number;
+  archived_at?: string | null;
+  pinned_order?: number | null;
   last_message_at?: string;
+  last_message_type?: string | null;
+  last_media_group_id?: string | null;
+  last_media_group_size?: number | null;
+  last_playlist_title?: string | null;
+  last_sender_user_id?: string | null;
+  last_message_text?: string | null;
+  draft_text?: string | null;
+  is_online?: number;
+  presence_last_seen_at?: string | null;
 }
 
-export type ChatMediaKind = 'photo' | 'animation' | 'video' | 'audio' | 'voice' | 'video_note';
+export type ChatMediaKind = 'photo' | 'animation' | 'video' | 'audio' | 'voice';
+export type ChatLiveActivity = 'typing' | 'recording_voice' | 'sending_media';
+export type ChatReaction = string;
 
-export interface AnonymousCall {
+export interface ConversationMessage {
   id: string;
-  kind: 'audio' | 'video';
-  status: 'ringing' | 'active' | 'declined' | 'ended' | 'missed';
-  isInitiator: boolean;
+  sender_user_id: string;
+  message_type: ChatMediaKind | 'text' | 'profile' | 'scenario' | 'sticker' | 'document';
+  text_content: string | null;
+  mime_type: string | null;
+  file_name: string | null;
+  track_title: string | null;
+  track_performer: string | null;
+  duration_seconds: number | null;
+  has_thumbnail: number;
+  created_at: string;
+  is_own: number;
+  has_media: number;
+  delivered_at: string | null;
+  read_at: string | null;
+  edited_at?: string | null;
+  media_group_id: string | null;
+  playlist_title?: string | null;
+  own_reaction: ChatReaction | null;
+  reactions: string;
+  reply_to_message_id?: string | null;
+  reply_message_type?: ConversationMessage['message_type'] | null;
+  reply_text_content?: string | null;
+  reply_file_name?: string | null;
+  reply_has_media?: number;
+  reply_is_own?: number;
+  reply_sender_name?: string | null;
+  forwarded_from_message_id?: string | null;
+  forwarded_author_user_id?: string | null;
+  forwarded_author_name?: string | null;
+  forwarded_author_avatar_media_id?: string | null;
+  forwarded_author_avatar_render_mode?: 'photo' | 'animation' | 'still' | null;
+  forwarded_author_has_premium?: number;
+  forwarded_author_verification_kind?: 'owner' | 'moderator' | null;
+  caption_position?: 'top' | 'bottom' | null;
+  reply_count?: number;
+  pinned_by_me?: number;
 }
 
-export interface CallSignal {
-  sequence: number;
-  type: 'offer' | 'answer' | 'ice';
-  payload: string;
-}
-
-export interface CallPoll {
-  call: AnonymousCall | null;
-  signals: CallSignal[];
-}
-
-export interface TurnCredentials {
-  iceServers: RTCIceServer[];
-  iceTransportPolicy: 'relay';
+export interface PinnedConversationMessage {
+  id: string;
+  pinned_at: string;
+  pinned_by_user_id: string;
+  sender_user_id: string;
+  sender_name: string;
+  message_type: ConversationMessage['message_type'];
+  text_content: string | null;
+  file_name: string | null;
+  has_media: number;
 }
 
 export interface Match {
@@ -885,7 +1391,9 @@ export interface Match {
   display_name?: string;
   short_headline?: string;
   avatar_media_id?: string | null;
-  avatar_render_mode?: 'photo' | 'animation' | null;
+  avatar_render_mode?: 'photo' | 'animation' | 'still' | null;
+  verification_kind?: 'owner' | 'moderator' | null;
+  has_premium?: number;
 }
 
 export type ReportCategory =
@@ -903,31 +1411,45 @@ export type ReportCategory =
 
 export interface UserSettings {
   notifications_enabled: number;
+  telegram_notifications_enabled: number;
   match_notifications_enabled: number;
   message_notifications_enabled: number;
   mention_notifications_enabled: number;
   comment_notifications_enabled: number;
   referral_notifications_enabled: number;
   premium_notifications_enabled: number;
+  follower_post_notifications_enabled: number;
+  follower_questionnaire_notifications_enabled: number;
   privacy_shield_enabled: number;
   show_online_status: number;
   show_premium_badge: number;
   hide_demographics: number;
+  chat_archive_visible: number;
+  auto_archive_new_chats: number;
+  hide_forward_author: number;
+  quick_reaction: string;
   theme: 'telegram' | 'light' | 'dark';
 }
 
 export interface SettingsInput {
   notificationsEnabled: boolean;
+  telegramNotificationsEnabled: boolean;
   matchNotificationsEnabled: boolean;
   messageNotificationsEnabled: boolean;
   mentionNotificationsEnabled: boolean;
   commentNotificationsEnabled: boolean;
   referralNotificationsEnabled: boolean;
   premiumNotificationsEnabled: boolean;
+  followerPostNotificationsEnabled: boolean;
+  followerQuestionnaireNotificationsEnabled: boolean;
   privacyShieldEnabled: boolean;
   showOnlineStatus: boolean;
   showPremiumBadge: boolean;
   hideDemographics: boolean;
+  chatArchiveVisible: boolean;
+  autoArchiveNewChats: boolean;
+  hideForwardAuthor: boolean;
+  quickReaction: string;
   theme: 'telegram' | 'light' | 'dark';
 }
 
@@ -1037,10 +1559,12 @@ export interface AdminUser {
   is_banned: number;
   risk_score: number;
   premium_ends_at?: string;
+  has_premium?: number;
 }
 
 export interface AdminModerator {
   telegram_user_id: number;
+  has_premium?: number;
   telegram_username?: string;
   telegram_first_name: string;
   assigned_at: string;
@@ -1055,6 +1579,7 @@ export interface AdminProfile {
   moderation_status: string;
   risk_score: number;
   telegram_user_id: number;
+  has_premium?: number;
 }
 
 export interface AdminPublicProfile {
@@ -1062,7 +1587,7 @@ export interface AdminPublicProfile {
   display_name: string;
   bio: string;
   avatar_media_id: string | null;
-  avatar_render_mode: 'photo' | 'animation' | null;
+  avatar_render_mode: 'photo' | 'animation' | 'still' | null;
   moderation_status: 'active' | 'blocked';
   moderation_reason: string | null;
   verification_kind: 'owner' | 'moderator' | null;
@@ -1072,6 +1597,7 @@ export interface AdminPublicProfile {
   telegram_username?: string;
   questionnaire_count: number;
   post_count: number;
+  has_premium?: number;
 }
 
 export interface AdminQuestionnaire extends AdminProfile {
@@ -1093,6 +1619,7 @@ export interface AdminPost {
   telegram_user_id: number;
   telegram_username?: string;
   reach_status: 'normal' | 'limited' | 'shadow_banned';
+  has_premium?: number;
 }
 
 export interface AdminMedia {
@@ -1104,6 +1631,7 @@ export interface AdminMedia {
   display_name: string;
   telegram_user_id: number;
   created_at: string;
+  has_premium?: number;
 }
 
 export interface AdminReport {
@@ -1208,6 +1736,16 @@ export interface AdminConfig {
     | 'maintenance_text';
   value: string;
   updated_at?: string;
+}
+
+export interface AdminGroupCampaignSettings {
+  intervalMinutes: number;
+  minimumMinutes: number;
+  maximumMinutes: number;
+  activeCount: number;
+  pausedCount: number;
+  removedCount: number;
+  nextSendAt: string | null;
 }
 
 export interface AuditEntry {

@@ -15,6 +15,16 @@ D1 migrations считаются прямыми и неизменяемыми. �
 
 Файлы уже применённых миграций не редактируются.
 
+## Миграция 0041
+
+Перед production-применением сохранить D1 Time Travel bookmark. Миграция
+копирует ошибочно связанные с анкетами аудио профиля в таблицу
+`migration_0041_profile_audio_questionnaire_backup`, а затем удаляет только эти
+копии из `questionnaire_media`. Для точечного восстановления выполнить
+`INSERT OR IGNORE INTO questionnaire_media SELECT * FROM
+migration_0041_profile_audio_questionnaire_backup`. Для полного восстановления
+использовать сохранённый Time Travel bookmark по общей процедуре выше.
+
 ## Миграция 0025
 
 Перед применением сохранить свежий D1 Time Travel bookmark. Миграция добавляет к
@@ -174,3 +184,200 @@ SQLite не удаляет добавленные столбцы безопас�
 сначала сохраните bookmark D1, затем восстановите базу на него. Индексы
 `idx_reports_questionnaire`, `idx_reports_comment` и `idx_swipes_questionnaire`
 можно удалить отдельно без потери данных.
+
+## Миграция 0032
+
+Миграция добавляет подписки, блокировки и настройки приватности публичного профиля без
+удаления существующих данных. Перед production сохраняется D1 Time Travel bookmark.
+Откат выполняется восстановлением по bookmark; перед физическим удалением таблиц подписок
+и блокировок нужен экспорт связей и сверка количества строк.
+
+## Миграция 0033
+
+Миграция добавляет защищённую историю сообщений и флаг локального скрытия чата. До
+production сохраняется bookmark. Удалять таблицу истории нельзя без зашифрованного экспорта
+и плана восстановления; штатный откат выполняется только через D1 Time Travel.
+
+## Миграция 0034
+
+Миграция добавляет включённый по умолчанию переключатель Telegram-доставки уведомлений.
+Пользовательские настройки не сбрасываются. Откат выполняется по предварительному bookmark
+либо следующей последовательной миграцией после экспорта `user_settings`.
+
+## Миграция 0035
+
+Миграция создаёт упорядоченную медиакарусель аватара и копирует в неё существующий основной
+аватар без изменения `avatar_media_id`. Перед production сохраняется bookmark и сверяются
+число непустых старых аватаров и число перенесённых первых элементов. Откат — восстановление
+по bookmark; таблицу нельзя удалять после начала использования без экспорта порядка медиа.
+
+## Миграция 0036
+
+Миграция добавляет бесплатные настройки видимости разделов, аудитории личных сообщений и
+последней активности с безопасными публичными значениями по умолчанию. Данные не удаляются.
+Откат выполняется по bookmark либо новой миграцией после экспорта настроек профилей.
+
+## Миграция 0037
+
+Миграция добавляет отметки доставки/прочтения и присутствия в чате. Старые сообщения
+получают `delivered_at = created_at`, их содержимое не меняется. Перед production сохраняется
+bookmark; для отката используется D1 Time Travel, поскольку удаление столбцов потребовало бы
+пересоздания таблиц истории.
+
+## Миграция 0038
+
+Миграция пересоздаёт только таблицу юзернеймов ради нового `CHECK`, разрешающего владельцу
+полностью кириллические адреса. Все строки, владельцы, основные флаги и временные метки
+копируются до удаления временной ASCII-таблицы. Перед preview и production обязательны D1
+Time Travel bookmark и сверка количества/набора юзернеймов до и после. Откат выполняется
+восстановлением bookmark; обратная ASCII-миграция без предварительного переноса кириллических
+адресов запрещена.
+
+## Миграция 0039
+
+Миграция только добавляет к `processed_telegram_updates` состояние обработки,
+уникальный токен аренды, срок аренды и время завершения. Существующие строки
+сохраняются и помечаются завершёнными; пользовательские данные не удаляются.
+Перед production сохраняется D1 Time Travel bookmark. Откат выполняется
+возвратом приложения к предыдущей версии и восстановлением по bookmark либо
+следующей последовательной миграцией после экспорта таблицы; удалять столбцы
+через пересоздание таблицы без экспорта и сверки `update_id` запрещено.
+
+# Миграция 0040 — чат и уведомления
+
+Миграция добавляет мягкое скрытие уведомлений, идентификатор медиагруппы и таблицу реакций.
+Существующие уведомления и сообщения не изменяются и не удаляются. Перед production сохраняется
+D1 Time Travel bookmark. Откат выполняется восстановлением по bookmark; удалять таблицу реакций
+или новые столбцы без экспорта и сверки количества строк запрещено.
+
+# 0042 — контекст загрузки медиа без ForceReply
+
+Перед откатом остановить приём новых Telegram update. Таблица хранит только временный маршрут
+следующего медиафайла (не сами медиа и не пользовательский текст), поэтому резервная копия данных
+не требуется. Для отката удалить `idx_media_upload_intents_expiry`, затем
+`media_upload_intents`, и вернуть обработчик на предыдущую версию. Уже опубликованные медиа не
+затрагиваются.
+
+# 0044_chat_organization.sql
+
+Перед откатом сохраните `conversation_participants` и `user_settings` через D1 Time Travel bookmark.
+SQLite не удаляет добавленные колонки без пересоздания таблиц, поэтому безопасный откат приложения —
+вернуть Worker на предыдущую версию, оставив совместимые nullable/default-поля. Полный откат схемы
+выполняется только восстановлением D1 из bookmark, сделанного непосредственно перед миграцией.
+
+# 0045_expand_chat_reactions.sql
+
+Перед применением создаётся D1 Time Travel bookmark. Миграция сначала копирует все реакции в
+новую таблицу и только затем заменяет старую; количество строк проверяется до продолжения
+публикации. Откат старого ограничения из пяти реакций выполняется восстановлением bookmark после
+экспорта новых Unicode-реакций — удалять их обратной миграцией без экспорта запрещено.
+
+# 0046_follower_content_notifications.sql
+
+Перед применением создаётся D1 Time Travel bookmark и сверяется количество уведомлений. Миграция
+копирует все поля, включая `read_at` и `dismissed_at`, в таблицу с новым типом уведомления.
+Обратный переход выполняется восстановлением bookmark после экспорта `followed_content` строк;
+удаление этих уведомлений при откате без экспорта запрещено.
+
+# 0047_chat_message_editing.sql
+
+Restore the Time Travel bookmark captured before deployment. The migration only adds message edit
+metadata and media ordering; no existing message bytes are rewritten.
+
+# 0048_chat_replies_forwarding_privacy.sql
+
+Before preview and production, create a D1 Time Travel bookmark. This migration only adds nullable
+message relationship columns, one privacy flag with a safe default, and indexes; it does not rewrite
+or delete message content. Roll back the application first and restore the bookmark if a schema
+rollback is required. Do not rebuild `conversation_messages` to remove the columns without an
+encrypted export and row-count verification.
+
+# 0050_profile_audio_order.sql
+
+Before preview and production, create a D1 Time Travel bookmark and export `profile_media`.
+The migration adds a nullable `audio_sort_order` column, backfills only audio/voice rows, and adds
+an index; it does not delete media or change Telegram file identifiers. Roll the application back
+first. Restore the bookmark for a schema rollback, because SQLite cannot safely drop the column
+without rebuilding the table. Do not rebuild it without the export and row-count verification.
+
+# 0053_questionnaire_positive_reactions.sql
+
+Перед production создаётся полный D1 export. Миграция не удаляет исторические `swipes`: она
+создаёт канонический реестр и выбирает самую раннюю положительную реакцию каждой пары
+«пользователь–анкета». При откате сначала вернуть Worker на предыдущую версию. Таблицу можно
+удалять только после экспорта её строк; для полного отката предпочтительно восстановить сделанную
+перед миграцией копию.
+
+# 0054_conversation_live_activity.sql
+
+Перед production создаётся полный D1 export. Миграция добавляет два nullable-поля краткоживущего
+статуса и индекс, существующие чаты и сообщения не переписываются. Предпочтительный откат — вернуть
+Worker и восстановить резервную копию. Не пересоздавать `conversation_participants` ради удаления
+полей без экспорта и сверки всех участников диалогов.
+
+# 0055_taxonomy_suggestion_buffer.sql
+
+This migration creates an aggregate suggestion table and backfills only taxonomy values from
+questionnaires and active posts. It does not copy profile prose or delete source data. Roll the
+application back first. The table may then be dropped after exporting it, or the pre-migration D1
+bookmark may be restored if an exact schema rollback is required.
+
+# 0056_profile_media_upload_kinds.sql
+
+This migration adds `media_kind` with the backward-compatible default `any` to the temporary
+`media_upload_intents` table. A previous Worker can safely run while the column remains present.
+Prefer rolling back only the application; do not rebuild the table merely to remove this column.
+Use the pre-migration D1 bookmark only when an exact schema rollback is mandatory.
+
+# 0057_profile_music_and_onboarding_reminders.sql
+
+Перед production создаётся полный D1 export. Миграция добавляет nullable-маркер настройки
+публичного профиля, восстанавливает отсутствующие строки настроек с безопасными значениями по
+умолчанию и создаёт таблицу расписания редких onboarding-напоминаний. Пользовательский контент не
+удаляется. Для отката сначала вернуть предыдущие версии Workers; таблицу расписания можно удалить
+только после экспорта, а столбец `configured_at` следует оставить как обратно совместимый. Для
+точного отката схемы восстановить предмиграционную копию D1.
+
+# 0058_engagement_reminder_campaigns.sql
+
+Перед production создаётся полный D1 export. Миграция только создаёт таблицу редкого расписания
+новостных и реферальных напоминаний и инициализирует её внутренними идентификаторами пользователей;
+контент, подписки и рефералы не изменяются. При откате сначала вернуть предыдущий App Worker, чтобы
+он перестал выдавать новые claims. Затем таблицу можно удалить после экспорта либо восстановить
+предмиграционную копию D1. Не удалять таблицу, пока существует активный Worker с операциями
+`notifications.engagement.*`.
+
+# Migration 0060
+
+`0060_chat_drafts_message_pins_and_hidden_posts.sql` is additive. Before rollback, export D1 and retain the `conversation_drafts`, `conversation_message_pins`, `hidden_posts`, and `conversation_messages.caption_position` data. SQLite cannot remove the added `caption_position` column safely without rebuilding `conversation_messages`; restore the pre-migration backup for a full rollback. A logical rollback may drop the three new tables and their indexes after export while leaving the nullable column unused.
+
+# Migration 0061
+
+`0061_public_group_campaigns.sql` is additive and stores only public Telegram chat identifiers,
+administrator consent state and delivery counters. Before production, create a D1 backup. For a
+logical rollback, deploy the previous App Worker first so no new campaign claims are created, export
+`public_group_campaigns`, and only then drop its index and table. Restore the pre-migration backup
+when an exact schema rollback is required.
+
+# 0062_safe_dynamic_questionnaire_suggestions.sql
+
+- Перед production-применением создать D1 backup/export.
+- Миграция переносит все допустимые подсказки в новую таблицу, удаляет небезопасные значения и сводит межсекционные дубли к одной записи.
+- Для отката восстановить D1 из созданного backup. Схему старого CHECK нельзя безопасно вернуть без пересборки таблицы.
+
+# 0063_taxonomy_suggestion_selections.sql
+
+This migration adds per-user suggestion selections used only for aggregate ranking. Rollback is
+safe and does not affect profiles, questionnaires, posts, or the suggestion catalogue itself:
+
+```sql
+DROP INDEX IF EXISTS idx_taxonomy_suggestion_selections_rank;
+DROP TABLE IF EXISTS taxonomy_suggestion_selections;
+```
+
+# 0064_unicode_taxonomy_canonicalization.sql
+
+This migration merges case-only Unicode duplicates while preserving the aggregate catalogue and
+distinct per-user selections. Before applying it to production, retain the pre-0063/0064 D1
+export. An exact rollback should restore that export. The logical rollback is to keep the
+canonical tables: returning to case-sensitive duplicates would make popularity inaccurate.

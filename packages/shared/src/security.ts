@@ -13,6 +13,7 @@ export const menuLaunchRouteSchema = z.enum([
   '/search',
   '/profile',
   '/questionnaires',
+  '/questionnaire-editor',
   '/posts',
   '/matches',
   '/chats',
@@ -31,13 +32,14 @@ const menuLaunchPayloadSchema = z.object({
   nonce: z.string().regex(/^[a-f\d]{32}$/),
 });
 
-const menuLaunchRouteCodeSchema = z.enum(['s', 'p', 'q', 'o', 'm', 'c', 'u', 'r', 't', 'a']);
+const menuLaunchRouteCodeSchema = z.enum(['s', 'p', 'q', 'e', 'o', 'm', 'c', 'u', 'r', 't', 'a']);
 type MenuLaunchRouteCode = z.infer<typeof menuLaunchRouteCodeSchema>;
 
 const menuLaunchRouteCodes: Record<MenuLaunchRoute, MenuLaunchRouteCode> = {
   '/search': 's',
   '/profile': 'p',
   '/questionnaires': 'q',
+  '/questionnaire-editor': 'e',
   '/posts': 'o',
   '/matches': 'm',
   '/chats': 'c',

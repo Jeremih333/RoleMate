@@ -1,5 +1,8 @@
-import { createBot } from './bot.js';
+import { createBot, miniAppChatMenuButton, synchronizeBotCommands } from './bot.js';
 import { dispatchBroadcastBatch } from './broadcast.js';
+import { dispatchEngagementReminderBatch } from './engagement-reminders.js';
+import { dispatchTelegramNotificationBatch } from './telegram-notifications.js';
+import { dispatchGroupCampaignBatch } from './group-campaigns.js';
 import { DataApiClient } from './d1-client.js';
 import { readEnv, type AppEnv } from './env.js';
 import { buildServer } from './server.js';
@@ -27,8 +30,6 @@ interface WorkerEnv {
   ALLOWED_ORIGINS: string;
   TURNSTILE_SITE_KEY?: string;
   TURNSTILE_SECRET_KEY?: string;
-  TURN_KEY_ID?: string;
-  TURN_KEY_SECRET?: string;
   COMMIT_SHA?: string;
   DEPLOYMENT_ENV: string;
 }
@@ -51,7 +52,34 @@ interface EdgeApplication {
   edgeFetch(request: Request): Promise<Response | undefined>;
 }
 
+export function withMiniAppCachePolicy(response: Response): Response {
+  if (!response.headers.get('content-type')?.toLowerCase().includes('text/html')) return response;
+  const headers = new Headers(response.headers);
+  headers.set('Cache-Control', 'no-store, no-cache, must-revalidate, max-age=0');
+  headers.set('Pragma', 'no-cache');
+  headers.set('Expires', '0');
+  return new Response(response.body, {
+    status: response.status,
+    statusText: response.statusText,
+    headers,
+  });
+}
+
+export function withMiniAppShellCacheBypass(request: Request): Request {
+  if (request.method !== 'GET' && request.method !== 'HEAD') return request;
+  const pathname = new URL(request.url).pathname;
+  const lastSegment = pathname.split('/').at(-1) ?? '';
+  const isSpaRoute = !lastSegment.includes('.');
+  const acceptsHtml = request.headers.get('accept')?.includes('text/html') ?? false;
+  if (!isSpaRoute && !acceptsHtml) return request;
+  const headers = new Headers(request.headers);
+  headers.set('Cache-Control', 'no-cache');
+  return new Request(request, { headers });
+}
+
 let serverPromise: Promise<EdgeApplication> | undefined;
+let synchronizedChatMenuVersion: string | undefined;
+let synchronizedTelegramConfigurationVersion: string | undefined;
 
 function appEnv(env: WorkerEnv): AppEnv {
   return readEnv({
@@ -79,8 +107,6 @@ function appEnv(env: WorkerEnv): AppEnv {
     ALLOWED_ORIGINS: env.ALLOWED_ORIGINS,
     TURNSTILE_SITE_KEY: env.TURNSTILE_SITE_KEY ?? '',
     TURNSTILE_SECRET_KEY: env.TURNSTILE_SECRET_KEY ?? '',
-    TURN_KEY_ID: env.TURN_KEY_ID ?? '',
-    TURN_KEY_SECRET: env.TURN_KEY_SECRET ?? '',
     YOOKASSA_ENABLED: 'false',
     YOOKASSA_DIGITAL_PREMIUM_ENABLED: 'false',
     COMMIT_SHA: env.COMMIT_SHA ?? 'cloudflare-worker',
@@ -110,7 +136,11 @@ async function getServer(env: WorkerEnv): Promise<EdgeApplication> {
   return serverPromise;
 }
 
-async function dispatchScheduledTasks(env: WorkerEnv): Promise<void> {
+export function shouldDispatchSparseReminderCampaigns(scheduledTime: number): boolean {
+  return new Date(scheduledTime).getUTCMinutes() === 0;
+}
+
+async function dispatchScheduledTasks(env: WorkerEnv, scheduledTime: number): Promise<void> {
   const runtime = appEnv(env);
   const dataApi = new DataApiClient({
     baseUrl: runtime.D1_WORKER_URL,
@@ -124,17 +154,81 @@ async function dispatchScheduledTasks(env: WorkerEnv): Promise<void> {
       error: error instanceof Error ? error.message : 'unknown',
     });
   });
-  await dataApi.execute('calls.expire', {}).catch((error) => {
-    console.error({
-      event: 'call_signals_expiry_failed',
-      error: error instanceof Error ? error.message : 'unknown',
-    });
-  });
   const bot = createBot(runtime, dataApi, fetch, false);
   await bot.init();
+  if (synchronizedTelegramConfigurationVersion !== runtime.COMMIT_SHA) {
+    await Promise.all([
+      synchronizeBotCommands(bot),
+      bot.api.setWebhook(`${runtime.PUBLIC_BASE_URL}/telegram/webhook`, {
+        secret_token: runtime.TELEGRAM_WEBHOOK_SECRET,
+        allowed_updates: [
+          'message',
+          'edited_message',
+          'callback_query',
+          'pre_checkout_query',
+          'my_chat_member',
+        ],
+      }),
+    ])
+      .then(() => {
+        synchronizedTelegramConfigurationVersion = runtime.COMMIT_SHA;
+      })
+      .catch((error: unknown) => {
+        console.error({
+          event: 'telegram_configuration_sync_failed',
+          error: error instanceof Error ? error.message : 'unknown',
+        });
+      });
+  }
+  if (runtime.MINI_APP_URL && synchronizedChatMenuVersion !== runtime.COMMIT_SHA) {
+    await bot.api
+      .setChatMenuButton({ menu_button: miniAppChatMenuButton(runtime) })
+      .then(() => {
+        synchronizedChatMenuVersion = runtime.COMMIT_SHA;
+      })
+      .catch((error: unknown) => {
+        console.error({
+          event: 'telegram_global_chat_menu_sync_failed',
+          error: error instanceof Error ? error.message : 'unknown',
+        });
+      });
+  }
   await dispatchBroadcastBatch(bot, dataApi, (error) => {
     console.error({
       event: 'scheduled_broadcast_failed',
+      error: error instanceof Error ? error.message : 'unknown',
+    });
+  });
+  await dispatchGroupCampaignBatch(bot, dataApi, runtime, (error) => {
+    console.error({
+      event: 'scheduled_group_campaign_failed',
+      error: error instanceof Error ? error.message : 'unknown',
+    });
+  }).catch((error: unknown) => {
+    console.error({
+      event: 'scheduled_group_campaign_batch_failed',
+      error: error instanceof Error ? error.message : 'unknown',
+    });
+  });
+  if (shouldDispatchSparseReminderCampaigns(scheduledTime)) {
+    await dataApi
+      .execute('notifications.onboarding.enqueueDue', { limit: 20 })
+      .catch((error: unknown) => {
+        console.error({
+          event: 'scheduled_onboarding_reminder_failed',
+          error: error instanceof Error ? error.message : 'unknown',
+        });
+      });
+    await dispatchEngagementReminderBatch(bot, dataApi, (error) => {
+      console.error({
+        event: 'scheduled_engagement_reminder_failed',
+        error: error instanceof Error ? error.message : 'unknown',
+      });
+    });
+  }
+  await dispatchTelegramNotificationBatch(bot, dataApi, runtime, (error) => {
+    console.error({
+      event: 'scheduled_telegram_notification_failed',
       error: error instanceof Error ? error.message : 'unknown',
     });
   });
@@ -154,14 +248,14 @@ export default {
     ) {
       return Response.json({ error: 'NOT_FOUND', message: 'Not found' }, { status: 404 });
     }
-    return env.ASSETS.fetch(request);
+    return withMiniAppCachePolicy(await env.ASSETS.fetch(withMiniAppShellCacheBypass(request)));
   },
 
   scheduled(
-    _controller: WorkerScheduledController,
+    controller: WorkerScheduledController,
     env: WorkerEnv,
     context: WorkerExecutionContext,
   ): void {
-    context.waitUntil(dispatchScheduledTasks(env));
+    context.waitUntil(dispatchScheduledTasks(env, controller.scheduledTime));
   },
 };

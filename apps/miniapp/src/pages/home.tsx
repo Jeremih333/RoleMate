@@ -1,19 +1,69 @@
 import { useQuery } from '@tanstack/react-query';
-import { ArrowRight, BookOpen, Crown, Heart, MessageCircle, Sparkles, Users } from 'lucide-react';
+import {
+  ArrowRight,
+  BookOpen,
+  Crown,
+  Heart,
+  MessageCircle,
+  ShieldCheck,
+  Sparkles,
+  Users,
+} from 'lucide-react';
 import { Link } from 'wouter';
 import { NEWS_CHANNEL_URL, PROMO_CHAT_URL, ru } from '@rolemate/shared';
 import { api } from '../api.js';
 import { Card, SectionTitle, Skeleton } from '../components/ui.js';
 
+function isCompletedProfileValue(value: unknown): boolean {
+  if (Array.isArray(value)) return value.length > 0;
+  if (typeof value !== 'string') return value !== null && value !== undefined;
+  const normalized = value.trim();
+  if (!normalized || normalized === 'not_specified') return false;
+  if (!normalized.startsWith('[')) return true;
+  try {
+    const parsed: unknown = JSON.parse(normalized);
+    return Array.isArray(parsed) && parsed.length > 0;
+  } catch {
+    return false;
+  }
+}
+
 export function HomePage() {
   const me = useQuery({ queryKey: ['me'], queryFn: api.me });
   const profile = useQuery({ queryKey: ['profile'], queryFn: api.profile, retry: false });
-  const chats = useQuery({ queryKey: ['conversations'], queryFn: api.conversations });
+  const chats = useQuery({ queryKey: ['conversations'], queryFn: () => api.conversations() });
+  const incomingLikes = useQuery({ queryKey: ['incoming-likes'], queryFn: api.incomingLikes });
   const referrals = useQuery({ queryKey: ['referrals'], queryFn: api.referrals });
-  const completion = Math.max(
-    0,
-    Math.min(100, Number(profile.data?.profile_completion_percent ?? 0)),
-  );
+  const completionValues: unknown[] = profile.data
+    ? [
+        profile.data.display_name,
+        profile.data.age_group,
+        profile.data.short_headline,
+        profile.data.about,
+        profile.data.roleplay_experience,
+        profile.data.preferred_role,
+        profile.data.writing_style,
+        profile.data.average_post_length,
+        profile.data.activity_frequency,
+        profile.data.timezone,
+        profile.data.active_hours,
+        profile.data.languages,
+        profile.data.fandoms,
+        profile.data.genres,
+        profile.data.tags,
+        profile.data.settings,
+        profile.data.plots,
+        profile.data.looking_for,
+        profile.data.boundaries,
+        profile.data.gender,
+      ]
+    : [];
+  const completion = completionValues.length
+    ? Math.round(
+        (completionValues.filter(isCompletedProfileValue).length / completionValues.length) * 100,
+      )
+    : 0;
+  const activeChats = chats.data?.filter((conversation) => conversation.status === 'active').length;
 
   return (
     <div className="space-y-7">
@@ -46,21 +96,21 @@ export function HomePage() {
             <span className="stat-icon">
               <Heart />
             </span>
-            <strong>0</strong>
+            <strong>{incomingLikes.data?.length ?? 0}</strong>
             <small>{ru.miniApp.home.newLikes}</small>
           </Card>
           <Card>
             <span className="stat-icon">
               <MessageCircle />
             </span>
-            <strong>{chats.data?.length ?? 0}</strong>
+            <strong>{activeChats ?? 0}</strong>
             <small>{ru.miniApp.home.activeChats}</small>
           </Card>
           <Card>
             <span className="stat-icon">
               <Users />
             </span>
-            <strong>{referrals.data?.qualified ?? 0}</strong>
+            <strong>{Number(referrals.data?.qualified ?? 0)}</strong>
             <small>{ru.miniApp.home.referredFriends}</small>
           </Card>
         </div>
@@ -75,13 +125,16 @@ export function HomePage() {
             <Skeleton className="h-20" />
           ) : (
             <>
-              <div className="flex items-center justify-between">
-                <div className="flex items-center gap-3">
+              <div className="readiness-summary">
+                <div className="readiness-main">
                   <div className="rounded-2xl bg-violet-500/15 p-3 text-lilac">
                     <BookOpen className="h-5 w-5" />
                   </div>
-                  <div>
-                    <strong className="block">{ru.miniApp.home.tellAboutWorld}</strong>
+                  <div className="readiness-copy">
+                    <div className="readiness-title">
+                      <strong>{ru.miniApp.home.tellAboutWorld}</strong>
+                      <span>{completion}%</span>
+                    </div>
                     <span className="text-sm text-muted">
                       {profile.data
                         ? profile.data.in_search_pool
@@ -91,7 +144,6 @@ export function HomePage() {
                     </span>
                   </div>
                 </div>
-                <span className="text-sm font-semibold text-lilac">{completion}%</span>
               </div>
               <div className="progress mt-4">
                 <span style={{ width: `${completion}%` }} />
@@ -107,6 +159,27 @@ export function HomePage() {
           )}
         </Card>
       </section>
+
+      <details className="info-disclosure">
+        <summary>
+          <span className="info-disclosure-icon">
+            <ShieldCheck aria-hidden />
+          </span>
+          <span>
+            <strong>{ru.miniApp.home.anonymityTitle}</strong>
+            <small>{ru.miniApp.home.anonymitySummary}</small>
+          </span>
+          <ArrowRight className="info-disclosure-chevron" aria-hidden />
+        </summary>
+        <div className="info-disclosure-content">
+          <ul>
+            {ru.miniApp.home.anonymityPoints.map((item) => (
+              <li key={item}>{item}</li>
+            ))}
+          </ul>
+          <p>{ru.miniApp.home.anonymityNotice}</p>
+        </div>
+      </details>
 
       <section className="grid gap-3 sm:grid-cols-2">
         <Link href="/premium">

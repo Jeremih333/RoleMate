@@ -13,3 +13,5 @@ test-results/
 *.tsbuildinfo
 *.log
 .DS_Store
+# Local database backups may contain production user data and must never be committed.
+toolkit/backups/

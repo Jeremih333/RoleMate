@@ -1,5 +1,11 @@
-import { describe, expect, it } from 'vitest';
-import { telegramInitDataFromUrl } from './telegram.js';
+import { afterEach, describe, expect, it } from 'vitest';
+import { applyThemePreference, telegramInitDataFromUrl } from './telegram.js';
+
+afterEach(() => {
+  delete window.Telegram;
+  delete document.documentElement.dataset.theme;
+  delete document.documentElement.dataset.themePreference;
+});
 
 describe('Telegram Mini App bootstrap', () => {
   it('recovers signed initData from the Telegram launch fragment when the SDK is late', () => {
@@ -11,5 +17,33 @@ describe('Telegram Mini App bootstrap', () => {
 
   it('does not invent credentials for a regular browser URL', () => {
     expect(telegramInitDataFromUrl('https://example.test/search')).toBe('');
+  });
+
+  it('applies an explicit light preference independently from Telegram colors', () => {
+    applyThemePreference('light');
+
+    expect(document.documentElement.dataset.theme).toBe('light');
+    expect(document.documentElement.dataset.themePreference).toBe('light');
+  });
+
+  it('resolves the Telegram preference from the current Telegram color scheme', () => {
+    window.Telegram = {
+      WebApp: {
+        initData: '',
+        colorScheme: 'light',
+        ready: () => undefined,
+        expand: () => undefined,
+        enableClosingConfirmation: () => undefined,
+        disableClosingConfirmation: () => undefined,
+        openTelegramLink: () => undefined,
+        openInvoice: () => undefined,
+        onEvent: () => undefined,
+        offEvent: () => undefined,
+      },
+    };
+
+    expect(applyThemePreference('telegram')).toBe('light');
+    expect(document.documentElement.dataset.theme).toBe('light');
+    expect(document.documentElement.dataset.themePreference).toBe('telegram');
   });
 });

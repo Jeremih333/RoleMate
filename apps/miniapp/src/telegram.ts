@@ -58,7 +58,16 @@ export function initializeTelegram(): void {
   const telegram = getTelegram();
   telegram?.ready();
   telegram?.expand();
-  document.documentElement.dataset.theme = telegram?.colorScheme ?? 'dark';
+  applyThemePreference('telegram');
+}
+
+export type ThemePreference = 'telegram' | 'light' | 'dark';
+
+export function applyThemePreference(preference: ThemePreference): 'light' | 'dark' {
+  const resolved = preference === 'telegram' ? (getTelegram()?.colorScheme ?? 'dark') : preference;
+  document.documentElement.dataset.theme = resolved;
+  document.documentElement.dataset.themePreference = preference;
+  return resolved;
 }
 
 export function haptic(style: 'light' | 'medium' | 'heavy' = 'light'): void {

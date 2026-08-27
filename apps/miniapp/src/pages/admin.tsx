@@ -1,10 +1,11 @@
-import { Component, useState, type ErrorInfo, type ReactNode } from 'react';
+import { Component, useEffect, useState, type ErrorInfo, type ReactNode } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { ru } from '@rolemate/shared';
 import {
   Activity,
   AlertTriangle,
   Ban,
+  Clock3,
   Crown,
   Database,
   FileCheck,
@@ -20,7 +21,7 @@ import {
   UserPlus,
   Users,
 } from 'lucide-react';
-import { Redirect } from 'wouter';
+import { Redirect, useSearch } from 'wouter';
 import {
   api,
   type AdminConfig,
@@ -33,7 +34,10 @@ import {
 import { Button, Card, SectionTitle, Skeleton } from '../components/ui.js';
 import { ProfileAvatar } from '../components/profile-avatar.js';
 import { ProfileMarkdown } from '../components/markdown.js';
+import { VerificationBadge } from '../components/verification-badge.js';
+import { ExpandableText } from '../components/expandable-text.js';
 import { useUserStore } from '../store.js';
+import { formatAbsoluteTime, useViewerTime } from '../components/viewer-time.js';
 
 type AdminSection =
   | 'dashboard'
@@ -50,31 +54,38 @@ type AdminSection =
   | 'audit'
   | 'promotions'
   | 'postingRequirements'
-  | 'moderators';
+  | 'moderators'
+  | 'groupCampaigns';
 
 export function AdminPage() {
   const isAdmin = useUserStore((state) => state.user?.isAdmin);
   const isOwner = useUserStore((state) => state.user?.isOwner);
-  const [section, setSection] = useState<AdminSection>(isOwner ? 'dashboard' : 'users');
+  const search = useSearch();
+  const query = new URLSearchParams(search);
+  const linkedReportId = query.get('report');
+  const [section, setSection] = useState<AdminSection>(
+    query.get('section') === 'reports' ? 'reports' : isOwner ? 'dashboard' : 'users',
+  );
   if (!isAdmin) return <Redirect to="/" replace />;
   const ownerSections = [
-    ['dashboard', ru.miniApp.admin.sections[0]],
-    ['payments', ru.miniApp.admin.sections[4]],
-    ['referrals', ru.miniApp.admin.sections[5]],
-    ['broadcasts', ru.miniApp.admin.sections[6]],
-    ['flags', ru.miniApp.admin.sections[7]],
-    ['system', ru.miniApp.admin.sections[8]],
-    ['audit', ru.miniApp.admin.sections[9]],
-    ['promotions', ru.miniApp.admin.sections[10]],
-    ['postingRequirements', ru.miniApp.admin.sections[11]],
-    ['moderators', ru.miniApp.admin.sections[12]],
+    ['dashboard', ru.miniApp.admin.sections[0], Activity],
+    ['payments', ru.miniApp.admin.sections[4], Star],
+    ['referrals', ru.miniApp.admin.sections[5], UserPlus],
+    ['broadcasts', ru.miniApp.admin.sections[6], Send],
+    ['flags', ru.miniApp.admin.sections[7], Flag],
+    ['system', ru.miniApp.admin.sections[8], Server],
+    ['audit', ru.miniApp.admin.sections[9], History],
+    ['promotions', ru.miniApp.admin.sections[10], Crown],
+    ['postingRequirements', ru.miniApp.admin.sections[11], Shield],
+    ['moderators', ru.miniApp.admin.sections[12], Users],
+    ['groupCampaigns', ru.miniApp.admin.sections[15], Clock3],
   ] as const;
   const moderationSections = [
-    ['users', ru.miniApp.admin.sections[1]],
-    ['publicProfiles', ru.miniApp.admin.sections[13]],
-    ['questionnaires', ru.miniApp.admin.sections[2]],
-    ['posts', ru.miniApp.admin.sections[14]],
-    ['reports', ru.miniApp.admin.sections[3]],
+    ['users', ru.miniApp.admin.sections[1], Users],
+    ['publicProfiles', ru.miniApp.admin.sections[13], Search],
+    ['questionnaires', ru.miniApp.admin.sections[2], FileCheck],
+    ['posts', ru.miniApp.admin.sections[14], MessageCircle],
+    ['reports', ru.miniApp.admin.sections[3], AlertTriangle],
   ] as const;
   return (
     <div>
@@ -86,19 +97,21 @@ export function AdminPage() {
           <p>{ru.miniApp.admin.protectedDescription}</p>
         </div>
       </div>
-      <div className="mt-4 flex flex-wrap gap-2">
+      <div className="admin-section-nav mt-4">
         {[
           ...(isOwner ? ownerSections.slice(0, 1) : []),
           ...moderationSections,
           ...(isOwner ? ownerSections.slice(1) : []),
-        ].map(([key, label]) => (
+        ].map(([key, label, Icon]) => (
           <Button
             key={key}
             data-testid={`admin-section-${key}`}
             variant={section === key ? 'primary' : 'secondary'}
             onClick={() => setSection(key)}
+            aria-label={label}
+            title={label}
           >
-            {label}
+            <Icon aria-hidden />
           </Button>
         ))}
       </div>
@@ -109,7 +122,7 @@ export function AdminPage() {
           {section === 'publicProfiles' ? <PublicProfilesQueue isOwner={Boolean(isOwner)} /> : null}
           {section === 'questionnaires' ? <QuestionnairesQueue /> : null}
           {section === 'posts' ? <PostsQueue /> : null}
-          {section === 'reports' ? <ReportsQueue /> : null}
+          {section === 'reports' ? <ReportsQueue initialReportId={linkedReportId} /> : null}
           {section === 'payments' ? <Payments /> : null}
           {section === 'referrals' ? <Referrals /> : null}
           {section === 'broadcasts' ? <Broadcasts /> : null}
@@ -119,6 +132,7 @@ export function AdminPage() {
           {section === 'promotions' ? <Promotions /> : null}
           {section === 'postingRequirements' ? <PostingRequirements /> : null}
           {section === 'moderators' ? <Moderators /> : null}
+          {section === 'groupCampaigns' ? <GroupCampaignSettings /> : null}
         </AdminSectionBoundary>
       </div>
     </div>
@@ -196,6 +210,7 @@ function Dashboard() {
 function UsersQueue({ isOwner }: { isOwner: boolean }) {
   const queryClient = useQueryClient();
   const [search, setSearch] = useState('');
+  const [feedbackUserId, setFeedbackUserId] = useState<string | null>(null);
   const users = useQuery({
     queryKey: ['admin-users', search],
     queryFn: () => api.adminUsers(search),
@@ -211,8 +226,13 @@ function UsersQueue({ isOwner }: { isOwner: boolean }) {
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ['admin-users'] }),
   });
   const premium = useMutation({
-    mutationFn: (input: { userId: string; durationDays: number; reason: string }) =>
-      api.adminGrantPremium(input.userId, input.durationDays, input.reason),
+    mutationFn: (input: {
+      userId: string;
+      durationDays: number;
+      reason: string;
+      idempotencyKey: string;
+    }) =>
+      api.adminGrantPremium(input.userId, input.durationDays, input.reason, input.idempotencyKey),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ['admin-users'] }),
   });
   const revokePremium = useMutation({
@@ -220,6 +240,12 @@ function UsersQueue({ isOwner }: { isOwner: boolean }) {
       api.adminRevokePremium(userId, ru.miniApp.admin.ownerRevokeReason),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ['admin-users'] }),
   });
+  const beginUserAction = (userId: string) => {
+    setFeedbackUserId(userId);
+    moderate.reset();
+    premium.reset();
+    revokePremium.reset();
+  };
   if (users.isLoading) return <Skeleton className="h-72" />;
   if (users.isError) return <AdminRequestError error={users.error} retry={() => users.refetch()} />;
   return (
@@ -238,7 +264,10 @@ function UsersQueue({ isOwner }: { isOwner: boolean }) {
           <Card key={user.id} className="p-4">
             <div className="flex flex-wrap items-center justify-between gap-2">
               <div>
-                <strong>{user.telegram_first_name}</strong>
+                <strong className="inline-flex items-center gap-1">
+                  {user.telegram_first_name}
+                  <VerificationBadge premium={user.has_premium} />
+                </strong>
                 <p className="text-sm text-muted">
                   {user.telegram_user_id}{' '}
                   {user.telegram_username ? `@${user.telegram_username}` : ''} ·{' '}
@@ -254,13 +283,14 @@ function UsersQueue({ isOwner }: { isOwner: boolean }) {
               {user.is_banned ? (
                 <Button
                   variant="secondary"
-                  onClick={() =>
+                  onClick={() => {
+                    beginUserAction(user.id);
                     moderate.mutate({
                       userId: user.id,
                       action: 'unban',
                       reason: ru.miniApp.admin.ownerUnbanReason,
-                    })
-                  }
+                    });
+                  }}
                 >
                   {ru.miniApp.admin.unban}
                 </Button>
@@ -269,8 +299,10 @@ function UsersQueue({ isOwner }: { isOwner: boolean }) {
                   variant="secondary"
                   onClick={() => {
                     const reason = window.prompt(ru.miniApp.admin.banReasonPrompt);
-                    if (reason)
+                    if (reason) {
+                      beginUserAction(user.id);
                       moderate.mutate({ userId: user.id, action: 'permanent_ban', reason });
+                    }
                   }}
                 >
                   {ru.miniApp.admin.ban}
@@ -283,30 +315,44 @@ function UsersQueue({ isOwner }: { isOwner: boolean }) {
                     onClick={() => {
                       const value = window.prompt(ru.miniApp.admin.premiumDaysPrompt, '7');
                       const days = Number(value);
-                      if (Number.isInteger(days) && days > 0)
+                      if (Number.isInteger(days) && days > 0) {
+                        beginUserAction(user.id);
                         premium.mutate({
                           userId: user.id,
                           durationDays: days,
                           reason: ru.miniApp.admin.ownerGrantReason,
+                          idempotencyKey: crypto.randomUUID(),
                         });
+                      }
                     }}
+                    loading={premium.isPending && premium.variables?.userId === user.id}
+                    disabled={premium.isPending}
                   >
                     {ru.miniApp.admin.grantPremium}
                   </Button>
-                  <Button variant="secondary" onClick={() => revokePremium.mutate(user.id)}>
+                  <Button
+                    variant="secondary"
+                    loading={revokePremium.isPending && revokePremium.variables === user.id}
+                    disabled={revokePremium.isPending}
+                    onClick={() => {
+                      beginUserAction(user.id);
+                      revokePremium.mutate(user.id);
+                    }}
+                  >
                     {ru.miniApp.admin.revokePremium}
                   </Button>
                 </>
               ) : null}
               <Button
                 variant="secondary"
-                onClick={() =>
+                onClick={() => {
+                  beginUserAction(user.id);
                   moderate.mutate({
                     userId: user.id,
                     action: 'reset_captcha',
                     reason: ru.miniApp.admin.ownerResetCaptchaReason,
-                  })
-                }
+                  });
+                }}
               >
                 {ru.miniApp.admin.resetCaptcha}
               </Button>
@@ -317,7 +363,10 @@ function UsersQueue({ isOwner }: { isOwner: boolean }) {
                 disabled={moderate.isPending}
                 onClick={() => {
                   const reason = window.prompt(ru.miniApp.admin.warningReasonPrompt);
-                  if (reason) moderate.mutate({ userId: user.id, action: 'warn', reason });
+                  if (reason) {
+                    beginUserAction(user.id);
+                    moderate.mutate({ userId: user.id, action: 'warn', reason });
+                  }
                 }}
               >
                 {ru.miniApp.admin.warn}
@@ -328,6 +377,7 @@ function UsersQueue({ isOwner }: { isOwner: boolean }) {
                   onClick={() => {
                     const reason = window.prompt(ru.miniApp.admin.temporaryBanReasonPrompt);
                     if (!reason) return;
+                    beginUserAction(user.id);
                     const bannedUntil = new Date(Date.now() + 24 * 60 * 60 * 1_000).toISOString();
                     moderate.mutate({
                       userId: user.id,
@@ -341,10 +391,12 @@ function UsersQueue({ isOwner }: { isOwner: boolean }) {
                 </Button>
               ) : null}
             </div>
-            <MutationFeedback
-              states={[moderate, premium, revokePremium]}
-              success={ru.miniApp.admin.actionCompleted}
-            />
+            {feedbackUserId === user.id ? (
+              <MutationFeedback
+                states={[moderate, premium, revokePremium]}
+                success={ru.miniApp.admin.actionCompleted}
+              />
+            ) : null}
           </Card>
         ))}
       </div>
@@ -355,6 +407,8 @@ function UsersQueue({ isOwner }: { isOwner: boolean }) {
 function PublicProfilesQueue({ isOwner }: { isOwner: boolean }) {
   const queryClient = useQueryClient();
   const [search, setSearch] = useState('');
+  const [usernameEditorProfileId, setUsernameEditorProfileId] = useState<string | null>(null);
+  const [usernameDraft, setUsernameDraft] = useState('');
   const profiles = useQuery({
     queryKey: ['admin-public-profiles', search],
     queryFn: () => api.adminPublicProfiles('all', search),
@@ -367,7 +421,11 @@ function PublicProfilesQueue({ isOwner }: { isOwner: boolean }) {
   const replaceUsernames = useMutation({
     mutationFn: ({ userId, usernames }: { userId: string; usernames: string[] }) =>
       api.adminReplaceProfileUsernames(userId, usernames),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['admin-public-profiles'] }),
+    onSuccess: () => {
+      setUsernameEditorProfileId(null);
+      setUsernameDraft('');
+      return queryClient.invalidateQueries({ queryKey: ['admin-public-profiles'] });
+    },
   });
   if (profiles.isLoading) return <Skeleton className="h-72" />;
   if (profiles.isError)
@@ -392,7 +450,10 @@ function PublicProfilesQueue({ isOwner }: { isOwner: boolean }) {
               name={profile.display_name}
             />
             <div className="min-w-0 flex-1">
-              <strong className="break-words">{profile.display_name}</strong>
+              <strong className="inline-flex items-center gap-1 break-words">
+                {profile.display_name}
+                <VerificationBadge kind={profile.verification_kind} premium={profile.has_premium} />
+              </strong>
               <p className="mt-1 break-all text-xs text-muted">
                 {ru.miniApp.admin.contentId(profile.id)}
               </p>
@@ -456,23 +517,56 @@ function PublicProfilesQueue({ isOwner }: { isOwner: boolean }) {
                       return '';
                     }
                   })();
-                  const value = window.prompt(ru.miniApp.admin.profileUsernamesPrompt, current);
-                  if (value === null) return;
-                  const usernames = Array.from(
-                    new Set(
-                      value
-                        .split(',')
-                        .map((item) => item.trim().replace(/^@/, '').toLowerCase())
-                        .filter(Boolean),
-                    ),
-                  ).slice(0, 5);
-                  replaceUsernames.mutate({ userId: profile.id, usernames });
+                  setUsernameDraft(current);
+                  setUsernameEditorProfileId(profile.id);
                 }}
               >
                 {ru.miniApp.admin.manageProfileUsernames}
               </Button>
             ) : null}
           </div>
+          {isOwner && usernameEditorProfileId === profile.id ? (
+            <div className="owner-username-editor">
+              <label className="field-label" htmlFor={`owner-usernames-${profile.id}`}>
+                {ru.miniApp.admin.ownerUsernameEditorTitle}
+              </label>
+              <p>{ru.miniApp.admin.profileUsernamesPrompt}</p>
+              <input
+                id={`owner-usernames-${profile.id}`}
+                className="input"
+                value={usernameDraft}
+                placeholder={ru.miniApp.admin.ownerUsernamePlaceholder}
+                onChange={(event) => setUsernameDraft(event.target.value)}
+              />
+              <div>
+                <Button
+                  loading={replaceUsernames.isPending}
+                  onClick={() => {
+                    const usernames = Array.from(
+                      new Set(
+                        usernameDraft
+                          .split(',')
+                          .map((item) => item.trim().replace(/^@/, '').toLowerCase())
+                          .filter(Boolean),
+                      ),
+                    ).slice(0, 5);
+                    replaceUsernames.mutate({ userId: profile.id, usernames });
+                  }}
+                >
+                  {ru.miniApp.admin.saveProfileUsernames}
+                </Button>
+                <Button
+                  variant="secondary"
+                  onClick={() => {
+                    setUsernameEditorProfileId(null);
+                    setUsernameDraft('');
+                  }}
+                >
+                  {ru.miniApp.admin.cancelProfileUsernames}
+                </Button>
+              </div>
+            </div>
+          ) : null}
         </Card>
       ))}
       <MutationFeedback
@@ -515,7 +609,10 @@ function PostsQueue() {
         <Card key={post.id} className="p-4">
           <div className="flex items-start justify-between gap-3">
             <div className="min-w-0">
-              <strong className="break-words">{post.display_name || post.author_user_id}</strong>
+              <strong className="inline-flex items-center gap-1 break-words">
+                {post.display_name || post.author_user_id}
+                <VerificationBadge premium={post.has_premium} />
+              </strong>
               <p className="mt-1 break-all text-xs text-muted">
                 {ru.miniApp.admin.contentId(post.id)}
               </p>
@@ -645,7 +742,10 @@ function QuestionnairesQueue() {
         <Card key={profile.id} className="p-4">
           <div className="flex justify-between gap-3">
             <div>
-              <strong>{profile.display_name}</strong>
+              <strong className="inline-flex items-center gap-1">
+                {profile.display_name}
+                <VerificationBadge premium={profile.has_premium} />
+              </strong>
               <p className="break-all text-xs text-muted">
                 {ru.miniApp.admin.contentId(profile.id)}
               </p>
@@ -660,7 +760,11 @@ function QuestionnairesQueue() {
             </span>
           </div>
           <h3 className="mt-3 font-semibold">{profile.short_headline}</h3>
-          <p className="mt-2 line-clamp-4 text-sm text-soft">{profile.about}</p>
+          <ExpandableText
+            text={profile.about}
+            className="mt-2 whitespace-pre-wrap text-sm text-soft"
+            lines={4}
+          />
           <div className="mt-3 flex flex-wrap gap-2">
             <Button
               loading={moderate.isPending}
@@ -744,7 +848,10 @@ function MediaQueue() {
           <Card className="overflow-hidden" key={item.id}>
             <ModerationMediaPreview item={item} />
             <div className="p-4">
-              <strong>{item.display_name}</strong>
+              <strong className="inline-flex items-center gap-1">
+                {item.display_name}
+                <VerificationBadge premium={item.has_premium} />
+              </strong>
               <p className="text-xs text-muted">
                 {ru.miniApp.admin.telegramUser(item.telegram_user_id)}
               </p>
@@ -857,9 +964,10 @@ function ModerationMediaPreview({
   );
 }
 
-function ReportsQueue() {
+function ReportsQueue({ initialReportId }: { initialReportId: string | null }) {
   const queryClient = useQueryClient();
-  const [expandedReportId, setExpandedReportId] = useState<string | null>(null);
+  const viewerTime = useViewerTime();
+  const [expandedReportId, setExpandedReportId] = useState<string | null>(initialReportId);
   const reports = useQuery({
     queryKey: ['admin-reports'],
     queryFn: () => api.adminReports('all'),
@@ -884,13 +992,28 @@ function ReportsQueue() {
       void queryClient.invalidateQueries({ queryKey: ['admin-public-profiles'] });
     },
   });
+  const deleteComment = useMutation({
+    mutationFn: ({ commentId, reason }: { commentId: string; reason: string }) =>
+      api.adminDeleteComment(commentId, reason),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ['admin-reports'] });
+      void queryClient.invalidateQueries({ queryKey: ['posts'] });
+    },
+  });
+  useEffect(() => {
+    if (!initialReportId || !reports.data?.some((report) => report.id === initialReportId)) return;
+    document.getElementById(`report-${initialReportId}`)?.scrollIntoView({
+      behavior: 'smooth',
+      block: 'start',
+    });
+  }, [initialReportId, reports.data]);
   if (reports.isLoading) return <Skeleton className="h-72" />;
   if (reports.isError)
     return <AdminRequestError error={reports.error} retry={() => reports.refetch()} />;
   return (
     <div className="space-y-3">
       {reports.data?.map((report) => (
-        <Card key={report.id} className="p-4">
+        <Card key={report.id} id={`report-${report.id}`} className="p-4 scroll-mt-24">
           <div className="flex justify-between gap-3">
             <strong>{ru.bot.reportCategories[report.category] ?? report.category}</strong>
             <span className="status-pill">
@@ -947,11 +1070,33 @@ function ReportsQueue() {
                     {item.body ? (
                       <p className="mt-1 whitespace-pre-wrap break-words text-sm">{item.body}</p>
                     ) : null}
+                    {item.status === 'deleted' ? (
+                      <span className="status-pill mt-2">{ru.miniApp.admin.commentDeleted}</span>
+                    ) : null}
                     {item.messageType ? <p className="text-sm">{item.messageType}</p> : null}
                     {item.createdAt ? (
                       <p className="mt-1 text-xs text-muted">
-                        {new Date(item.createdAt).toLocaleString('ru-RU')}
+                        <span title={viewerTime.absolute(item.createdAt)}>
+                          {viewerTime.relative(item.createdAt)}
+                        </span>
                       </p>
+                    ) : null}
+                    {item.id && report.target_type !== 'conversation' ? (
+                      <Button
+                        className="mt-2"
+                        variant="danger"
+                        loading={deleteComment.isPending}
+                        onClick={() => {
+                          const reason = window
+                            .prompt(ru.miniApp.social.deleteCommentReason)
+                            ?.trim();
+                          if (reason && reason.length >= 3) {
+                            deleteComment.mutate({ commentId: item.id!, reason });
+                          }
+                        }}
+                      >
+                        {ru.miniApp.social.deleteComment}
+                      </Button>
                     ) : null}
                   </div>
                 ))}
@@ -1011,7 +1156,7 @@ function ReportsQueue() {
         </Card>
       ))}
       <MutationFeedback
-        states={[resolve, disableProfile]}
+        states={[resolve, disableProfile, deleteComment]}
         success={ru.miniApp.admin.actionCompleted}
       />
     </div>
@@ -1022,6 +1167,7 @@ function parseReportContext(value: string): Array<{
   id?: string;
   parentCommentId?: string | null;
   body?: string;
+  status?: string;
   displayName?: string;
   messageType?: string;
   createdAt?: string;
@@ -1039,6 +1185,7 @@ function parseReportContext(value: string): Array<{
             ? { parentCommentId: record.parent_comment_id }
             : {}),
           ...(typeof record.body === 'string' ? { body: record.body } : {}),
+          ...(typeof record.status === 'string' ? { status: record.status } : {}),
           ...(typeof record.display_name === 'string' ? { displayName: record.display_name } : {}),
           ...(typeof record.message_type === 'string' ? { messageType: record.message_type } : {}),
           ...(typeof record.created_at === 'string' ? { createdAt: record.created_at } : {}),
@@ -1052,6 +1199,7 @@ function parseReportContext(value: string): Array<{
 
 function Payments() {
   const queryClient = useQueryClient();
+  const viewerTime = useViewerTime();
   const [status, setStatus] = useState<
     'all' | 'pending' | 'precheckout_approved' | 'paid' | 'refunded' | 'failed' | 'expired'
   >('all');
@@ -1114,21 +1262,25 @@ function Payments() {
               {payment.amount} {payment.currency} · Telegram {payment.telegram_user_id}
             </p>
             <p className="mt-1 text-xs text-muted">
-              {ru.miniApp.admin.paymentCreated}: {formatAdminDate(payment.created_at)}
+              {ru.miniApp.admin.paymentCreated}:{' '}
+              {formatAdminDate(payment.created_at, viewerTime.timezone)}
             </p>
             {payment.status === 'pending' || payment.status === 'precheckout_approved' ? (
               <p className="mt-1 text-xs text-muted">
-                {ru.miniApp.admin.paymentExpires}: {formatAdminDate(payment.expires_at)}
+                {ru.miniApp.admin.paymentExpires}:{' '}
+                {formatAdminDate(payment.expires_at, viewerTime.timezone)}
               </p>
             ) : null}
             {payment.paid_at ? (
               <p className="mt-1 text-xs text-muted">
-                {ru.miniApp.admin.paymentPaid}: {formatAdminDate(payment.paid_at)}
+                {ru.miniApp.admin.paymentPaid}:{' '}
+                {formatAdminDate(payment.paid_at, viewerTime.timezone)}
               </p>
             ) : null}
             {payment.entitlement_ends_at ? (
               <p className="mt-1 text-xs text-muted">
-                {ru.miniApp.admin.premiumUntil}: {formatAdminDate(payment.entitlement_ends_at)}
+                {ru.miniApp.admin.premiumUntil}:{' '}
+                {formatAdminDate(payment.entitlement_ends_at, viewerTime.timezone)}
               </p>
             ) : null}
             {payment.status === 'paid' ? (
@@ -1208,10 +1360,8 @@ function ProductEditor({ product }: { product: Product }) {
   );
 }
 
-function formatAdminDate(value: string) {
-  const normalized = value.includes('T') ? value : `${value.replace(' ', 'T')}Z`;
-  const date = new Date(normalized);
-  return Number.isNaN(date.getTime()) ? value : date.toLocaleString('ru-RU');
+function formatAdminDate(value: string, timezone: string) {
+  return formatAbsoluteTime(value, timezone);
 }
 
 function MutationFeedback({
@@ -1473,7 +1623,101 @@ function Broadcasts() {
   );
 }
 
+function GroupCampaignSettings() {
+  const queryClient = useQueryClient();
+  const viewerTime = useViewerTime();
+  const settings = useQuery({
+    queryKey: ['admin-group-campaign-settings'],
+    queryFn: api.adminGroupCampaignSettings,
+  });
+  const [intervalMinutes, setIntervalMinutes] = useState(10);
+  useEffect(() => {
+    if (settings.data) setIntervalMinutes(settings.data.intervalMinutes);
+  }, [settings.data]);
+  const update = useMutation({
+    mutationFn: () => api.adminUpdateGroupCampaignSettings(intervalMinutes),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['admin-group-campaign-settings'] }),
+  });
+  if (settings.isLoading) return <Skeleton className="h-72" />;
+  if (settings.isError)
+    return <AdminRequestError error={settings.error} retry={() => settings.refetch()} />;
+  const data = settings.data;
+  if (!data) return null;
+  const valid =
+    Number.isInteger(intervalMinutes) &&
+    intervalMinutes >= data.minimumMinutes &&
+    intervalMinutes <= data.maximumMinutes;
+  return (
+    <div className="space-y-4">
+      <Card className="p-4">
+        <div className="flex items-start gap-3">
+          <Clock3 className="h-5 w-5 shrink-0 text-accent" aria-hidden />
+          <div>
+            <strong>{ru.miniApp.admin.groupCampaignIntervalTitle}</strong>
+            <p className="mt-1 text-sm text-soft">
+              {ru.miniApp.admin.groupCampaignIntervalDescription}
+            </p>
+          </div>
+        </div>
+        <label className="mt-4 block text-sm text-soft">
+          {ru.miniApp.admin.groupCampaignIntervalLabel}
+          <input
+            className="input-field mt-2"
+            type="number"
+            inputMode="numeric"
+            min={data.minimumMinutes}
+            max={data.maximumMinutes}
+            value={intervalMinutes}
+            onChange={(event) => setIntervalMinutes(Number(event.target.value))}
+          />
+        </label>
+        <div className="mt-3 flex flex-wrap gap-2">
+          {[5, 10, 15, 30, 60].map((minutes) => (
+            <Button
+              key={minutes}
+              type="button"
+              variant={intervalMinutes === minutes ? 'primary' : 'secondary'}
+              onClick={() => setIntervalMinutes(minutes)}
+            >
+              {ru.miniApp.admin.groupCampaignPreset(minutes)}
+            </Button>
+          ))}
+        </div>
+        <Button
+          className="mt-4"
+          disabled={!valid || update.isPending}
+          loading={update.isPending}
+          onClick={() => update.mutate()}
+        >
+          {ru.miniApp.admin.groupCampaignSave}
+        </Button>
+        <MutationFeedback states={[update]} success={ru.miniApp.admin.groupCampaignSaved} />
+      </Card>
+      <div className="admin-grid">
+        <Card className="admin-stat">
+          <strong>{data.activeCount}</strong>
+          <small>{ru.miniApp.admin.groupCampaignActive}</small>
+        </Card>
+        <Card className="admin-stat">
+          <strong>{data.pausedCount}</strong>
+          <small>{ru.miniApp.admin.groupCampaignPaused}</small>
+        </Card>
+        <Card className="admin-stat admin-next-send-stat">
+          <strong
+            className="admin-stat-time"
+            title={data.nextSendAt ? viewerTime.absolute(data.nextSendAt) : undefined}
+          >
+            {data.nextSendAt ? viewerTime.relative(data.nextSendAt) : '—'}
+          </strong>
+          <small>{ru.miniApp.admin.groupCampaignNextSend}</small>
+        </Card>
+      </div>
+    </div>
+  );
+}
+
 function SystemStatus() {
+  const viewerTime = useViewerTime();
   const system = useQuery({
     queryKey: ['admin-system'],
     queryFn: api.adminSystem,
@@ -1517,7 +1761,9 @@ function SystemStatus() {
           <Card key={`${failure.error_code}-${failure.created_at}`} className="p-4">
             <strong>{failure.error_code}</strong>
             <p className="text-sm text-soft">{failure.safe_message}</p>
-            <small>{failure.created_at}</small>
+            <small title={viewerTime.absolute(failure.created_at)}>
+              {viewerTime.relative(failure.created_at)}
+            </small>
           </Card>
         ))}
         {!data.lastFailures.length ? (
@@ -1931,7 +2177,10 @@ function Moderators() {
           <Card className="p-4" key={moderator.telegram_user_id}>
             <div className="flex flex-wrap items-center justify-between gap-3">
               <div>
-                <strong>{moderator.telegram_first_name}</strong>
+                <strong className="inline-flex items-center gap-1">
+                  {moderator.telegram_first_name}
+                  <VerificationBadge kind="moderator" premium={moderator.has_premium} />
+                </strong>
                 <p className="text-sm text-muted">
                   {moderator.telegram_user_id}{' '}
                   {moderator.telegram_username ? `@${moderator.telegram_username}` : ''}
@@ -2112,6 +2361,7 @@ function PostingRequirements() {
 }
 
 function AuditLog() {
+  const viewerTime = useViewerTime();
   const audit = useQuery({ queryKey: ['admin-audit'], queryFn: api.adminAudit });
   if (audit.isLoading) return <Skeleton className="h-72" />;
   if (audit.isError) return <AdminRequestError error={audit.error} retry={() => audit.refetch()} />;
@@ -2125,7 +2375,10 @@ function AuditLog() {
           </div>
           <p className="mt-2 text-sm text-soft">{entry.reason}</p>
           <p className="mt-2 text-xs text-muted">
-            {entry.created_at} · request {entry.request_id}
+            <span title={viewerTime.absolute(entry.created_at)}>
+              {viewerTime.relative(entry.created_at)}
+            </span>{' '}
+            · request {entry.request_id}
           </p>
         </Card>
       ))}

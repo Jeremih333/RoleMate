@@ -45,16 +45,19 @@ type Plugin = (app: EdgeFastify, options: Record<string, unknown>) => unknown;
 interface RouteOptions {
   bodyLimit?: number;
   config?: {
-    rateLimit?: {
-      max?: number;
-      timeWindow?: string;
-    };
+    rateLimit?:
+      | false
+      | {
+          max?: number;
+          timeWindow?: string;
+        };
   };
 }
 
 interface Route {
   bodyLimit?: number;
   handler: RouteHandler;
+  rateLimitDisabled?: boolean;
   maxRequests?: number;
   method: string;
   parameterNames: string[];
@@ -155,7 +158,8 @@ function responseBody(body: unknown, headers: Headers): BodyInit | null {
     typeof body === 'string' ||
     body instanceof ArrayBuffer ||
     ArrayBuffer.isView(body) ||
-    body instanceof Blob
+    body instanceof Blob ||
+    body instanceof ReadableStream
   ) {
     return body as BodyInit;
   }
@@ -276,6 +280,7 @@ export class EdgeFastify {
 
     try {
       if (
+        !match.route.rateLimitDisabled &&
         !this.consumeRateLimit(
           `${ip}:${match.route.rateLimitKey}`,
           match.route.maxRequests ?? this.defaultRateLimit,
@@ -322,12 +327,15 @@ export class EdgeFastify {
     const actualHandler = typeof options === 'function' ? options : handler;
     if (!actualHandler) throw new Error(`Missing handler for ${method} ${path}`);
     const compiled = compilePath(path);
-    const maxRequests = typeof options === 'function' ? undefined : options.config?.rateLimit?.max;
+    const routeRateLimit = typeof options === 'function' ? undefined : options.config?.rateLimit;
+    const maxRequests =
+      routeRateLimit && typeof routeRateLimit === 'object' ? routeRateLimit.max : undefined;
     const bodyLimit = typeof options === 'function' ? undefined : options.bodyLimit;
     this.routes.push({
       method,
       handler: actualHandler,
       rateLimitKey: `${method}:${path}`,
+      ...(routeRateLimit === false ? { rateLimitDisabled: true } : {}),
       ...(maxRequests === undefined ? {} : { maxRequests }),
       ...(bodyLimit === undefined ? {} : { bodyLimit }),
       ...compiled,

@@ -13,9 +13,35 @@ import {
   sha256,
   type MenuLaunchRoute,
 } from '@rolemate/shared';
-import { DataApiError, type DataApiClient } from './d1-client.js';
+import { DataApiError, findDataApiError, type DataApiClient } from './d1-client.js';
 import type { AppEnv } from './env.js';
 import { validateUserContentLinks } from './content-policy.js';
+import { telegramAudioMetadata } from './telegram-audio-metadata.js';
+
+type PostMediaContentType = 'photo' | 'document' | 'animation' | 'video' | 'voice' | 'audio';
+
+export function normalizePostMediaContentType(
+  sourceType: PostMediaContentType,
+  mimeType?: string,
+): PostMediaContentType {
+  if (sourceType !== 'document') return sourceType;
+  const normalizedMime = mimeType?.toLowerCase().split(';', 1)[0]?.trim() ?? '';
+  if (normalizedMime === 'image/gif') return 'animation';
+  if (/^image\/(?:jpeg|png|webp)$/.test(normalizedMime)) return 'photo';
+  if (normalizedMime.startsWith('video/')) return 'video';
+  if (normalizedMime.startsWith('audio/')) return 'audio';
+  return 'document';
+}
+
+export function splitPostTitleAndBody(text: string): { title?: string; bodyMarkdown: string } {
+  const normalized = text.replace(/\r\n?/g, '\n').trim();
+  const [firstLine = '', ...remainingLines] = normalized.split('\n');
+  const bodyMarkdown = remainingLines.join('\n').trim();
+  if (!bodyMarkdown || !firstLine.trim() || firstLine.trim().length > 160) {
+    return { bodyMarkdown: normalized };
+  }
+  return { title: firstLine.trim(), bodyMarkdown };
+}
 
 async function menuLaunchUrl(
   env: AppEnv,
@@ -29,7 +55,48 @@ async function menuLaunchUrl(
     secret: env.SESSION_SECRET,
   });
   url.pathname = createMenuLaunchPath(route, token);
+  url.searchParams.set('rmv', env.COMMIT_SHA);
   return url.toString();
+}
+
+export function miniAppChatMenuButton(env: AppEnv) {
+  const url = new URL(env.MINI_APP_URL);
+  url.searchParams.set('rmv', env.COMMIT_SHA);
+  return {
+    type: 'web_app' as const,
+    text: ru.bot.buttons.openMiniApp,
+    web_app: { url: url.toString() },
+  };
+}
+
+const privateBotCommands = [
+  { command: 'start', description: ru.bot.commands.start },
+  { command: 'menu', description: ru.bot.commands.menu },
+  { command: 'profile', description: ru.bot.commands.profile },
+  { command: 'search', description: ru.bot.commands.search },
+  { command: 'matches', description: ru.bot.commands.matches },
+  { command: 'chats', description: ru.bot.commands.chats },
+  { command: 'posts', description: ru.bot.commands.posts },
+  { command: 'post', description: ru.bot.commands.createPost },
+  { command: 'myposts', description: ru.bot.commands.myPosts },
+  { command: 'premium', description: ru.bot.commands.premium },
+  { command: 'promo', description: ru.bot.commands.promo },
+  { command: 'referral', description: ru.bot.commands.referral },
+  { command: 'settings', description: ru.bot.commands.settings },
+  { command: 'rules', description: ru.bot.commands.rules },
+  { command: 'help', description: ru.bot.commands.help },
+  { command: 'support', description: ru.bot.commands.support },
+  { command: 'paysupport', description: ru.bot.commands.paymentSupport },
+  { command: 'delete_me', description: ru.bot.commands.deleteAccount },
+] as const;
+
+export async function synchronizeBotCommands(bot: Bot): Promise<void> {
+  await Promise.all([
+    bot.api.setMyCommands([...privateBotCommands], { scope: { type: 'all_private_chats' } }),
+    bot.api.setMyCommands([], { scope: { type: 'all_group_chats' } }),
+    bot.api.setMyCommands([], { scope: { type: 'all_chat_administrators' } }),
+    bot.api.setMyCommands([], { scope: { type: 'default' } }),
+  ]);
 }
 
 async function mainKeyboard(env: AppEnv, telegramUserId: number, role = 'user'): Promise<Keyboard> {
@@ -100,7 +167,15 @@ async function mainKeyboard(env: AppEnv, telegramUserId: number, role = 'user'):
 
 async function upsertUser(context: Context, dataApi: DataApiClient, referralCode?: string) {
   if (!context.from) throw new Error('Telegram user is missing');
-  return dataApi.execute<{ userId: string; isNew: boolean; role: string }>('users.upsert', {
+  return dataApi.execute<{
+    userId: string;
+    isNew: boolean;
+    role: string;
+    riskScore: number;
+    isOnboardingCompleted: boolean;
+    isAgeConfirmed: boolean;
+    isRulesAccepted: boolean;
+  }>('users.upsert', {
     telegramUser: {
       id: context.from.id,
       first_name: context.from.first_name,
@@ -110,6 +185,36 @@ async function upsertUser(context: Context, dataApi: DataApiClient, referralCode
     },
     ...(referralCode ? { referralCode } : {}),
   });
+}
+
+function onboardingAgeKeyboard(env: AppEnv) {
+  return new InlineKeyboard()
+    .text(ru.bot.age.under16, 'age:under_16')
+    .row()
+    .text(ru.bot.age.from16to17, 'age:16_17')
+    .row()
+    .text(ru.bot.age.from18to20, 'age:18_20')
+    .row()
+    .text(ru.bot.age.from21to25, 'age:21_25')
+    .row()
+    .text(ru.bot.age.over26, 'age:26_plus')
+    .row()
+    .text(ru.bot.buttons.howItWorks, 'help')
+    .text(ru.bot.buttons.rules, 'rules')
+    .row()
+    .url(ru.bot.buttons.support, env.SUPPORT_URL)
+    .url(ru.bot.buttons.news, NEWS_CHANNEL_URL);
+}
+
+async function returningUserKeyboard(env: AppEnv, telegramUserId: number) {
+  return new InlineKeyboard()
+    .webApp(ru.bot.buttons.openMiniApp, await menuLaunchUrl(env, telegramUserId, '/search'))
+    .row()
+    .text(ru.bot.buttons.howItWorks, 'help')
+    .text(ru.bot.buttons.rules, 'rules')
+    .row()
+    .url(ru.bot.buttons.support, env.SUPPORT_URL)
+    .url(ru.bot.buttons.news, NEWS_CHANNEL_URL);
 }
 
 function parseBotInfo(value: string): UserFromGetMe | undefined {
@@ -144,11 +249,73 @@ export function createBot(
 ): Bot {
   const botInfo = parseBotInfo(env.TELEGRAM_BOT_INFO);
   const bot = new Bot(env.TELEGRAM_BOT_TOKEN || '0:development', {
-    client: { fetch: telegramFetch },
+    client: { fetch: telegramFetch, timeoutSeconds: 8 },
     ...(botInfo ? { botInfo } : {}),
   });
-  const relayWindows = new Map<number, { startedAt: number; count: number }>();
-  const selectedChats = new Map<number, string>();
+  const queueTelegramNotification = async (input: {
+    targetUserId: string;
+    category:
+      | 'message'
+      | 'like'
+      | 'mention'
+      | 'comment'
+      | 'premium'
+      | 'moderation'
+      | 'follower_post'
+      | 'follower_questionnaire';
+    message: string;
+    openPath: string;
+    sourceKey: string;
+    conversationId?: string;
+  }): Promise<void> => {
+    await dataApi.execute('notifications.telegram.enqueue', input);
+  };
+  const synchronizePersonalMenuButton = async (context: Context): Promise<void> => {
+    if (!env.MINI_APP_URL || !context.from) return;
+    await context.api
+      .setChatMenuButton({
+        chat_id: context.from.id,
+        menu_button: miniAppChatMenuButton(env),
+      })
+      .catch((error: unknown) => {
+        console.error({
+          event: 'telegram_chat_menu_sync_failed',
+          telegramUserId: context.from?.id,
+          error: error instanceof Error ? error.message : 'unknown',
+        });
+      });
+  };
+  const notifyStaffOfReport = async (created: {
+    reportId: string;
+    staffUserIds?: string[];
+    staffTelegramUserIds: number[];
+  }): Promise<void> => {
+    if (created.staffUserIds?.length) {
+      await Promise.allSettled(
+        created.staffUserIds.map((targetUserId) =>
+          queueTelegramNotification({
+            targetUserId,
+            category: 'moderation',
+            message: ru.bot.reportReceived,
+            openPath: `/admin?section=reports&report=${encodeURIComponent(created.reportId)}`,
+            sourceKey: `report:${created.reportId}:staff:${targetUserId}`,
+          }),
+        ),
+      );
+      return;
+    }
+    await Promise.allSettled(
+      (created.staffTelegramUserIds ?? []).map((telegramUserId) =>
+        bot.api.sendMessage(telegramUserId, ru.bot.reportReceived, {
+          protect_content: true,
+          reply_markup: new InlineKeyboard().webApp(
+            ru.bot.openNotification,
+            `${env.MINI_APP_URL}/admin?section=reports&report=${encodeURIComponent(created.reportId)}`,
+          ),
+        }),
+      ),
+    );
+  };
   let runtimeCache: {
     maintenanceMode: boolean;
     maintenanceText: string;
@@ -170,9 +337,9 @@ export function createBot(
     const usernames = extractMentions(text);
     if (!usernames.length) return;
     const message = ru.bot.mentionNotification(ru.bot.mentionPlaces.post);
-    const openPath = `/posts?post=${encodeURIComponent(postId)}`;
+    const openPath = `/posts/${encodeURIComponent(postId)}`;
     const deliveries = await dataApi.execute<
-      Array<{ telegram_user_id: number | null; open_path: string }>
+      Array<{ user_id: string; telegram_user_id: number | null; open_path: string }>
     >('notifications.mentions.create', {
       actorUserId,
       usernames,
@@ -182,19 +349,15 @@ export function createBot(
       sourceKey: `post:${postId}:${await sha256(text)}`,
       message,
     });
-    await Promise.all(
-      deliveries.flatMap((delivery) =>
-        delivery.telegram_user_id
-          ? [
-              bot.api.sendMessage(delivery.telegram_user_id, message, {
-                protect_content: true,
-                reply_markup: new InlineKeyboard().webApp(
-                  ru.bot.openNotification,
-                  `${env.MINI_APP_URL}${delivery.open_path}`,
-                ),
-              }),
-            ]
-          : [],
+    await Promise.allSettled(
+      deliveries.map((delivery) =>
+        queueTelegramNotification({
+          targetUserId: delivery.user_id,
+          category: 'mention',
+          message,
+          openPath: delivery.open_path,
+          sourceKey: `post:${postId}:mention:telegram:${delivery.user_id}`,
+        }),
       ),
     );
   };
@@ -261,6 +424,107 @@ export function createBot(
   });
 
   bot.use(async (context, next) => {
+    const membership = context.update.my_chat_member;
+    if (membership) {
+      const chat = membership.chat;
+      if (chat.type !== 'supergroup') return;
+      const botIsAdministrator = membership.new_chat_member.status === 'administrator';
+      const chatUsername = 'username' in chat ? chat.username : undefined;
+      const campaign = await dataApi.execute<{
+        status: 'pending_consent' | 'active' | 'paused' | 'removed';
+      }>('groupCampaigns.upsertMembership', {
+        chatId: chat.id,
+        ...(chat.title ? { chatTitle: chat.title } : {}),
+        ...(chatUsername ? { chatUsername } : {}),
+        ...(membership.from.id ? { addedByTelegramUserId: membership.from.id } : {}),
+        botIsAdministrator: botIsAdministrator && Boolean(chatUsername),
+      });
+      if (!botIsAdministrator) {
+        await dataApi.execute('groupCampaigns.disable', {
+          chatId: chat.id,
+          removed: ['left', 'kicked'].includes(membership.new_chat_member.status),
+        });
+        return;
+      }
+      if (!chatUsername) {
+        await bot.api.sendMessage(chat.id, ru.bot.groupCampaign.publicOnly);
+        return;
+      }
+      if (campaign.status === 'active') return;
+      await dataApi.execute('groupCampaigns.activate', {
+        chatId: chat.id,
+        activatedByTelegramUserId: membership.from.id,
+      });
+      const keyboard = new InlineKeyboard()
+        .url(ru.bot.groupCampaign.openPrivate, `https://t.me/${env.BOT_USERNAME}?start=community`)
+        .row()
+        .text(ru.bot.groupCampaign.disable, `group_campaign:disable:${chat.id}`);
+      await bot.api.sendPhoto(
+        chat.id,
+        `${env.PUBLIC_BASE_URL}/assets/group-campaign-privacy-v1.png?v=20260807`,
+        {
+          caption: `${ru.bot.groupCampaign.consentTitle}\n\n${ru.bot.groupCampaign.consentBody}`,
+          reply_markup: keyboard,
+        },
+      );
+      return;
+    }
+
+    const chat = context.chat;
+    if (chat?.type !== 'group' && chat?.type !== 'supergroup') {
+      await next();
+      return;
+    }
+
+    const callbackData = context.callbackQuery?.data;
+    const campaignAction = callbackData?.match(/^group_campaign:(enable|disable):(-\d+)$/);
+    if (campaignAction) {
+      const actorId = context.from?.id;
+      const chatId = Number(campaignAction[2]);
+      if (!actorId || chatId !== chat.id) {
+        await context.answerCallbackQuery({
+          text: ru.bot.groupCampaign.adminOnly,
+          show_alert: true,
+        });
+        return;
+      }
+      const member = await context.api.getChatMember(chat.id, actorId);
+      if (member.status !== 'administrator' && member.status !== 'creator') {
+        await context.answerCallbackQuery({
+          text: ru.bot.groupCampaign.adminOnly,
+          show_alert: true,
+        });
+        return;
+      }
+      if (campaignAction[1] === 'enable') {
+        await dataApi.execute('groupCampaigns.activate', {
+          chatId: chat.id,
+          activatedByTelegramUserId: actorId,
+        });
+        await context.answerCallbackQuery({ text: ru.bot.groupCampaign.enabled, show_alert: true });
+      } else {
+        await dataApi.execute('groupCampaigns.disable', { chatId: chat.id, removed: false });
+        await context.answerCallbackQuery({ text: ru.bot.groupCampaign.disabled });
+      }
+      return;
+    }
+
+    const message = context.message;
+    const addressedToBot =
+      Boolean(message?.text?.trim().startsWith('/')) ||
+      message?.reply_to_message?.from?.id === bot.botInfo.id;
+    if (addressedToBot) {
+      const username = env.BOT_USERNAME.replace(/^@/, '');
+      await context.reply(ru.bot.groupCampaign.unavailable, {
+        reply_markup: new InlineKeyboard().url(
+          ru.bot.groupCampaign.openPrivate,
+          `https://t.me/${username}?start=community`,
+        ),
+      });
+    }
+  });
+
+  bot.use(async (context, next) => {
     if (
       context.from?.id === OWNER_TELEGRAM_ID ||
       context.update.pre_checkout_query ||
@@ -270,11 +534,23 @@ export function createBot(
       return;
     }
     if (!runtimeCache || runtimeCache.expiresAt < Date.now()) {
-      const state = await dataApi.execute<{
-        maintenanceMode: boolean;
-        maintenanceText: string;
-      }>('system.runtime', {});
-      runtimeCache = { ...state, expiresAt: Date.now() + 30_000 };
+      try {
+        const state = await dataApi.execute<{
+          maintenanceMode: boolean;
+          maintenanceText: string;
+        }>('system.runtime', {});
+        runtimeCache = { ...state, expiresAt: Date.now() + 30_000 };
+      } catch (error) {
+        console.error({
+          event: 'runtime_state_unavailable',
+          error: error instanceof Error ? error.message : 'unknown',
+        });
+        runtimeCache = {
+          maintenanceMode: false,
+          maintenanceText: '',
+          expiresAt: Date.now() + 5_000,
+        };
+      }
     }
     if (runtimeCache.maintenanceMode) {
       await context.reply(runtimeCache.maintenanceText || ru.api.maintenance);
@@ -282,68 +558,6 @@ export function createBot(
     }
     await next();
   });
-
-  function relayAllowed(telegramUserId: number, limit = 20): boolean {
-    const now = Date.now();
-    const current = relayWindows.get(telegramUserId);
-    if (!current || now - current.startedAt >= 60_000) {
-      relayWindows.set(telegramUserId, { startedAt: now, count: 1 });
-      return true;
-    }
-    current.count += 1;
-    return current.count <= limit;
-  }
-
-  async function resolveRelay(telegramUserId: number) {
-    const conversationId = selectedChats.get(telegramUserId);
-    return dataApi.execute<{
-      conversation_id: string;
-      sender_user_id: string;
-      recipient_user_id: string;
-      destination_chat_id: number;
-      recipient_muted: number;
-      notify_message: number;
-      relay_rate_limit: number;
-    }>('conversations.resolveRelay', {
-      telegramUserId,
-      ...(conversationId ? { conversationId } : {}),
-    });
-  }
-
-  async function notifyAboutLike(
-    targetUserId: string,
-    action: 'like' | 'super_like',
-  ): Promise<void> {
-    const target = await dataApi.execute<{ telegram_user_id: number } | null>(
-      'notifications.deliveryTarget',
-      { userId: targetUserId, kind: 'like' },
-    );
-    if (!target) return;
-    await bot.api.sendMessage(
-      target.telegram_user_id,
-      action === 'super_like' ? ru.bot.newSuperLikeNotification : ru.bot.newLikeNotification,
-      {
-        reply_markup: new InlineKeyboard().webApp(
-          ru.bot.menu.matches,
-          `${env.MINI_APP_URL}/matches`,
-        ),
-      },
-    );
-  }
-
-  async function resolveReply(
-    conversationId: string,
-    replyChatId: number,
-    replyMessageId: number | undefined,
-    destinationChatId: number,
-  ): Promise<number | undefined> {
-    if (!replyMessageId) return undefined;
-    const mapping = await dataApi.execute<{ destination_message_id: number } | null>(
-      'conversations.resolveReply',
-      { conversationId, replyChatId, replyMessageId, destinationChatId },
-    );
-    return mapping?.destination_message_id;
-  }
 
   async function findConversation(userId: string, conversationId: string) {
     const conversations = await dataApi.execute<
@@ -466,24 +680,6 @@ export function createBot(
     await context.reply(ru.bot.premiumSelect, { reply_markup: keyboard });
   }
 
-  async function recordRelay(
-    target: Awaited<ReturnType<typeof resolveRelay>>,
-    sourceChatId: number,
-    sourceMessageId: number,
-    destinationMessageId: number,
-    messageType: string,
-  ) {
-    await dataApi.execute('conversations.mapMessage', {
-      conversationId: target.conversation_id,
-      senderUserId: target.sender_user_id,
-      sourceChatId,
-      sourceMessageId,
-      destinationChatId: target.destination_chat_id,
-      destinationMessageId,
-      messageType,
-    });
-  }
-
   async function sendNativeCaptcha(context: Context, userId: string): Promise<void> {
     const left = (crypto.getRandomValues(new Uint8Array(1))[0]! % 8) + 2;
     const right = (crypto.getRandomValues(new Uint8Array(1))[0]! % 8) + 2;
@@ -503,23 +699,37 @@ export function createBot(
   }
 
   bot.catch(async ({ error, ctx }) => {
+    const dataApiError = findDataApiError(error);
     console.error({
+      event: 'telegram_update_handler_failed',
       updateId: ctx.update.update_id,
       error: error instanceof Error ? error.message : 'unknown',
     });
-    const message =
-      error instanceof DataApiError
-        ? (ru.bot.errors[error.code as keyof typeof ru.bot.errors] ?? ru.bot.errors.default)
-        : ru.bot.errors.default;
-    await ctx
-      .reply(message, {
-        ...(error instanceof DataApiError && error.code === 'PREMIUM_REQUIRED'
+    const retryable = !dataApiError || dataApiError.status >= 500;
+    if (retryable) {
+      // A transient registration/runtime failure must remain retryable for Telegram.
+      // Replying with the generic error here would make the webhook acknowledge the
+      // update and permanently consume a first /start without creating the user.
+      throw error;
+    }
+    const message = dataApiError
+      ? (ru.bot.errors[dataApiError.code as keyof typeof ru.bot.errors] ?? ru.bot.errors.default)
+      : ru.bot.errors.default;
+    try {
+      await ctx.reply(message, {
+        ...(dataApiError?.code === 'PREMIUM_REQUIRED'
           ? {
               reply_markup: new InlineKeyboard().text(ru.bot.buttons.buyPremium, 'premium:open'),
             }
           : {}),
-      })
-      .catch(() => undefined);
+      });
+    } catch (fallbackError) {
+      console.error('telegram_error_reply_failed', {
+        updateId: ctx.update.update_id,
+        handlerError: error instanceof Error ? error.message : 'unknown',
+        fallbackError: fallbackError instanceof Error ? fallbackError.message : 'unknown',
+      });
+    }
   });
 
   bot.command('start', async (context) => {
@@ -527,52 +737,61 @@ export function createBot(
     const referralCode = parameter?.startsWith('ref_') ? parameter.slice(4) : undefined;
     const user = await upsertUser(context, dataApi, referralCode);
     if (!context.from) return;
-    const state = await dataApi.execute<{ risk_score: number }>('users.get', {
-      telegramUserId: context.from.id,
-    });
-    if (state.risk_score >= 50) {
+    await synchronizePersonalMenuButton(context);
+    if (user.riskScore >= 50) {
       await sendNativeCaptcha(context, user.userId);
       return;
     }
-    if (parameter === 'profile_photo') {
-      await context.reply(ru.bot.profilePhotoPrompt, {
-        reply_markup: {
-          force_reply: true,
-          selective: true,
-          input_field_placeholder: ru.bot.profilePhotoReplyPlaceholder,
-        },
+    if (parameter === 'profile_photo' || parameter === 'profile_music') {
+      await dataApi.execute('profiles.mediaUploadIntent.set', {
+        userId: user.userId,
+        targetType: 'profile',
+        mediaKind: parameter === 'profile_music' ? 'music' : 'visual',
       });
+      await context.reply(
+        parameter === 'profile_music' ? ru.bot.profileMusicPrompt : ru.bot.profilePhotoPrompt,
+      );
+      return;
+    }
+    if (parameter?.startsWith('questionnaire_media_')) {
+      const questionnaireId = parameter.slice('questionnaire_media_'.length);
+      if (
+        !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(
+          questionnaireId,
+        )
+      ) {
+        throw new DataApiError('QUESTIONNAIRE_NOT_FOUND', 'Questionnaire not found', 404);
+      }
+      await dataApi.execute('questionnaires.getOwn', {
+        userId: user.userId,
+        questionnaireId,
+      });
+      await dataApi.execute('profiles.mediaUploadIntent.set', {
+        userId: user.userId,
+        targetType: 'questionnaire',
+        questionnaireId,
+      });
+      await context.reply(ru.bot.questionnaireMediaPrompt(questionnaireId));
       return;
     }
     if (parameter === 'create_post') {
+      await dataApi.execute('profiles.mediaUploadIntent.clear', { userId: user.userId });
       await dataApi.execute('posts.draft.start', { userId: user.userId });
-      await context.reply(ru.bot.postPrompt, {
-        reply_markup: {
-          force_reply: true,
-          selective: true,
-        },
-      });
+      await context.reply(ru.bot.postPrompt);
       return;
     }
     if (parameter?.startsWith('post_media_')) {
+      await dataApi.execute('profiles.mediaUploadIntent.clear', { userId: user.userId });
       const postId = parameter.slice('post_media_'.length);
       await dataApi.execute('posts.mediaEdit.start', { userId: user.userId, postId });
-      await context.reply(ru.bot.postMediaEditPrompt, {
-        reply_markup: {
-          force_reply: true,
-          selective: true,
-        },
-      });
+      await context.reply(ru.bot.postMediaEditPrompt);
       return;
     }
-    const buttons = new InlineKeyboard()
-      .text(ru.bot.buttons.start, 'onboarding:start')
-      .row()
-      .text(ru.bot.buttons.howItWorks, 'help')
-      .text(ru.bot.buttons.rules, 'rules')
-      .row()
-      .url(ru.bot.buttons.support, env.SUPPORT_URL)
-      .url(ru.bot.buttons.news, NEWS_CHANNEL_URL);
+    await dataApi.execute('profiles.mediaUploadIntent.clear', { userId: user.userId });
+    const needsOnboarding = !user.isAgeConfirmed || !user.isRulesAccepted;
+    const buttons = needsOnboarding
+      ? onboardingAgeKeyboard(env)
+      : await returningUserKeyboard(env, context.from.id);
     const welcomeImage = path.resolve(env.WELCOME_IMAGE_PATH);
     if (env.WELCOME_IMAGE_URL) {
       await context.replyWithPhoto(env.WELCOME_IMAGE_URL, {
@@ -593,6 +812,7 @@ export function createBot(
 
   bot.command('menu', async (context) => {
     const user = await upsertUser(context, dataApi);
+    await synchronizePersonalMenuButton(context);
     await context.reply(ru.bot.mainMenu, {
       reply_markup: await mainKeyboard(env, context.from?.id ?? 0, user.role),
     });
@@ -601,22 +821,23 @@ export function createBot(
   bot.command('rules', (context) => context.reply(ru.rules));
   bot.command(['support', 'paysupport'], (context) => context.reply(ru.support));
   bot.command('profile', async (context) => {
-    const keyboard = env.MINI_APP_URL
-      ? new InlineKeyboard().webApp(ru.bot.buttons.openProfile, `${env.MINI_APP_URL}/profile`)
-      : undefined;
+    await upsertUser(context, dataApi);
+    const keyboard =
+      env.MINI_APP_URL && context.from
+        ? new InlineKeyboard().webApp(
+            ru.bot.buttons.openProfile,
+            await menuLaunchUrl(env, context.from.id, '/profile'),
+          )
+        : undefined;
     await context.reply(ru.bot.profileEditor, {
       ...(keyboard ? { reply_markup: keyboard } : {}),
     });
   });
   bot.command('post', async (context) => {
     const user = await upsertUser(context, dataApi);
+    await dataApi.execute('profiles.mediaUploadIntent.clear', { userId: user.userId });
     await dataApi.execute('posts.draft.start', { userId: user.userId });
-    await context.reply(ru.bot.postPrompt, {
-      reply_markup: {
-        force_reply: true,
-        selective: true,
-      },
-    });
+    await context.reply(ru.bot.postPrompt);
   });
   bot.command('posts', async (context) => {
     const user = await upsertUser(context, dataApi);
@@ -644,6 +865,7 @@ export function createBot(
     const user = await upsertUser(context, dataApi);
     const profiles = await dataApi.execute<
       Array<{
+        id: string;
         user_id: string;
         display_name: string;
         short_headline: string;
@@ -659,10 +881,10 @@ export function createBot(
       ru.bot.searchCard(profile.display_name, profile.short_headline, profile.compatibility),
       {
         reply_markup: new InlineKeyboard()
-          .text(ru.bot.buttons.skip, `swipe:skip:${profile.user_id}`)
-          .text(ru.bot.buttons.like, `swipe:like:${profile.user_id}`)
+          .text(ru.bot.buttons.skip, `qsw:s:${profile.id}`)
+          .text(ru.bot.buttons.like, `qsw:l:${profile.id}`)
           .row()
-          .text(ru.bot.buttons.superLike, `swipe:super_like:${profile.user_id}`),
+          .text(ru.bot.buttons.superLike, `qsw:x:${profile.id}`),
       },
     );
   });
@@ -766,12 +988,16 @@ export function createBot(
     const user = await upsertUser(context, dataApi);
     if (!['admin', 'moderator'].includes(user.role)) return;
     if (!env.MINI_APP_URL) return;
+    if (!context.from) return;
     await context.reply(
       context.from?.id === OWNER_TELEGRAM_ID
         ? `${ru.bot.adminPanel}\n\n${ru.bot.moderatorOwnerHelp}`
         : ru.bot.moderatorPanel,
       {
-        reply_markup: new InlineKeyboard().webApp(ru.bot.menu.admin, `${env.MINI_APP_URL}/admin`),
+        reply_markup: new InlineKeyboard().webApp(
+          ru.bot.menu.admin,
+          await menuLaunchUrl(env, context.from.id, '/admin'),
+        ),
       },
     );
   });
@@ -836,16 +1062,7 @@ export function createBot(
   bot.callbackQuery('onboarding:start', async (context) => {
     await context.answerCallbackQuery();
     await context.reply(ru.bot.age.prompt, {
-      reply_markup: new InlineKeyboard()
-        .text(ru.bot.age.under16, 'age:under_16')
-        .row()
-        .text(ru.bot.age.from16to17, 'age:16_17')
-        .row()
-        .text(ru.bot.age.from18to20, 'age:18_20')
-        .row()
-        .text(ru.bot.age.from21to25, 'age:21_25')
-        .row()
-        .text(ru.bot.age.over26, 'age:26_plus'),
+      reply_markup: onboardingAgeKeyboard(env),
     });
   });
   bot.callbackQuery(/^age:(.+)$/, async (context) => {
@@ -856,7 +1073,7 @@ export function createBot(
     const keyboard = env.MINI_APP_URL
       ? new InlineKeyboard().webApp(
           ru.bot.buttons.createProfile,
-          `${env.MINI_APP_URL}/profile/edit`,
+          await menuLaunchUrl(env, context.from.id, '/questionnaire-editor'),
         )
       : undefined;
     await context.reply(`${ru.rules}\n\n${ru.bot.rulesAcceptance}`, {
@@ -948,7 +1165,12 @@ export function createBot(
     const user = await upsertUser(context, dataApi);
     const action = context.match?.[1] as 'like' | 'skip' | 'super_like';
     const targetUserId = context.match?.[2] ?? '';
-    let result: { created: boolean; matched: boolean; matchId?: string };
+    let result: {
+      created: boolean;
+      matched: boolean;
+      matchId?: string;
+      alreadySent?: boolean;
+    };
     try {
       result = await dataApi.execute<{
         created: boolean;
@@ -971,17 +1193,64 @@ export function createBot(
       }
       throw error;
     }
-    if (result.created && ['like', 'super_like'].includes(action)) {
-      await notifyAboutLike(targetUserId, action === 'super_like' ? 'super_like' : 'like');
-    }
     await context.answerCallbackQuery(
-      result.matched
-        ? ru.bot.swipeMatched
-        : action === 'super_like'
-          ? ru.bot.superLikeSent
-          : ru.bot.done,
+      result.alreadySent
+        ? ru.bot.sympathyAlreadySent
+        : result.matched
+          ? ru.bot.swipeMatched
+          : action === 'super_like'
+            ? ru.bot.superLikeSent
+            : ru.bot.done,
     );
     await context.editMessageReplyMarkup();
+    if (result.matched) await context.reply(ru.match);
+  });
+  bot.callbackQuery(/^qsw:(l|s|x):([0-9a-f-]{36})$/, async (context) => {
+    const user = await upsertUser(context, dataApi);
+    const actionCode = context.match?.[1] ?? 's';
+    const action =
+      actionCode === 'l' ? 'like' : actionCode === 'x' ? 'super_like' : ('skip' as const);
+    const questionnaireId = context.match?.[2] ?? '';
+    const target = await dataApi.execute<{ targetUserId: string }>(
+      'questionnaires.resolveSwipeTarget',
+      { userId: user.userId, questionnaireId },
+    );
+    let result: {
+      created: boolean;
+      matched: boolean;
+      matchId?: string;
+      alreadySent?: boolean;
+    };
+    try {
+      result = await dataApi.execute('swipes.create', {
+        userId: user.userId,
+        targetUserId: target.targetUserId,
+        questionnaireId,
+        action,
+        source: 'bot',
+        idempotencyKey: `bot:${context.update.update_id}:${questionnaireId}`,
+      });
+    } catch (error) {
+      if (error instanceof DataApiError && error.code === 'SUPER_LIKE_LIMIT') {
+        await context.answerCallbackQuery({
+          text: ru.bot.superLikeLimitReached,
+          show_alert: true,
+        });
+        return;
+      }
+      throw error;
+    }
+    await context.answerCallbackQuery({
+      text: result.alreadySent
+        ? ru.bot.sympathyAlreadySent
+        : result.matched
+          ? ru.bot.swipeMatched
+          : action === 'super_like'
+            ? ru.bot.superLikeSent
+            : ru.bot.done,
+      show_alert: Boolean(result.alreadySent),
+    });
+    if (!result.alreadySent) await context.editMessageReplyMarkup();
     if (result.matched) await context.reply(ru.match);
   });
   bot.callbackQuery(/^postpublish:([0-9a-f-]{36})$/, async (context) => {
@@ -1000,6 +1269,26 @@ export function createBot(
       user.userId,
       postId,
       [post.title ?? '', post.body_markdown ?? '', post.text_preview].join('\n'),
+    );
+    const followerDeliveries = await dataApi.execute<
+      Array<{ user_id: string; telegram_user_id: number | null; open_path: string }>
+    >('notifications.followers.create', {
+      actorUserId: user.userId,
+      entityType: 'post',
+      entityId: postId,
+      openPath: `/posts/${encodeURIComponent(postId)}`,
+      message: ru.bot.followerPostNotification,
+    });
+    await Promise.allSettled(
+      followerDeliveries.map((delivery) =>
+        queueTelegramNotification({
+          targetUserId: delivery.user_id,
+          category: 'follower_post',
+          message: ru.bot.followerPostNotification,
+          openPath: delivery.open_path,
+          sourceKey: `post:${postId}:follower:telegram:${delivery.user_id}`,
+        }),
+      ),
     );
     await context.answerCallbackQuery(ru.bot.postPublished);
     await context.editMessageReplyMarkup();
@@ -1029,7 +1318,6 @@ export function createBot(
       source: 'bot',
       idempotencyKey: `post:${context.update.update_id}:${post.author_user_id}`,
     });
-    if (result.created) await notifyAboutLike(post.author_user_id, 'like');
     await context.answerCallbackQuery(result.matched ? ru.bot.swipeMatched : ru.bot.postLiked);
   });
   bot.callbackQuery(/^postmore:([0-9a-f-]{36})$/, async (context) => {
@@ -1116,7 +1404,10 @@ export function createBot(
       postId,
     });
     const code = context.match?.[1] as keyof typeof categoryByCode;
-    await dataApi.execute('reports.create', {
+    const created = await dataApi.execute<{
+      reportId: string;
+      staffTelegramUserIds: number[];
+    }>('reports.create', {
       reporterUserId: user.userId,
       reportedUserId: post.author_user_id,
       postId,
@@ -1124,6 +1415,7 @@ export function createBot(
       description: ru.bot.userChatActionReason,
       evidenceSnapshot: [],
     });
+    await notifyStaffOfReport(created);
     await context.answerCallbackQuery(ru.bot.postReported);
     await context.editMessageReplyMarkup();
   });
@@ -1132,11 +1424,13 @@ export function createBot(
     const conversationId = context.match?.[1] ?? '';
     const user = await upsertUser(context, dataApi);
     const conversation = await findConversation(user.userId, conversationId);
-    selectedChats.set(context.from.id, conversationId);
     await context.answerCallbackQuery(ru.bot.chatSelected);
     await context.reply(ru.bot.chatInstructions, {
       reply_markup: new InlineKeyboard()
-        .text(ru.bot.buttons.contactExchange, `contact:${conversationId}`)
+        .webApp(
+          ru.bot.buttons.openMiniApp,
+          `${env.MINI_APP_URL}/chats?conversation=${encodeURIComponent(conversationId)}`,
+        )
         .row()
         .text(
           conversation.is_muted ? ru.bot.buttons.unmuteChat : ru.bot.buttons.muteChat,
@@ -1164,27 +1458,6 @@ export function createBot(
       value: context.match?.[1] === '1' ? 1 : -1,
     });
     await context.answerCallbackQuery(ru.bot.ratingSaved);
-  });
-  bot.callbackQuery(/^contact:([0-9a-f-]{36})$/, async (context) => {
-    const user = await upsertUser(context, dataApi);
-    const result = await dataApi.execute<{
-      revealed: boolean;
-      contacts?: Array<{ userId: string; username: string | null }>;
-    }>('conversations.requestContact', {
-      userId: user.userId,
-      conversationId: context.match?.[1] ?? '',
-    });
-    await context.answerCallbackQuery(
-      result.revealed ? ru.bot.contactsOpened : ru.bot.contactRequestSent,
-    );
-    if (result.revealed) {
-      const other = result.contacts?.find((contact) => contact.userId !== user.userId);
-      await context.reply(
-        other?.username ? ru.bot.contactRevealed(other.username) : ru.bot.contactMissingUsername,
-      );
-    } else {
-      await context.reply(ru.bot.contactPending);
-    }
   });
   bot.callbackQuery(/^chatctl:(mute|unmute|pause|resume):([0-9a-f-]{36})$/, async (context) => {
     const user = await upsertUser(context, dataApi);
@@ -1223,7 +1496,6 @@ export function createBot(
       conversationId: context.match?.[1] ?? '',
       action: 'close',
     });
-    selectedChats.delete(context.from.id);
     await context.answerCallbackQuery(ru.bot.chatClosed);
     await context.editMessageText(ru.bot.chatClosed);
   });
@@ -1240,7 +1512,6 @@ export function createBot(
       blockedUserId: conversation.other_user_id,
       reason: ru.bot.userChatActionReason,
     });
-    selectedChats.delete(context.from.id);
     await context.answerCallbackQuery(ru.bot.chatBlocked);
     await context.editMessageReplyMarkup();
     await context.reply(ru.bot.chatBlocked);
@@ -1249,7 +1520,10 @@ export function createBot(
     const user = await upsertUser(context, dataApi);
     const conversationId = context.match?.[1] ?? '';
     const conversation = await findConversation(user.userId, conversationId);
-    await dataApi.execute('reports.create', {
+    const created = await dataApi.execute<{
+      reportId: string;
+      staffTelegramUserIds: number[];
+    }>('reports.create', {
       reporterUserId: user.userId,
       reportedUserId: conversation.other_user_id,
       conversationId,
@@ -1257,6 +1531,7 @@ export function createBot(
       description: ru.bot.userChatActionReason,
       evidenceSnapshot: [],
     });
+    await notifyStaffOfReport(created);
     await context.answerCallbackQuery(ru.bot.chatReported);
     await context.reply(ru.bot.chatReported);
   });
@@ -1267,7 +1542,6 @@ export function createBot(
   bot.callbackQuery('account:delete', async (context) => {
     const user = await upsertUser(context, dataApi);
     await dataApi.execute('users.delete', { userId: user.userId });
-    selectedChats.delete(context.from.id);
     await context.answerCallbackQuery(ru.bot.accountDeleted);
     await context.editMessageText(ru.bot.accountDeletedFull);
   });
@@ -1327,6 +1601,7 @@ export function createBot(
       duplicate: boolean;
       gifted?: boolean;
       durationDays: number;
+      giftRecipientUserId?: string | null;
       giftRecipientTelegramUserId?: number | null;
     }>('payments.completeStars', {
       orderId: order.id,
@@ -1345,19 +1620,14 @@ export function createBot(
         ? ru.bot.premiumGiftPaid(result.durationDays)
         : ru.bot.premiumGranted(result.durationDays),
     );
-    if (!result.duplicate && result.gifted && result.giftRecipientTelegramUserId) {
-      await bot.api.sendMessage(
-        result.giftRecipientTelegramUserId,
-        ru.bot.premiumGranted(result.durationDays),
-        env.MINI_APP_URL
-          ? {
-              reply_markup: new InlineKeyboard().webApp(
-                ru.bot.menu.premium,
-                `${env.MINI_APP_URL}/premium`,
-              ),
-            }
-          : undefined,
-      );
+    if (!result.duplicate && result.gifted && result.giftRecipientUserId) {
+      await queueTelegramNotification({
+        targetUserId: result.giftRecipientUserId,
+        category: 'premium',
+        message: ru.bot.premiumGranted(result.durationDays),
+        openPath: '/premium',
+        sourceKey: `premium-gift:${order.id}:${result.giftRecipientUserId}`,
+      });
     }
   });
 
@@ -1384,10 +1654,9 @@ export function createBot(
     };
     if (text === ru.bot.menu.createPost) {
       const user = await upsertUser(context, dataApi);
+      await dataApi.execute('profiles.mediaUploadIntent.clear', { userId: user.userId });
       await dataApi.execute('posts.draft.start', { userId: user.userId });
-      await context.reply(ru.bot.postPrompt, {
-        reply_markup: { force_reply: true, selective: true },
-      });
+      await context.reply(ru.bot.postPrompt);
       return;
     }
     if (text in menuMap) {
@@ -1399,20 +1668,23 @@ export function createBot(
     const draft = await dataApi.execute<{ id: string } | null>('posts.draft.get', {
       userId: user.userId,
     });
-    const policyError = await linksAllowed([text, ...hiddenLinks].join('\n'), user.userId);
-    if (policyError) {
-      await context.reply(policyError, {
-        reply_markup: new InlineKeyboard().text(ru.bot.buttons.buyPremium, 'premium:open'),
-      });
-      return;
-    }
     if (draft) {
+      const policyError = await linksAllowed([text, ...hiddenLinks].join('\n'), user.userId);
+      if (policyError) {
+        await context.reply(policyError, {
+          reply_markup: new InlineKeyboard().text(ru.bot.buttons.buyPremium, 'premium:open'),
+        });
+        return;
+      }
+      const parsedPostText = splitPostTitleAndBody(text);
       const attached = await dataApi.execute<{ postId: string }>('posts.draft.attach', {
         userId: user.userId,
         sourceChatId: context.chat.id,
         sourceMessageId: context.message.message_id,
         contentType: 'text',
         textPreview: text.slice(0, 500),
+        ...(parsedPostText.title ? { title: parsedPostText.title } : {}),
+        bodyMarkdown: parsedPostText.bodyMarkdown,
       });
       await context.reply(ru.bot.postDraftReady, {
         reply_markup: new InlineKeyboard()
@@ -1421,90 +1693,12 @@ export function createBot(
       });
       return;
     }
-    try {
-      const target = await resolveRelay(context.from.id);
-      if (!relayAllowed(context.from.id, target.relay_rate_limit)) {
-        await context.reply(ru.bot.relayRateLimit);
-        return;
-      }
-      const replyMessageId = await resolveReply(
-        target.conversation_id,
-        context.chat.id,
-        context.message.reply_to_message?.message_id,
-        target.destination_chat_id,
-      );
-      const delivered = await bot.api.sendMessage(
-        target.destination_chat_id,
-        target.notify_message ? `${ru.bot.newMessageNotification}\n\n${text}` : text,
-        {
-          protect_content: true,
-          disable_notification: Boolean(target.recipient_muted),
-          entities: [],
-          ...(replyMessageId
-            ? {
-                reply_parameters: {
-                  message_id: replyMessageId,
-                  allow_sending_without_reply: true,
-                },
-              }
-            : {}),
-        },
-      );
-      await recordRelay(
-        target,
-        context.chat.id,
-        context.message.message_id,
-        delivered.message_id,
-        'text',
-      );
-      await dataApi.execute('notifications.activity.create', {
-        actorUserId: target.sender_user_id,
-        targetUserId: target.recipient_user_id,
-        kind: 'message',
-        context: 'chat',
-        entityId: target.conversation_id,
-        openPath: `/chats?conversation=${encodeURIComponent(target.conversation_id)}`,
-        sourceKey: `chat:${target.conversation_id}:${delivered.message_id}`,
-        message: ru.bot.newMessageNotification,
-      });
-      const usernames = extractMentions(text);
-      if (usernames.length) {
-        const message = ru.bot.mentionNotification(ru.bot.mentionPlaces.chat);
-        const openPath = `/chats?conversation=${encodeURIComponent(target.conversation_id)}`;
-        const deliveries = await dataApi.execute<
-          Array<{ telegram_user_id: number | null; open_path: string }>
-        >('notifications.mentions.create', {
-          actorUserId: target.sender_user_id,
-          usernames,
-          context: 'chat',
-          entityId: target.conversation_id,
-          openPath,
-          sourceKey: `chat:${target.conversation_id}:${delivered.message_id}`,
-          message,
-        });
-        await Promise.all(
-          deliveries.flatMap((delivery) =>
-            delivery.telegram_user_id
-              ? [
-                  bot.api.sendMessage(delivery.telegram_user_id, message, {
-                    protect_content: true,
-                    reply_markup: new InlineKeyboard().webApp(
-                      ru.bot.openNotification,
-                      `${env.MINI_APP_URL}${delivery.open_path}`,
-                    ),
-                  }),
-                ]
-              : [],
-          ),
-        );
-      }
-    } catch (error) {
-      if (error instanceof DataApiError && error.code === 'ACTIVE_CHAT_NOT_FOUND') {
-        await context.reply(ru.bot.chooseChatFirst);
-        return;
-      }
-      throw error;
-    }
+    await context.reply(ru.bot.privateTextNotRelayed, {
+      reply_markup: new InlineKeyboard().webApp(
+        ru.bot.buttons.openMiniApp,
+        `${env.MINI_APP_URL}/chats`,
+      ),
+    });
   });
 
   bot.on(
@@ -1515,17 +1709,37 @@ export function createBot(
       'message:voice',
       'message:audio',
       'message:video',
-      'message:video_note',
       'message:document',
     ],
     async (context) => {
       if (!context.from) return;
-      if (
+      const user = await upsertUser(context, dataApi);
+      const repliedText =
         context.message.reply_to_message &&
         context.message.reply_to_message.from?.id === context.me.id &&
-        'text' in context.message.reply_to_message &&
-        context.message.reply_to_message.text === ru.bot.profilePhotoPrompt
-      ) {
+        'text' in context.message.reply_to_message
+          ? context.message.reply_to_message.text
+          : undefined;
+      const questionnaireMediaReply = repliedText?.startsWith(ru.bot.questionnaireMediaPromptPrefix)
+        ? repliedText.match(
+            /([0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12})$/i,
+          )?.[1]
+        : undefined;
+      const uploadIntent = await dataApi.execute<{
+        target_type: 'profile' | 'questionnaire';
+        questionnaire_id: string | null;
+        media_kind: 'any' | 'visual' | 'music';
+      } | null>('profiles.mediaUploadIntent.get', { userId: user.userId });
+      const questionnaireMediaTarget =
+        questionnaireMediaReply ??
+        (uploadIntent?.target_type === 'questionnaire'
+          ? (uploadIntent.questionnaire_id ?? undefined)
+          : undefined);
+      const profileMediaTarget =
+        repliedText === ru.bot.profilePhotoPrompt ||
+        repliedText === ru.bot.profileMusicPrompt ||
+        uploadIntent?.target_type === 'profile';
+      if (profileMediaTarget || questionnaireMediaTarget) {
         const documentMime =
           'document' in context.message ? (context.message.document.mime_type ?? '') : '';
         type ProfileMediaUpload = {
@@ -1565,18 +1779,11 @@ export function createBot(
             height: context.message.video.height,
           };
         } else if ('audio' in context.message) {
-          const trackTitle =
-            context.message.audio.title ?? context.message.audio.file_name?.replace(/\.[^.]+$/, '');
           profileMedia = {
             file: context.message.audio,
             mediaType: 'audio',
-            ...(trackTitle ? { trackTitle } : {}),
-            ...(context.message.audio.performer
-              ? { trackPerformer: context.message.audio.performer }
-              : {}),
-            ...(context.message.audio.thumbnail?.file_id
-              ? { thumbnailTelegramFileId: context.message.audio.thumbnail.file_id }
-              : {}),
+            ...telegramAudioMetadata(context.message.audio),
+            durationSeconds: context.message.audio.duration,
           };
         } else if ('voice' in context.message) {
           profileMedia = {
@@ -1597,26 +1804,43 @@ export function createBot(
                 : documentMime.startsWith('audio/')
                   ? 'audio'
                   : 'video',
-            ...(documentMime.startsWith('audio/') && context.message.document.file_name
-              ? { trackTitle: context.message.document.file_name.replace(/\.[^.]+$/, '') }
-              : {}),
-            ...(context.message.document.thumbnail?.file_id
-              ? { thumbnailTelegramFileId: context.message.document.thumbnail.file_id }
-              : {}),
+            ...(documentMime.startsWith('audio/')
+              ? telegramAudioMetadata(context.message.document)
+              : context.message.document.thumbnail?.file_id
+                ? { thumbnailTelegramFileId: context.message.document.thumbnail.file_id }
+                : {}),
           };
         }
         if (!profileMedia?.file) {
           await context.reply(ru.bot.profileMediaUnsupported);
           return;
         }
-        const maxBytes = profileMedia.mediaType === 'photo' ? 5 * 1024 * 1024 : 20 * 1024 * 1024;
-        if ((profileMedia.file.file_size ?? 0) > maxBytes) {
-          await context.reply(ru.bot.profilePhotoTooLarge);
+        const isMusic = profileMedia.mediaType === 'audio';
+        if (
+          uploadIntent?.target_type === 'profile' &&
+          uploadIntent.media_kind === 'music' &&
+          !isMusic
+        ) {
+          await context.reply(ru.bot.profileMusicOnly);
           return;
         }
-        const user = await upsertUser(context, dataApi);
+        if (
+          uploadIntent?.target_type === 'profile' &&
+          uploadIntent.media_kind === 'visual' &&
+          ['audio', 'voice'].includes(profileMedia.mediaType)
+        ) {
+          await context.reply(ru.bot.profileVisualOnly);
+          return;
+        }
+        // The cloud Bot API accepts larger incoming audio, but getFile cannot download
+        // more than 20 MiB. Saving one here would create a music card that can never play.
+        const maxBytes = isMusic ? 20 * 1024 * 1024 : 50 * 1024 * 1024;
+        if ((profileMedia.file.file_size ?? 0) > maxBytes) {
+          await context.reply(isMusic ? ru.bot.profileMusicTooLarge : ru.bot.profilePhotoTooLarge);
+          return;
+        }
         try {
-          await dataApi.execute('profiles.media.add', {
+          const mediaInput = {
             userId: user.userId,
             telegramFileId: profileMedia.file.file_id,
             telegramFileUniqueId: profileMedia.file.file_unique_id,
@@ -1634,7 +1858,15 @@ export function createBot(
               : {}),
             ...(profileMedia.width !== undefined ? { width: profileMedia.width } : {}),
             ...(profileMedia.height !== undefined ? { height: profileMedia.height } : {}),
-          });
+          };
+          if (questionnaireMediaTarget) {
+            await dataApi.execute('questionnaires.media.add', {
+              ...mediaInput,
+              questionnaireId: questionnaireMediaTarget,
+            });
+          } else {
+            await dataApi.execute('profiles.media.add', mediaInput);
+          }
         } catch (error) {
           if (
             error instanceof DataApiError &&
@@ -1645,9 +1877,31 @@ export function createBot(
             });
             return;
           }
+          if (error instanceof DataApiError) {
+            const expectedMessage =
+              error.code === 'MEDIA_DUPLICATE'
+                ? ru.bot.profileMediaDuplicate
+                : error.code === 'AUDIO_LIMIT'
+                  ? ru.bot.profileAudioLimit
+                  : error.code === 'MEDIA_LIMIT'
+                    ? ru.bot.profileMediaLimit
+                    : error.code === 'PUBLIC_PROFILE_REQUIRED'
+                      ? ru.bot.publicProfileRequired
+                      : null;
+            if (expectedMessage) {
+              await context.reply(expectedMessage);
+              return;
+            }
+          }
           throw error;
         }
-        await context.reply(ru.bot.profilePhotoPending);
+        await context.reply(
+          questionnaireMediaTarget
+            ? ru.bot.questionnaireMediaPending
+            : isMusic
+              ? ru.bot.profileMusicPending
+              : ru.bot.profilePhotoPending,
+        );
         return;
       }
       const caption = 'caption' in context.message ? context.message.caption : undefined;
@@ -1660,20 +1914,30 @@ export function createBot(
               )
               .map((entity) => entity.url)
           : [];
-      const user = await upsertUser(context, dataApi);
-      const messageType =
+      const documentMime =
+        'document' in context.message ? (context.message.document.mime_type ?? '') : '';
+      const rawMessageType =
         ('photo' in context.message && 'photo') ||
         ('animation' in context.message && 'animation') ||
         ('sticker' in context.message && 'sticker') ||
         ('voice' in context.message && 'voice') ||
         ('audio' in context.message && 'audio') ||
         ('video' in context.message && 'video') ||
-        ('video_note' in context.message && 'video_note') ||
         'document';
-      const documentMime =
-        'document' in context.message ? (context.message.document.mime_type ?? '') : '';
+      const messageType =
+        rawMessageType === 'sticker'
+          ? rawMessageType
+          : normalizePostMediaContentType(rawMessageType, documentMime);
+      const mediaMimeType =
+        ('photo' in context.message && 'image/jpeg') ||
+        ('animation' in context.message && (context.message.animation.mime_type ?? 'video/mp4')) ||
+        ('voice' in context.message && (context.message.voice.mime_type ?? 'audio/ogg')) ||
+        ('audio' in context.message && (context.message.audio.mime_type ?? 'audio/mpeg')) ||
+        ('video' in context.message && (context.message.video.mime_type ?? 'video/mp4')) ||
+        ('document' in context.message && (context.message.document.mime_type ?? undefined)) ||
+        undefined;
       const premiumMedia =
-        ['animation', 'voice', 'audio', 'video', 'video_note'].includes(messageType) ||
+        ['animation', 'voice', 'audio', 'video'].includes(messageType) ||
         /^(?:audio|video)\//.test(documentMime) ||
         documentMime === 'image/gif';
       if (premiumMedia && !(await premiumActive(user.userId))) {
@@ -1708,13 +1972,24 @@ export function createBot(
           await context.reply(ru.bot.postUnsupportedMedia);
           return;
         }
+        const mediaFileSize =
+          ('photo' in context.message && context.message.photo.at(-1)?.file_size) ||
+          ('animation' in context.message && context.message.animation.file_size) ||
+          ('voice' in context.message && context.message.voice.file_size) ||
+          ('audio' in context.message && context.message.audio.file_size) ||
+          ('video' in context.message && context.message.video.file_size) ||
+          ('document' in context.message && context.message.document.file_size) ||
+          0;
+        if (mediaFileSize > 20 * 1024 * 1024) {
+          await context.reply(ru.bot.postMediaTooLarge);
+          return;
+        }
         const mediaTelegramFileId =
           ('photo' in context.message && context.message.photo.at(-1)?.file_id) ||
           ('animation' in context.message && context.message.animation.file_id) ||
           ('voice' in context.message && context.message.voice.file_id) ||
           ('audio' in context.message && context.message.audio.file_id) ||
           ('video' in context.message && context.message.video.file_id) ||
-          ('video_note' in context.message && context.message.video_note.file_id) ||
           ('document' in context.message && context.message.document.file_id) ||
           undefined;
         const mediaThumbnailFileId =
@@ -1722,26 +1997,37 @@ export function createBot(
           ('video' in context.message && context.message.video.thumbnail?.file_id) ||
           ('document' in context.message && context.message.document.thumbnail?.file_id) ||
           undefined;
-        const trackTitle = ('audio' in context.message && context.message.audio.title) || undefined;
-        const trackPerformer =
-          ('audio' in context.message && context.message.audio.performer) || undefined;
-        const attached = await dataApi.execute<{ postId: string }>('posts.draft.attach', {
-          userId: user.userId,
-          sourceChatId: context.chat.id,
-          sourceMessageId: context.message.message_id,
-          contentType: messageType,
-          textPreview: (caption ?? '').slice(0, 500),
-          ...(mediaTelegramFileId ? { mediaTelegramFileId } : {}),
-          ...(mediaThumbnailFileId ? { mediaThumbnailFileId } : {}),
-          ...(trackTitle ? { trackTitle } : {}),
-          ...(trackPerformer ? { trackPerformer } : {}),
-          ...(mediaGroupId ? { mediaGroupId } : {}),
-        });
-        await context.reply(ru.bot.postDraftReady, {
-          reply_markup: new InlineKeyboard()
-            .text(ru.bot.buttons.publishPost, `postpublish:${attached.postId}`)
-            .text(ru.bot.buttons.cancel, 'postcancel'),
-        });
+        const audioMetadata =
+          'audio' in context.message
+            ? telegramAudioMetadata(context.message.audio)
+            : 'document' in context.message && messageType === 'audio'
+              ? telegramAudioMetadata(context.message.document)
+              : {};
+        const parsedPostCaption = splitPostTitleAndBody(caption ?? '');
+        const attached = await dataApi.execute<{ postId: string; mediaCount: number }>(
+          'posts.draft.attach',
+          {
+            userId: user.userId,
+            sourceChatId: context.chat.id,
+            sourceMessageId: context.message.message_id,
+            contentType: messageType,
+            textPreview: (caption ?? '').slice(0, 500),
+            ...(parsedPostCaption.title ? { title: parsedPostCaption.title } : {}),
+            bodyMarkdown: parsedPostCaption.bodyMarkdown,
+            ...(mediaTelegramFileId ? { mediaTelegramFileId } : {}),
+            ...(mediaMimeType ? { mediaMimeType } : {}),
+            ...(mediaThumbnailFileId ? { mediaThumbnailFileId } : {}),
+            ...audioMetadata,
+            ...(mediaGroupId ? { mediaGroupId } : {}),
+          },
+        );
+        if (!mediaGroupId || attached.mediaCount === 1) {
+          await context.reply(ru.bot.postDraftReady, {
+            reply_markup: new InlineKeyboard()
+              .text(ru.bot.buttons.publishPost, `postpublish:${attached.postId}`)
+              .text(ru.bot.buttons.cancel, 'postcancel'),
+          });
+        }
         return;
       }
       if (mediaGroupId && !(await premiumActive(user.userId))) return;
@@ -1753,13 +2039,24 @@ export function createBot(
           await context.reply(ru.bot.postUnsupportedMedia);
           return;
         }
+        const mediaFileSize =
+          ('photo' in context.message && context.message.photo.at(-1)?.file_size) ||
+          ('animation' in context.message && context.message.animation.file_size) ||
+          ('voice' in context.message && context.message.voice.file_size) ||
+          ('audio' in context.message && context.message.audio.file_size) ||
+          ('video' in context.message && context.message.video.file_size) ||
+          ('document' in context.message && context.message.document.file_size) ||
+          0;
+        if (mediaFileSize > 20 * 1024 * 1024) {
+          await context.reply(ru.bot.postMediaTooLarge);
+          return;
+        }
         const mediaTelegramFileId =
           ('photo' in context.message && context.message.photo.at(-1)?.file_id) ||
           ('animation' in context.message && context.message.animation.file_id) ||
           ('voice' in context.message && context.message.voice.file_id) ||
           ('audio' in context.message && context.message.audio.file_id) ||
           ('video' in context.message && context.message.video.file_id) ||
-          ('video_note' in context.message && context.message.video_note.file_id) ||
           ('document' in context.message && context.message.document.file_id) ||
           undefined;
         if (!mediaTelegramFileId) {
@@ -1771,100 +2068,36 @@ export function createBot(
           ('video' in context.message && context.message.video.thumbnail?.file_id) ||
           ('document' in context.message && context.message.document.thumbnail?.file_id) ||
           undefined;
-        const trackTitle = ('audio' in context.message && context.message.audio.title) || undefined;
-        const trackPerformer =
-          ('audio' in context.message && context.message.audio.performer) || undefined;
+        const audioMetadata =
+          'audio' in context.message
+            ? telegramAudioMetadata(context.message.audio)
+            : 'document' in context.message && messageType === 'audio'
+              ? telegramAudioMetadata(context.message.document)
+              : {};
         await dataApi.execute('posts.mediaEdit.attach', {
           userId: user.userId,
           sourceChatId: context.chat.id,
           sourceMessageId: context.message.message_id,
           contentType: messageType,
           mediaTelegramFileId,
+          ...(mediaMimeType ? { mediaMimeType } : {}),
           ...(mediaThumbnailFileId ? { mediaThumbnailFileId } : {}),
-          ...(trackTitle ? { trackTitle } : {}),
-          ...(trackPerformer ? { trackPerformer } : {}),
+          ...audioMetadata,
         });
         await context.reply(ru.bot.postMediaUpdated);
         return;
       }
-      try {
-        const target = await resolveRelay(context.from.id);
-        if (!relayAllowed(context.from.id, target.relay_rate_limit)) {
-          await context.reply(ru.bot.relayRateLimit);
-          return;
-        }
-        const replyMessageId = await resolveReply(
-          target.conversation_id,
-          context.chat.id,
-          context.message.reply_to_message?.message_id,
-          target.destination_chat_id,
-        );
-        if (target.notify_message) {
-          await bot.api.sendMessage(target.destination_chat_id, ru.bot.newMessageNotification, {
-            protect_content: true,
-            reply_markup: new InlineKeyboard().webApp(
-              ru.bot.menu.chats,
-              `${env.MINI_APP_URL}/chats`,
-            ),
-          });
-        }
-        const delivered = await bot.api.copyMessage(
-          target.destination_chat_id,
-          context.chat.id,
-          context.message.message_id,
-          {
-            protect_content: true,
-            disable_notification: Boolean(target.recipient_muted),
-            ...(replyMessageId
-              ? {
-                  reply_parameters: {
-                    message_id: replyMessageId,
-                    allow_sending_without_reply: true,
-                  },
-                }
-              : {}),
-          },
-        );
-        await recordRelay(
-          target,
-          context.chat.id,
-          context.message.message_id,
-          delivered.message_id,
-          messageType,
-        );
-      } catch (error) {
-        if (error instanceof DataApiError && error.code === 'ACTIVE_CHAT_NOT_FOUND') {
-          await context.reply(ru.bot.chooseChatFirst);
-          return;
-        }
-        throw error;
-      }
+      await context.reply(ru.bot.privateTextNotRelayed, {
+        reply_markup: new InlineKeyboard().webApp(
+          ru.bot.buttons.openMiniApp,
+          `${env.MINI_APP_URL}/chats`,
+        ),
+      });
     },
   );
 
   if (syncCommands) {
-    bot.api
-      .setMyCommands([
-        { command: 'start', description: ru.bot.commands.start },
-        { command: 'menu', description: ru.bot.commands.menu },
-        { command: 'profile', description: ru.bot.commands.profile },
-        { command: 'search', description: ru.bot.commands.search },
-        { command: 'matches', description: ru.bot.commands.matches },
-        { command: 'chats', description: ru.bot.commands.chats },
-        { command: 'posts', description: ru.bot.commands.posts },
-        { command: 'post', description: ru.bot.commands.createPost },
-        { command: 'myposts', description: ru.bot.commands.myPosts },
-        { command: 'premium', description: ru.bot.commands.premium },
-        { command: 'promo', description: ru.bot.commands.promo },
-        { command: 'referral', description: ru.bot.commands.referral },
-        { command: 'settings', description: ru.bot.commands.settings },
-        { command: 'rules', description: ru.bot.commands.rules },
-        { command: 'help', description: ru.bot.commands.help },
-        { command: 'support', description: ru.bot.commands.support },
-        { command: 'paysupport', description: ru.bot.commands.paymentSupport },
-        { command: 'delete_me', description: ru.bot.commands.deleteAccount },
-      ])
-      .catch(() => undefined);
+    synchronizeBotCommands(bot).catch(() => undefined);
   }
 
   void PROMO_CHAT_URL;

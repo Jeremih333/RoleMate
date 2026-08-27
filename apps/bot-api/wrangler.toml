@@ -10,7 +10,7 @@ preview_urls = false
 directory = "../miniapp/dist"
 binding = "ASSETS"
 not_found_handling = "single-page-application"
-run_worker_first = ["/api/*", "/telegram/*", "/health/*", "/version", "/internal/*"]
+run_worker_first = true
 
 [alias]
 fastify = "./src/edge/fastify.ts"
@@ -44,4 +44,4 @@ D1_WORKER_URL = "https://rolemate-data-api.carreljeremih.workers.dev"
 INTERNAL_SERVICE_ID = "rolemate-bot-api"
 ALLOWED_ORIGINS = "https://rolemate-app.carreljeremih.workers.dev"
 DEPLOYMENT_ENV = "production"
-COMMIT_SHA = "cloudflare-worker"
+COMMIT_SHA = "20260809-dynamic-suggestion-popularity"

@@ -64,7 +64,7 @@ describe('security contracts', () => {
     );
     await expect(
       verifyMenuLaunchToken({
-        token: `${token.slice(0, -1)}0`,
+        token: `${token.slice(0, -1)}${token.endsWith('0') ? '1' : '0'}`,
         route: '/matches',
         secret,
         now,

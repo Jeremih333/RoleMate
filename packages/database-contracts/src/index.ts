@@ -61,8 +61,52 @@ const profileUsernameSchema = z
   .min(4)
   .max(32)
   .regex(/^[a-z][a-z0-9_]*$/);
+const publicProfileUsernameSchema = z
+  .string()
+  .trim()
+  .toLowerCase()
+  .min(4)
+  .max(32)
+  .regex(/^(?:[a-z][a-z0-9_]*|[\u0430-\u044f\u0451][\u0430-\u044f\u04510-9_]*)$/u);
 
 export const workerOperations = {
+  'groupCampaigns.upsertMembership': z.object({
+    chatId: z.number().int().safe(),
+    chatTitle: z.string().trim().max(255).optional(),
+    chatUsername: z.string().trim().max(32).optional(),
+    addedByTelegramUserId: z.number().int().positive().optional(),
+    botIsAdministrator: z.boolean(),
+  }),
+  'groupCampaigns.activate': z.object({
+    chatId: z.number().int().safe(),
+    activatedByTelegramUserId: z.number().int().positive(),
+  }),
+  'groupCampaigns.disable': z.object({
+    chatId: z.number().int().safe(),
+    removed: z.boolean().default(false),
+  }),
+  'groupCampaigns.claimDue': z.object({ limit: z.number().int().min(1).max(20).default(10) }),
+  'groupCampaigns.recordBatch': z.object({
+    claimToken: z.string().uuid(),
+    results: z
+      .array(
+        z.object({
+          chatId: z.number().int().safe(),
+          status: z.enum(['sent', 'retry', 'disabled']),
+          variantIndex: z.number().int().nonnegative(),
+          errorCode: z.string().trim().max(80).optional(),
+        }),
+      )
+      .min(1)
+      .max(20),
+  }),
+  'admin.groupCampaigns.settings.get': z.object({
+    adminUserId: z.string().uuid(),
+  }),
+  'admin.groupCampaigns.settings.update': z.object({
+    adminUserId: z.string().uuid(),
+    intervalMinutes: z.number().int().min(1).max(1_440),
+  }),
   'users.upsert': z.object({
     telegramUser: telegramUserSchema,
     referralCode: z.string().optional(),
@@ -81,16 +125,23 @@ export const workerOperations = {
   'settings.update': z.object({
     userId: z.string().uuid(),
     notificationsEnabled: z.boolean(),
+    telegramNotificationsEnabled: z.boolean().default(true),
     matchNotificationsEnabled: z.boolean(),
     messageNotificationsEnabled: z.boolean(),
     mentionNotificationsEnabled: z.boolean().default(true),
     commentNotificationsEnabled: z.boolean().default(true),
     referralNotificationsEnabled: z.boolean(),
     premiumNotificationsEnabled: z.boolean(),
+    followerPostNotificationsEnabled: z.boolean().default(true),
+    followerQuestionnaireNotificationsEnabled: z.boolean().default(true),
     privacyShieldEnabled: z.boolean(),
     showOnlineStatus: z.boolean(),
     showPremiumBadge: z.boolean(),
     hideDemographics: z.boolean().default(false),
+    chatArchiveVisible: z.boolean().default(true),
+    autoArchiveNewChats: z.boolean().default(false),
+    hideForwardAuthor: z.boolean().default(false),
+    quickReaction: z.string().trim().min(1).max(16).default('heart'),
     theme: z.enum(['telegram', 'light', 'dark']),
   }),
   'users.delete': z.object({ userId: z.string().uuid() }),
@@ -99,31 +150,62 @@ export const workerOperations = {
   'profiles.previewOwn': z.object({ userId: z.string().uuid() }),
   'profiles.setActive': z.object({ userId: z.string().uuid(), active: z.boolean() }),
   'profiles.media.list': z.object({ userId: z.string().uuid() }),
-  'profiles.media.add': z.object({
-    userId: z.string().uuid(),
-    telegramFileId: z.string().min(1).max(512),
-    telegramFileUniqueId: z.string().min(1).max(256),
-    mediaType: z.enum(['photo', 'animation', 'video', 'audio', 'voice', 'document']),
-    trackTitle: z.string().trim().min(1).max(160).optional(),
-    trackPerformer: z.string().trim().min(1).max(160).optional(),
-    thumbnailTelegramFileId: z.string().min(1).max(512).optional(),
-    fileSizeBytes: z
-      .number()
-      .int()
-      .min(0)
-      .max(50 * 1024 * 1024)
-      .optional(),
-    durationSeconds: z.number().int().min(0).max(3_600).optional(),
-    width: z.number().int().min(1).max(8_192).optional(),
-    height: z.number().int().min(1).max(8_192).optional(),
-  }),
+  'profiles.mediaUploadIntent.set': z.discriminatedUnion('targetType', [
+    z.object({
+      userId: z.string().uuid(),
+      targetType: z.literal('profile'),
+      mediaKind: z.enum(['any', 'visual', 'music']).default('any'),
+    }),
+    z.object({
+      userId: z.string().uuid(),
+      targetType: z.literal('questionnaire'),
+      questionnaireId: z.string().uuid(),
+    }),
+  ]),
+  'profiles.mediaUploadIntent.get': z.object({ userId: z.string().uuid() }),
+  'profiles.mediaUploadIntent.clear': z.object({ userId: z.string().uuid() }),
+  'profiles.media.add': z
+    .object({
+      userId: z.string().uuid(),
+      telegramFileId: z.string().min(1).max(512),
+      telegramFileUniqueId: z.string().min(1).max(256),
+      mediaType: z.enum(['photo', 'animation', 'video', 'audio', 'voice', 'document']),
+      trackTitle: z.string().trim().min(1).max(160).optional(),
+      trackPerformer: z.string().trim().min(1).max(160).optional(),
+      thumbnailTelegramFileId: z.string().min(1).max(512).optional(),
+      fileSizeBytes: z
+        .number()
+        .int()
+        .min(0)
+        .max(50 * 1024 * 1024)
+        .optional(),
+      durationSeconds: z.number().int().min(0).max(86_400).optional(),
+      width: z.number().int().min(1).max(8_192).optional(),
+      height: z.number().int().min(1).max(8_192).optional(),
+    })
+    .superRefine((value, context) => {
+      if (value.mediaType === 'audio' && (value.fileSizeBytes ?? 0) > 20 * 1024 * 1024) {
+        context.addIssue({
+          code: z.ZodIssueCode.too_big,
+          type: 'number',
+          maximum: 20 * 1024 * 1024,
+          inclusive: true,
+          path: ['fileSizeBytes'],
+          message: 'Profile music must not exceed 20 MiB',
+        });
+      }
+    }),
   'profiles.media.delete': z.object({
     userId: z.string().uuid(),
     mediaId: z.string().uuid(),
   }),
   'profiles.media.reorder': z.object({
     userId: z.string().uuid(),
-    mediaIds: z.array(z.string().uuid()).min(1).max(8),
+    mediaIds: z.array(z.string().uuid()).min(1).max(13),
+  }),
+  'profiles.audio.reorder': z.object({
+    userId: z.string().uuid(),
+    mediaIds: z.array(z.string().uuid()).min(1).max(5),
   }),
   'profiles.avatar.set': z.object({
     userId: z.string().uuid(),
@@ -136,7 +218,7 @@ export const workerOperations = {
   }),
   'publicProfiles.getByUsername': z.object({
     requesterUserId: z.string().uuid(),
-    username: profileUsernameSchema,
+    username: publicProfileUsernameSchema,
   }),
   'publicProfiles.search': z
     .object({
@@ -149,11 +231,47 @@ export const workerOperations = {
     profileUserId: z.string().uuid(),
     value: z.union([z.literal(-1), z.literal(1)]),
   }),
+  'publicProfiles.follow': z.object({
+    userId: z.string().uuid(),
+    profileUserId: z.string().uuid(),
+  }),
+  'publicProfiles.unfollow': z.object({
+    userId: z.string().uuid(),
+    profileUserId: z.string().uuid(),
+  }),
+  'publicProfiles.followers': z
+    .object({ requesterUserId: z.string().uuid(), profileUserId: z.string().uuid() })
+    .merge(paginationSchema),
+  'publicProfiles.following': z
+    .object({ requesterUserId: z.string().uuid(), profileUserId: z.string().uuid() })
+    .merge(paginationSchema),
   'publicProfiles.update': z.object({
     userId: z.string().uuid(),
     displayName: z.string().trim().min(2).max(80),
     bio: z.string().trim().max(1_500),
-    avatarMediaId: z.string().uuid().nullable(),
+    avatarMediaId: z.string().uuid().nullable().optional(),
+    avatarMediaIds: z
+      .array(z.string().uuid())
+      .max(8)
+      .refine((ids) => new Set(ids).size === ids.length, 'Avatar media must be unique')
+      .optional(),
+    visibilityMode: z.enum(['public', 'following_only']).default('public'),
+    showFollowers: z.boolean().default(true),
+    showFollowing: z.boolean().default(true),
+    showQuestionnaires: z.boolean().default(true),
+    showPosts: z.boolean().default(true),
+    showLastSeen: z.boolean().default(true),
+    directMessagePolicy: z.enum(['everyone', 'following_and_staff']).default('everyone'),
+  }),
+  'publicProfiles.updatePrivacy': z.object({
+    userId: z.string().uuid(),
+    visibilityMode: z.enum(['public', 'following_only']),
+    showFollowers: z.boolean(),
+    showFollowing: z.boolean(),
+    showQuestionnaires: z.boolean(),
+    showPosts: z.boolean(),
+    showLastSeen: z.boolean(),
+    directMessagePolicy: z.enum(['everyone', 'following_and_staff']),
   }),
   'profileUsernames.listOwn': z.object({ userId: z.string().uuid() }),
   'profileUsernames.claim': z.object({
@@ -179,6 +297,14 @@ export const workerOperations = {
     userId: z.string().uuid(),
     questionnaireId: z.string().uuid(),
   }),
+  'questionnaires.resolveSwipeTarget': z.object({
+    userId: z.string().uuid(),
+    questionnaireId: z.string().uuid(),
+  }),
+  'questionnaires.previewOwn': z.object({
+    userId: z.string().uuid(),
+    questionnaireId: z.string().uuid(),
+  }),
   'questionnaires.create': z.object({
     userId: z.string().uuid(),
     title: z.string().trim().min(2).max(80),
@@ -194,15 +320,73 @@ export const workerOperations = {
     title: z.string().trim().min(2).max(80),
     profile: profileSchema,
   }),
+  'questionnaires.delete': z.object({
+    userId: z.string().uuid(),
+    questionnaireId: z.string().uuid(),
+  }),
   'questionnaires.setActive': z.object({
     userId: z.string().uuid(),
     questionnaireId: z.string().uuid(),
     active: z.boolean(),
   }),
+  'questionnaires.setPrimary': z.object({
+    userId: z.string().uuid(),
+    questionnaireId: z.string().uuid(),
+  }),
+  'questionnaires.media.list': z.object({
+    userId: z.string().uuid(),
+    questionnaireId: z.string().uuid(),
+  }),
+  'questionnaires.media.add': z
+    .object({
+      userId: z.string().uuid(),
+      questionnaireId: z.string().uuid(),
+      telegramFileId: z.string().min(1).max(512),
+      telegramFileUniqueId: z.string().min(1).max(256),
+      mediaType: z.enum(['photo', 'animation', 'video', 'audio', 'voice', 'document']),
+      trackTitle: z.string().trim().min(1).max(160).optional(),
+      trackPerformer: z.string().trim().min(1).max(160).optional(),
+      thumbnailTelegramFileId: z.string().min(1).max(512).optional(),
+      fileSizeBytes: z
+        .number()
+        .int()
+        .min(0)
+        .max(50 * 1024 * 1024)
+        .optional(),
+      durationSeconds: z.number().int().min(0).max(86_400).optional(),
+      width: z.number().int().min(1).max(8_192).optional(),
+      height: z.number().int().min(1).max(8_192).optional(),
+    })
+    .superRefine((value, context) => {
+      if (value.mediaType === 'audio' && (value.fileSizeBytes ?? 0) > 20 * 1024 * 1024) {
+        context.addIssue({
+          code: z.ZodIssueCode.too_big,
+          type: 'number',
+          maximum: 20 * 1024 * 1024,
+          inclusive: true,
+          path: ['fileSizeBytes'],
+          message: 'Questionnaire music must not exceed 20 MiB',
+        });
+      }
+    }),
+  'questionnaires.media.delete': z.object({
+    userId: z.string().uuid(),
+    questionnaireId: z.string().uuid(),
+    mediaId: z.string().uuid(),
+  }),
+  'questionnaires.media.reorder': z.object({
+    userId: z.string().uuid(),
+    questionnaireId: z.string().uuid(),
+    mediaIds: z.array(z.string().uuid()).min(1).max(8),
+  }),
   'questionnaires.rate': z.object({
     userId: z.string().uuid(),
     questionnaireId: z.string().uuid(),
     value: z.union([z.literal(-1), z.literal(1)]),
+  }),
+  'questionnaires.recordView': z.object({
+    userId: z.string().uuid(),
+    questionnaireId: z.string().uuid(),
   }),
   'profiles.media.resolve': z.object({
     requesterUserId: z.string().uuid(),
@@ -251,6 +435,37 @@ export const workerOperations = {
     userId: z.string().uuid(),
     filterSetId: z.string().uuid(),
   }),
+  'taxonomy.suggestions': z.object({
+    userId: z.string().uuid(),
+    kind: z.enum([
+      'language',
+      'fandom',
+      'genre',
+      'tag',
+      'hashtag',
+      'plot',
+      'setting',
+      'looking_for',
+      'boundary',
+    ]),
+    query: z.string().trim().max(60).default(''),
+    limit: z.number().int().min(1).max(30).default(12),
+  }),
+  'taxonomy.selections.record': z.object({
+    userId: z.string().uuid(),
+    kind: z.enum([
+      'language',
+      'fandom',
+      'genre',
+      'tag',
+      'hashtag',
+      'plot',
+      'setting',
+      'looking_for',
+      'boundary',
+    ]),
+    value: z.string().trim().min(1).max(120),
+  }),
   'swipes.create': z.object({
     userId: z.string().uuid(),
     targetUserId: z.string().uuid(),
@@ -267,7 +482,7 @@ export const workerOperations = {
   }),
   'notifications.mentions.create': z.object({
     actorUserId: z.string().uuid(),
-    usernames: z.array(profileUsernameSchema).max(20),
+    usernames: z.array(publicProfileUsernameSchema).max(20),
     context: z.enum(['chat', 'questionnaire', 'post', 'comment']),
     entityId: z.string().uuid().optional(),
     openPath: z.string().startsWith('/').max(300),
@@ -284,14 +499,81 @@ export const workerOperations = {
     sourceKey: z.string().min(8).max(200),
     message: z.string().trim().min(1).max(300),
   }),
+  'notifications.telegram.enqueue': z.object({
+    targetUserId: z.string().uuid(),
+    conversationId: z.string().uuid().optional(),
+    category: z
+      .enum([
+        'message',
+        'like',
+        'follow',
+        'reaction',
+        'mention',
+        'comment',
+        'premium',
+        'moderation',
+        'follower_post',
+        'follower_questionnaire',
+      ])
+      .default('message'),
+    openPath: z.string().startsWith('/').max(300),
+    sourceKey: z.string().min(8).max(200),
+    message: z.string().trim().min(1).max(300),
+  }),
+  'notifications.onboarding.enqueueDue': z.object({
+    limit: z.number().int().min(1).max(30).default(20),
+  }),
+  'notifications.onboardingRecovery.enqueue': z.object({
+    createdAfter: z.string().datetime({ offset: true }),
+    campaign: z.string().regex(/^[a-z0-9-]{8,80}$/),
+    botUsername: z.string().regex(/^[A-Za-z0-9_]{5,32}$/),
+    limit: z.number().int().min(1).max(300).default(300),
+    dryRun: z.boolean().default(true),
+  }),
+  'notifications.engagement.claimDue': z.object({
+    limit: z.number().int().min(1).max(30).default(20),
+  }),
+  'notifications.engagement.complete': z.object({
+    claimToken: z.string().uuid(),
+    userId: z.string().uuid(),
+    outcome: z.enum(['send', 'subscribed', 'retry']),
+  }),
+  'notifications.telegram.claimBatch': z.object({
+    limit: z.number().int().min(1).max(30),
+  }),
+  'notifications.telegram.recordBatch': z.object({
+    claimToken: z.string().uuid(),
+    results: z
+      .array(
+        z.object({
+          notificationId: z.string().uuid(),
+          status: z.enum(['sent', 'retry', 'failed']),
+          errorCode: z.string().max(64).optional(),
+        }),
+      )
+      .min(1)
+      .max(30),
+  }),
+  'notifications.followers.create': z.object({
+    actorUserId: z.string().uuid(),
+    entityType: z.enum(['post', 'questionnaire']),
+    entityId: z.string().uuid(),
+    openPath: z.string().startsWith('/').max(300),
+    message: z.string().trim().min(1).max(300),
+  }),
   'notifications.list': z.object({ userId: z.string().uuid() }).merge(paginationSchema),
   'notifications.read': z.object({
     userId: z.string().uuid(),
     notificationId: z.string().uuid(),
   }),
+  'notifications.dismiss': z.object({
+    userId: z.string().uuid(),
+    notificationId: z.string().uuid(),
+  }),
+  'notifications.dismissAll': z.object({ userId: z.string().uuid() }),
   'mentions.resolve': z.object({
     requesterUserId: z.string().uuid(),
-    usernames: z.array(profileUsernameSchema).max(20),
+    usernames: z.array(publicProfileUsernameSchema).max(20),
   }),
   'premium.status': z.object({ userId: z.string().uuid() }),
   'promotions.apply': z.object({
@@ -312,6 +594,10 @@ export const workerOperations = {
     userId: z.string().uuid(),
     variantId: z.string().uuid(),
   }),
+  'premium.profileVariants.getShareable': z.object({
+    userId: z.string().uuid(),
+    variantId: z.string().uuid(),
+  }),
   'premium.profileVariants.delete': z.object({
     userId: z.string().uuid(),
     variantId: z.string().uuid(),
@@ -321,7 +607,69 @@ export const workerOperations = {
     userId: z.string().uuid(),
     targetUserId: z.string().uuid(),
   }),
-  'conversations.list': z.object({ userId: z.string().uuid() }).merge(paginationSchema),
+  'conversations.list': z
+    .object({ userId: z.string().uuid(), archived: z.boolean().default(false) })
+    .merge(paginationSchema),
+  'conversations.archive': z.object({
+    userId: z.string().uuid(),
+    conversationId: z.string().uuid(),
+    archived: z.boolean(),
+  }),
+  'conversations.pin': z.object({
+    userId: z.string().uuid(),
+    conversationId: z.string().uuid(),
+    pinned: z.boolean(),
+  }),
+  'conversations.pins.reorder': z.object({
+    userId: z.string().uuid(),
+    conversationIds: z
+      .array(z.string().uuid())
+      .max(100)
+      .refine((ids) => new Set(ids).size === ids.length, 'Pinned conversations must be unique'),
+  }),
+  'conversations.draft.get': z.object({
+    userId: z.string().uuid(),
+    conversationId: z.string().uuid(),
+  }),
+  'conversations.draft.save': z.object({
+    userId: z.string().uuid(),
+    conversationId: z.string().uuid(),
+    encryptedContent: z.string().min(20).max(8_000),
+  }),
+  'conversations.draft.delete': z.object({
+    userId: z.string().uuid(),
+    conversationId: z.string().uuid(),
+  }),
+  'conversations.presence.set': z.object({
+    userId: z.string().uuid(),
+    conversationId: z.string().uuid(),
+    activity: z.enum(['typing', 'recording_voice', 'sending_media', 'idle']),
+  }),
+  'conversations.presence.get': z.object({
+    userId: z.string().uuid(),
+    conversationId: z.string().uuid(),
+  }),
+  'shares.entity.resolve': z.object({
+    userId: z.string().uuid(),
+    entityType: z.enum(['post', 'questionnaire']),
+    entityId: z.string().uuid(),
+  }),
+  'shares.playlist.resolve': z.object({
+    userId: z.string().uuid(),
+    sourceType: z.enum(['post', 'chat']),
+    sourceId: z.string().min(1).max(128),
+    trackIds: z
+      .array(z.string().uuid())
+      .min(1)
+      .max(20)
+      .refine((ids) => new Set(ids).size === ids.length, 'Playlist tracks must be unique'),
+  }),
+  'shares.record': z.object({
+    userId: z.string().uuid(),
+    entityType: z.enum(['post', 'questionnaire', 'playlist']),
+    entityId: z.string().min(1).max(128),
+    conversationId: z.string().uuid(),
+  }),
   'conversations.resolveRelay': z.object({
     telegramUserId: z.number().int().positive(),
     conversationId: z.string().uuid().optional(),
@@ -334,7 +682,112 @@ export const workerOperations = {
     userId: z.string().uuid(),
     conversationId: z.string().uuid(),
     destinationMessageId: z.number().int().positive(),
-    messageType: z.string().min(1).max(32),
+    messageType: z.enum([
+      'text',
+      'photo',
+      'animation',
+      'video',
+      'audio',
+      'voice',
+      'profile',
+      'scenario',
+      'sticker',
+      'document',
+    ]),
+    encryptedContent: z.string().min(20).max(8_000).optional(),
+    telegramFileId: z.string().min(1).max(512).optional(),
+    mimeType: z.string().min(1).max(128).optional(),
+    fileName: z.string().min(1).max(255).optional(),
+    trackTitle: z.string().trim().min(1).max(160).optional(),
+    trackPerformer: z.string().trim().min(1).max(160).optional(),
+    thumbnailTelegramFileId: z.string().min(1).max(512).optional(),
+    durationSeconds: z.number().int().nonnegative().max(86_400).optional(),
+    mediaGroupId: z.string().uuid().optional(),
+    playlistTitle: z.string().trim().min(1).max(120).nullable().optional(),
+    replyToMessageId: z.string().uuid().optional(),
+    captionPosition: z.enum(['top', 'bottom']).optional(),
+  }),
+  'conversations.messages.list': z
+    .object({
+      userId: z.string().uuid(),
+      conversationId: z.string().uuid(),
+    })
+    .merge(paginationSchema),
+  'conversations.messages.get': z.object({
+    userId: z.string().uuid(),
+    conversationId: z.string().uuid(),
+    messageId: z.string().uuid(),
+  }),
+  'conversations.messages.pins.list': z.object({
+    userId: z.string().uuid(),
+    conversationId: z.string().uuid(),
+  }),
+  'conversations.messages.pin': z.object({
+    userId: z.string().uuid(),
+    conversationId: z.string().uuid(),
+    messageId: z.string().uuid(),
+    pinned: z.boolean(),
+    sharedWithParticipant: z.boolean().default(false),
+  }),
+  'conversations.messages.encryptedContent': z.object({
+    userId: z.string().uuid(),
+    conversationId: z.string().uuid(),
+    messageId: z.string().uuid(),
+  }),
+  'conversations.messages.media': z.object({
+    userId: z.string().uuid(),
+    conversationId: z.string().uuid(),
+    messageId: z.string().uuid(),
+  }),
+  'conversations.messages.thumbnail': z.object({
+    userId: z.string().uuid(),
+    conversationId: z.string().uuid(),
+    messageId: z.string().uuid(),
+  }),
+  'conversations.messages.deleteSelected': z.object({
+    userId: z.string().uuid(),
+    conversationId: z.string().uuid(),
+    messageIds: z.array(z.string().uuid()).min(1).max(100),
+  }),
+  'conversations.messages.forward': z.object({
+    userId: z.string().uuid(),
+    sourceConversationId: z.string().uuid(),
+    messageIds: z.array(z.string().uuid()).min(1).max(100),
+    destinationConversationIds: z.array(z.string().uuid()).min(1).max(20),
+  }),
+  'conversations.messages.react': z.object({
+    userId: z.string().uuid(),
+    conversationId: z.string().uuid(),
+    messageId: z.string().uuid(),
+    reaction: z.string().trim().min(1).max(16),
+  }),
+  'conversations.messages.updateOwnText': z.object({
+    userId: z.string().uuid(),
+    conversationId: z.string().uuid(),
+    messageId: z.string().uuid(),
+    encryptedContent: z.string().min(20).max(8_000),
+  }),
+  'conversations.messages.reorderOwnMedia': z.object({
+    userId: z.string().uuid(),
+    conversationId: z.string().uuid(),
+    mediaGroupId: z.string().uuid(),
+    messageIds: z.array(z.string().uuid()).min(2).max(20),
+  }),
+  'conversations.messages.replaceOwnMedia': z.object({
+    userId: z.string().uuid(),
+    conversationId: z.string().uuid(),
+    messageId: z.string().uuid(),
+    messageType: z.enum(['photo', 'animation', 'video', 'audio', 'voice', 'document']),
+    telegramFileId: z.string().min(1).max(512),
+    mimeType: z.string().min(1).max(128),
+    fileName: z.string().min(1).max(255),
+    trackTitle: z.string().trim().min(1).max(160).optional(),
+    trackPerformer: z.string().trim().min(1).max(160).optional(),
+    durationSeconds: z.number().int().nonnegative().max(86_400).optional(),
+  }),
+  'conversations.deleteOwn': z.object({
+    userId: z.string().uuid(),
+    conversationId: z.string().uuid(),
   }),
   'conversations.resolveReply': z.object({
     conversationId: z.string().uuid(),
@@ -349,17 +802,36 @@ export const workerOperations = {
     sourceMessageId: z.number().int(),
     destinationChatId: z.number().int(),
     destinationMessageId: z.number().int(),
-    messageType: z.string().min(1).max(32),
-  }),
-  'conversations.requestContact': z.object({
-    userId: z.string().uuid(),
-    conversationId: z.string().uuid(),
+    messageType: z.enum([
+      'text',
+      'photo',
+      'animation',
+      'video',
+      'audio',
+      'voice',
+      'profile',
+      'scenario',
+      'sticker',
+      'document',
+    ]),
+    encryptedContent: z.string().min(20).max(8_000).optional(),
+    telegramFileId: z.string().min(1).max(512).optional(),
+    mimeType: z.string().min(1).max(128).optional(),
+    fileName: z.string().min(1).max(255).optional(),
+    trackTitle: z.string().trim().min(1).max(160).optional(),
+    trackPerformer: z.string().trim().min(1).max(160).optional(),
+    thumbnailTelegramFileId: z.string().min(1).max(512).optional(),
+    durationSeconds: z.number().int().nonnegative().max(86_400).optional(),
+    mediaGroupId: z.string().min(1).max(128).optional(),
+    playlistTitle: z.string().trim().min(1).max(120).nullable().optional(),
   }),
   'conversations.control': z.object({
     userId: z.string().uuid(),
     conversationId: z.string().uuid(),
     action: z.enum(['mute', 'unmute', 'pause', 'resume', 'close']),
   }),
+  // Kept only for backward compatibility with the immutable call tables.
+  // No bot-api or MiniApp route exposes these operations.
   'calls.start': z.object({
     userId: z.string().uuid(),
     conversationId: z.string().uuid(),
@@ -397,30 +869,27 @@ export const workerOperations = {
     userId: z.string().uuid(),
     sourceChatId: z.number().int(),
     sourceMessageId: z.number().int().positive(),
-    contentType: z.enum([
-      'text',
-      'photo',
-      'document',
-      'animation',
-      'video',
-      'video_note',
-      'voice',
-      'audio',
-    ]),
+    contentType: z.enum(['text', 'photo', 'document', 'animation', 'video', 'voice', 'audio']),
     textPreview: z.string().max(500),
+    title: z.string().trim().max(160).optional(),
+    bodyMarkdown: z.string().max(10_000).optional(),
     mediaTelegramFileId: z.string().min(1).max(512).optional(),
+    mediaMimeType: z.string().trim().min(3).max(120).optional(),
     mediaThumbnailFileId: z.string().min(1).max(512).optional(),
     trackTitle: z.string().trim().min(1).max(160).optional(),
     trackPerformer: z.string().trim().min(1).max(160).optional(),
     mediaGroupId: z.string().min(1).max(128).optional(),
+    playlistTitle: z.string().trim().min(1).max(120).nullable().optional(),
   }),
   'posts.draft.publish': z.object({ userId: z.string().uuid(), postId: z.string().uuid() }),
   'posts.draft.cancel': z.object({ userId: z.string().uuid() }),
+  'posts.repost': z.object({ userId: z.string().uuid(), postId: z.string().uuid() }),
   'posts.updateOwn': z.object({
     userId: z.string().uuid(),
     postId: z.string().uuid(),
     title: z.string().trim().max(120),
     bodyMarkdown: z.string().trim().min(1).max(8_000),
+    playlistTitle: z.string().trim().min(1).max(120).nullable().optional(),
     tags: z.array(z.string().trim().min(1).max(60)).max(20).default([]),
     fandoms: z.array(z.string().trim().min(1).max(100)).max(20).default([]),
     hashtags: z.array(z.string().trim().min(1).max(60)).max(20).default([]),
@@ -428,6 +897,7 @@ export const workerOperations = {
   'posts.media.removeOwn': z.object({
     userId: z.string().uuid(),
     postId: z.string().uuid(),
+    mediaId: z.string().uuid().optional(),
   }),
   'posts.mediaEdit.start': z.object({
     userId: z.string().uuid(),
@@ -438,16 +908,9 @@ export const workerOperations = {
     userId: z.string().uuid(),
     sourceChatId: z.number().int(),
     sourceMessageId: z.number().int().positive(),
-    contentType: z.enum([
-      'photo',
-      'document',
-      'animation',
-      'video',
-      'video_note',
-      'voice',
-      'audio',
-    ]),
+    contentType: z.enum(['photo', 'document', 'animation', 'video', 'voice', 'audio']),
     mediaTelegramFileId: z.string().min(1).max(512),
+    mediaMimeType: z.string().trim().min(3).max(120).optional(),
     mediaThumbnailFileId: z.string().min(1).max(512).optional(),
     trackTitle: z.string().trim().min(1).max(160).optional(),
     trackPerformer: z.string().trim().min(1).max(160).optional(),
@@ -461,7 +924,13 @@ export const workerOperations = {
     mediaId: z.string().uuid(),
   }),
   'posts.own.list': z.object({ userId: z.string().uuid() }).merge(paginationSchema),
-  'posts.feed.list': z.object({ userId: z.string().uuid() }).merge(paginationSchema),
+  'posts.feed.list': z
+    .object({
+      userId: z.string().uuid(),
+      sort: z.enum(['interesting', 'new']).default('interesting'),
+      followingOnly: z.boolean().default(false),
+    })
+    .merge(paginationSchema),
   'posts.author.list': z
     .object({
       userId: z.string().uuid(),
@@ -472,13 +941,26 @@ export const workerOperations = {
     .object({ userId: z.string().uuid(), query: z.string().trim().max(80).default('') })
     .merge(paginationSchema),
   'posts.comments.list': z
-    .object({ userId: z.string().uuid(), postId: z.string().uuid() })
+    .object({
+      userId: z.string().uuid(),
+      postId: z.string().uuid(),
+      sort: z.enum(['interesting', 'new']).default('interesting'),
+    })
     .merge(paginationSchema),
   'posts.comments.create': z.object({
     userId: z.string().uuid(),
     postId: z.string().uuid(),
     body: z.string().trim().min(1).max(1_000),
     parentCommentId: z.string().uuid().optional(),
+  }),
+  'posts.comments.updateOwn': z.object({
+    userId: z.string().uuid(),
+    commentId: z.string().uuid(),
+    body: z.string().trim().min(1).max(1_000),
+  }),
+  'posts.comments.deleteOwn': z.object({
+    userId: z.string().uuid(),
+    commentId: z.string().uuid(),
   }),
   'posts.comments.rate': z.object({
     userId: z.string().uuid(),
@@ -489,6 +971,19 @@ export const workerOperations = {
     userId: z.string().uuid(),
     postId: z.string().uuid(),
     value: z.union([z.literal(-1), z.literal(1)]),
+  }),
+  'posts.recordView': z.object({
+    userId: z.string().uuid(),
+    postId: z.string().uuid(),
+  }),
+  'posts.engagement.list': z.object({
+    userId: z.string().uuid(),
+    postId: z.string().uuid(),
+    kind: z.enum(['ratings', 'shares']),
+  }),
+  'posts.hide': z.object({
+    userId: z.string().uuid(),
+    postId: z.string().uuid(),
   }),
   'posts.delete': z.object({ userId: z.string().uuid(), postId: z.string().uuid() }),
   'posting.requirements.due': z.object({ userId: z.string().uuid() }),
@@ -511,6 +1006,11 @@ export const workerOperations = {
     blockedUserId: z.string().uuid(),
     reason: z.string().max(500),
   }),
+  'blocks.list': z.object({ blockerUserId: z.string().uuid() }),
+  'blocks.remove': z.object({
+    blockerUserId: z.string().uuid(),
+    blockedUserId: z.string().uuid(),
+  }),
   'reports.create': z.object({
     reporterUserId: z.string().uuid(),
     reportedUserId: z.string().uuid(),
@@ -518,6 +1018,7 @@ export const workerOperations = {
     postId: z.string().uuid().optional(),
     questionnaireId: z.string().uuid().optional(),
     commentId: z.string().uuid().optional(),
+    profileUserId: z.string().uuid().optional(),
     category: reportCategorySchema,
     description: z.string().max(1_500),
     evidenceSnapshot: z.array(z.record(z.unknown())).max(20),
@@ -528,8 +1029,18 @@ export const workerOperations = {
     scoreDelta: z.number().int().min(-100).max(100),
     metadata: z.record(z.unknown()).default({}),
   }),
-  'telegramUpdates.claim': z.object({ updateId: z.number().int().nonnegative() }),
-  'telegramUpdates.release': z.object({ updateId: z.number().int().nonnegative() }),
+  'telegramUpdates.claim': z.object({
+    updateId: z.number().int().nonnegative(),
+    claimToken: z.string().uuid().optional(),
+  }),
+  'telegramUpdates.complete': z.object({
+    updateId: z.number().int().nonnegative(),
+    claimToken: z.string().uuid(),
+  }),
+  'telegramUpdates.release': z.object({
+    updateId: z.number().int().nonnegative(),
+    claimToken: z.string().uuid().optional(),
+  }),
   'products.list': z.object({ activeOnly: z.boolean().default(true) }),
   'products.listForUser': z.object({
     userId: z.string().uuid(),
@@ -633,7 +1144,7 @@ export const workerOperations = {
   'admin.profileUsernames.replace': z.object({
     adminUserId: z.string().uuid(),
     targetUserId: z.string().uuid(),
-    usernames: z.array(profileUsernameSchema).max(5),
+    usernames: z.array(publicProfileUsernameSchema).max(5),
   }),
   'admin.questionnaires.list': z
     .object({
@@ -661,6 +1172,11 @@ export const workerOperations = {
     adminUserId: z.string().uuid(),
     postId: z.string().uuid(),
     status: z.enum(['active', 'blocked', 'limited', 'shadow_banned']),
+    reason: z.string().min(3).max(1_000),
+  }),
+  'admin.comment.delete': z.object({
+    adminUserId: z.string().uuid(),
+    commentId: z.string().uuid(),
     reason: z.string().min(3).max(1_000),
   }),
   'admin.media.list': z

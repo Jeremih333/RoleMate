@@ -53,4 +53,24 @@ describe('Cloudflare edge rate limiting', () => {
     expect(limited?.status).toBe(429);
     await expect(limited?.json()).resolves.toMatchObject({ error: 'RATE_LIMITED' });
   });
+
+  it('does not rate-limit an authenticated Telegram webhook by Telegram infrastructure IP', async () => {
+    const app = new EdgeFastify();
+    app.configureRateLimit({ max: 120 });
+    app.post('/telegram/webhook', { config: { rateLimit: false } }, () => ({ ok: true }));
+    const request = () =>
+      new Request('https://example.test/telegram/webhook', {
+        method: 'POST',
+        headers: {
+          'cf-connecting-ip': '149.154.167.220',
+          'content-type': 'application/json',
+          'x-telegram-bot-api-secret-token': 'verified-by-the-route-handler',
+        },
+        body: JSON.stringify({ update_id: crypto.getRandomValues(new Uint32Array(1))[0] }),
+      });
+
+    for (let index = 0; index < 350; index += 1) {
+      expect((await app.edgeFetch(request()))?.status).toBe(200);
+    }
+  });
 });

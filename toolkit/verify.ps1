@@ -42,7 +42,8 @@ try {
         Invoke-Step 'dependency audit' { & corepack pnpm audit --prod }
     }
     if ($IncludeE2E) {
-        Invoke-Step 'end-to-end tests' { & corepack pnpm test:e2e }
+        # Serial execution avoids intermittent Playwright artifact-directory races on Windows.
+        Invoke-Step 'end-to-end tests' { & corepack pnpm exec playwright test --workers=1 }
     }
 } finally {
     Pop-Location

@@ -1,4 +1,5 @@
 import ReactMarkdown from 'react-markdown';
+import type { Ref } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { api } from '../api.js';
 
@@ -6,17 +7,19 @@ export function ProfileMarkdown({
   children,
   allowLinks,
   className = '',
+  dimEmphasis = false,
+  contentRef,
 }: {
   children: string;
   allowLinks: boolean;
   className?: string;
+  dimEmphasis?: boolean;
+  contentRef?: Ref<HTMLDivElement>;
 }) {
+  const mentionPattern =
+    /(^|[^\p{L}\p{N}_])@((?:[a-z][a-z0-9_]{3,31}|[\u0430-\u044f\u0451][\u0430-\u044f\u04510-9_]{3,31}))/giu;
   const usernames = [
-    ...new Set(
-      [...children.matchAll(/(^|[^\p{L}\p{N}_])@([a-z][a-z0-9_]{3,31})/giu)].map((match) =>
-        match[2]!.toLowerCase(),
-      ),
-    ),
+    ...new Set([...children.matchAll(mentionPattern)].map((match) => match[2]!.toLowerCase())),
   ].slice(0, 20);
   const mentions = useQuery({
     queryKey: ['resolved-mentions', usernames],
@@ -25,15 +28,13 @@ export function ProfileMarkdown({
     staleTime: 5 * 60_000,
   });
   const resolved = new Set((mentions.data ?? []).map((item) => item.username.toLowerCase()));
-  const markdown = children.replace(
-    /(^|[^\p{L}\p{N}_])@([a-z][a-z0-9_]{3,31})/giu,
-    (whole, prefix: string, username: string) =>
-      resolved.has(username.toLowerCase())
-        ? `${prefix}[@${username}](/u/${username.toLowerCase()})`
-        : whole,
+  const markdown = children.replace(mentionPattern, (whole, prefix: string, username: string) =>
+    resolved.has(username.toLowerCase())
+      ? `${prefix}[@${username}](/u/${username.toLowerCase()})`
+      : whole,
   );
   return (
-    <div className={`profile-markdown ${className}`}>
+    <div ref={contentRef} className={`profile-markdown ${className}`}>
       <ReactMarkdown
         skipHtml
         allowedElements={[
@@ -50,6 +51,9 @@ export function ProfileMarkdown({
           'a',
         ]}
         components={{
+          em: ({ children: emphasisChildren }) => (
+            <em className={dimEmphasis ? 'roleplay-action' : undefined}>{emphasisChildren}</em>
+          ),
           a: ({ children: linkChildren, href }) =>
             allowLinks && href ? (
               <a

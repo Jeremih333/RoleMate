@@ -786,6 +786,107 @@ function chatMessageDisplayText(message: ConversationMessage): string {
   return message.text_content || chatMessagePreview(message);
 }
 
+/**
+ * Telegram shows one pinned message at a time — the one governing the part of the
+ * chat you are looking at — with a tick per pin and a manage sheet behind the menu
+ * button. The old strip listed every pin side by side and its single close button
+ * unpinned whichever happened to be first.
+ */
+function ChatPinnedBar({
+  pins,
+  activeIndex,
+  onJump,
+  onUnpin,
+  unpinning,
+}: {
+  pins: PinnedConversationMessage[];
+  activeIndex: number;
+  onJump: (pin: PinnedConversationMessage, index: number) => void;
+  onUnpin: (pin: PinnedConversationMessage) => void;
+  unpinning: boolean;
+}) {
+  const [manageOpen, setManageOpen] = useState(false);
+  const index = Math.min(Math.max(activeIndex, 0), pins.length - 1);
+  const active = pins[index];
+  if (!active) return null;
+  const preview = active.text_content || active.file_name || chatPinnedPreview(active);
+  return (
+    <div className="chat-pinned-strip" aria-label={ru.miniApp.community.pinnedMessages}>
+      {pins.length > 1 ? (
+        <span className="chat-pinned-ticks" aria-hidden>
+          {pins.map((pin, tickIndex) => (
+            <i key={pin.id} className={tickIndex === index ? 'is-active' : ''} />
+          ))}
+        </span>
+      ) : (
+        <Pin className="chat-pinned-icon" aria-hidden />
+      )}
+      <button
+        type="button"
+        className="chat-pinned-active"
+        onClick={() => onJump(pins[(index + 1) % pins.length]!, (index + 1) % pins.length)}
+      >
+        <strong>
+          {pins.length > 1
+            ? ru.miniApp.community.pinnedNumbered(index + 1, pins.length)
+            : ru.miniApp.community.pinnedMessage}
+        </strong>
+        <small>{preview}</small>
+      </button>
+      <button
+        type="button"
+        className="chat-pinned-manage"
+        aria-label={ru.miniApp.community.managePins}
+        title={ru.miniApp.community.managePins}
+        onClick={() => setManageOpen(true)}
+      >
+        <MoreVertical aria-hidden />
+      </button>
+      {manageOpen ? (
+        <div className="confirm-dialog-backdrop" role="presentation">
+          <Card className="confirm-dialog chat-pinned-manage-dialog" role="dialog" aria-modal="true">
+            <header>
+              <h2>{ru.miniApp.community.managePins}</h2>
+              <button
+                type="button"
+                aria-label={ru.miniApp.community.closePreview}
+                onClick={() => setManageOpen(false)}
+              >
+                <X aria-hidden />
+              </button>
+            </header>
+            <ul className="chat-pinned-manage-list">
+              {pins.map((pin, pinIndex) => (
+                <li key={pin.id}>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setManageOpen(false);
+                      onJump(pin, pinIndex);
+                    }}
+                  >
+                    <strong>{pin.sender_name}</strong>
+                    <small>{pin.text_content || pin.file_name || chatPinnedPreview(pin)}</small>
+                  </button>
+                  <button
+                    type="button"
+                    className="chat-pinned-manage-unpin"
+                    disabled={unpinning}
+                    aria-label={ru.miniApp.community.unpinMessage}
+                    onClick={() => onUnpin(pin)}
+                  >
+                    <X aria-hidden />
+                  </button>
+                </li>
+              ))}
+            </ul>
+          </Card>
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
 function pickRandom<T>(values: readonly T[], exclude?: T): T {
   const pool = exclude === undefined ? values : values.filter((value) => value !== exclude);
   const source = pool.length ? pool : values;
@@ -946,6 +1047,27 @@ function ConversationView({
     refetchInterval: 1_500,
     refetchIntervalInBackground: false,
   });
+  // Which pin the bar shows follows the scroll position: the last pinned message
+  // that has already scrolled past the top of the list is the one in force.
+  const [activePinIndex, setActivePinIndex] = useState(0);
+  const pinIds = pinnedMessages.data?.map((pin) => pin.id).join(',') ?? '';
+  useEffect(() => {
+    const list = messagesListRef.current;
+    const ids = pinIds ? pinIds.split(',') : [];
+    if (!list || ids.length < 2) return;
+    const update = () => {
+      const top = list.getBoundingClientRect().top;
+      let next = 0;
+      ids.forEach((id, index) => {
+        const row = list.querySelector<HTMLElement>(`[data-message-id="${id}"]`);
+        if (row && row.getBoundingClientRect().top <= top + 8) next = index;
+      });
+      setActivePinIndex(next);
+    };
+    update();
+    list.addEventListener('scroll', update, { passive: true });
+    return () => list.removeEventListener('scroll', update);
+  }, [pinIds]);
   const block = useMutation({
     mutationFn: (userId: string) => api.block(userId),
     onSuccess: () => {
@@ -1234,33 +1356,6 @@ function ConversationView({
         ) : null}
       </header>
 
-      {pinnedMessages.data?.length ? (
-        <div className="chat-pinned-strip" aria-label={ru.miniApp.community.pinnedMessages}>
-          <div className="chat-pinned-list">
-            {pinnedMessages.data.map((item: PinnedConversationMessage) => (
-              <button type="button" key={item.id} onClick={() => void scrollToMessage(item.id)}>
-                <Pin aria-hidden />
-                <span>
-                  <strong>{item.sender_name}</strong>
-                  <small>{item.text_content || item.file_name || chatPinnedPreview(item)}</small>
-                </span>
-              </button>
-            ))}
-          </div>
-          <button
-            type="button"
-            className="chat-pinned-unpin"
-            aria-label={ru.miniApp.community.unpinMessage}
-            onClick={() => {
-              const first = pinnedMessages.data[0];
-              if (first) pinMessage.mutate({ messageId: first.id, pinned: false, shared: false });
-            }}
-          >
-            <X aria-hidden />
-          </button>
-        </div>
-      ) : null}
-
       {selectionMode ? (
         <div className="chat-selection-toolbar">
           <span>
@@ -1322,6 +1417,21 @@ function ConversationView({
           )}
         </div>
       )}
+
+      {pinnedMessages.data?.length ? (
+        <ChatPinnedBar
+          pins={pinnedMessages.data}
+          activeIndex={activePinIndex}
+          onJump={(pin, index) => {
+            setActivePinIndex(index);
+            void scrollToMessage(pin.id);
+          }}
+          onUnpin={(pin) =>
+            pinMessage.mutate({ messageId: pin.id, pinned: false, shared: false })
+          }
+          unpinning={pinMessage.isPending}
+        />
+      ) : null}
 
       <div ref={messagesListRef} className="telegram-message-list" aria-live="polite">
         {messages.isLoading ? <Skeleton className="h-48" /> : null}

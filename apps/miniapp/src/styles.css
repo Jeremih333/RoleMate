@@ -2303,74 +2303,139 @@ select:focus-visible {
 .chat-draft-preview b {
   color: #e56572 !important;
 }
+/* Sits below the rating bar, so it must not out-stack it. */
 .chat-pinned-strip {
-  z-index: 12;
+  position: relative;
+  z-index: 4;
   display: flex;
   min-width: 0;
-  align-items: stretch;
-  gap: 6px;
+  align-items: center;
+  gap: 9px;
   border-bottom: 1px solid var(--border);
-  padding: 6px 8px;
+  padding: 7px 10px;
   background: color-mix(in srgb, var(--surface-solid) 94%, transparent);
   flex: 0 0 auto;
 }
-.chat-pinned-list {
-  display: flex;
-  min-width: 0;
-  flex: 1;
-  gap: 6px;
-  overflow-x: auto;
-  scrollbar-width: none;
-}
-.chat-pinned-list::-webkit-scrollbar {
-  display: none;
-}
-.chat-pinned-list > button {
-  display: flex;
-  min-width: min(240px, 72vw);
-  max-width: 280px;
-  align-items: center;
-  gap: 7px;
-  border: 0;
-  border-left: 3px solid var(--accent-strong);
-  border-radius: 5px 10px 10px 5px;
-  padding: 5px 8px;
-  color: var(--text);
-  background: var(--accent-soft);
-  text-align: left;
-}
-.chat-pinned-list svg,
-.chat-pinned-unpin svg {
+.chat-pinned-icon {
   width: 15px;
   height: 15px;
   flex: 0 0 auto;
+  color: var(--accent-strong);
 }
-.chat-pinned-list span {
+.chat-pinned-ticks {
+  display: flex;
+  flex: 0 0 auto;
+  flex-direction: column;
+  gap: 2px;
+  align-self: stretch;
+  justify-content: center;
+}
+.chat-pinned-ticks i {
+  width: 2px;
+  height: 8px;
+  border-radius: 1px;
+  background: color-mix(in srgb, var(--accent-strong) 30%, transparent);
+  transition: background 160ms ease;
+}
+.chat-pinned-ticks i.is-active {
+  background: var(--accent-strong);
+}
+.chat-pinned-active {
   display: grid;
   min-width: 0;
+  flex: 1;
+  gap: 1px;
+  border: 0;
+  padding: 0;
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
 }
-.chat-pinned-list :where(strong, small) {
+.chat-pinned-active :where(strong, small) {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.chat-pinned-list strong {
+.chat-pinned-active strong {
   color: var(--accent-strong);
   font-size: 11px;
 }
-.chat-pinned-list small {
+.chat-pinned-active small {
   color: var(--soft);
-  font-size: 10px;
+  font-size: 12px;
 }
-.chat-pinned-unpin {
+.chat-pinned-manage {
   display: grid;
   width: 34px;
+  height: 34px;
   flex: 0 0 34px;
   place-items: center;
   border: 0;
   border-radius: 10px;
   color: var(--muted);
   background: transparent;
+  cursor: pointer;
+}
+.chat-pinned-manage svg {
+  width: 17px;
+  height: 17px;
+}
+.chat-pinned-manage-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  max-height: 60vh;
+  overflow-y: auto;
+}
+.chat-pinned-manage-list li {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  border: 1px solid var(--border);
+  border-radius: 13px;
+  background: var(--surface-elevated);
+}
+.chat-pinned-manage-list li > button:first-child {
+  display: grid;
+  flex: 1;
+  min-width: 0;
+  gap: 2px;
+  border: 0;
+  padding: 11px 13px;
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.chat-pinned-manage-list :where(strong, small) {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.chat-pinned-manage-list strong {
+  font-size: 13px;
+}
+.chat-pinned-manage-list small {
+  color: var(--muted);
+  font-size: 12px;
+}
+.chat-pinned-manage-unpin {
+  display: grid;
+  width: 40px;
+  height: 40px;
+  flex: 0 0 40px;
+  place-items: center;
+  border: 0;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+}
+.chat-pinned-manage-unpin svg {
+  width: 16px;
+  height: 16px;
 }
 .telegram-message-row.is-highlighted {
   border-radius: 16px;

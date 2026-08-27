@@ -1330,6 +1330,10 @@ export const ru = {
       pinMessageTitle: 'Закрепить это сообщение?',
       pinForParticipant: (name: string) => `Закрепить также для ${name}?`,
       pinnedMessages: 'Закреплённые сообщения',
+      pinnedMessage: 'Закреплённое сообщение',
+      pinnedNumbered: (index: number, total: number) =>
+        `Закреплённое сообщение ${index} из ${total}`,
+      managePins: 'Управление закреплениями',
       pinnedMessageLimit: 'В одном чате можно закрепить до 8 сообщений.',
       draftPrefix: 'черновик:',
       mediaCaption: 'Подпись к медиа',

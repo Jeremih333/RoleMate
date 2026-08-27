@@ -7655,9 +7655,22 @@ const handlers: { [K in WorkerOperation]: Handler<K> } = {
     return { saved: true, ratedUserId: participant.rated_user_id };
   },
   'posts.draft.start': async (env, input) => {
+    // Posting is tied to the public profile, not to a questionnaire: the two were
+    // split apart, and requiring an approved questionnaire left users who had not
+    // written one yet unable to post at all. The profile row is created lazily
+    // elsewhere, so a user who has never opened their profile needs one here.
+    await env.DB.prepare(
+      `INSERT OR IGNORE INTO user_profiles (user_id, display_name, bio)
+       SELECT id, ?2, '' FROM users
+       WHERE id = ?1 AND is_banned = 0 AND deleted_at IS NULL`,
+    )
+      .bind(input.userId, ru.miniApp.profile.unknownName)
+      .run();
     const profile = await env.DB.prepare(
-      `SELECT id FROM profiles
-       WHERE user_id = ?1 AND moderation_status = 'approved' AND is_active = 1`,
+      `SELECT up.user_id FROM user_profiles up
+       JOIN users u ON u.id = up.user_id
+       WHERE up.user_id = ?1 AND up.moderation_status = 'active'
+         AND u.is_banned = 0 AND u.deleted_at IS NULL`,
     )
       .bind(input.userId)
       .first();
@@ -8708,7 +8721,8 @@ const handlers: { [K in WorkerOperation]: Handler<K> } = {
                AND feed_follow.followed_user_id = tp.author_user_id
            ))
          GROUP BY tp.id
-         ORDER BY CASE tp.reach_status WHEN 'normal' THEN 0 WHEN 'limited' THEN 1 ELSE 2 END,
+         ORDER BY CASE WHEN tp.author_user_id = ?1 THEN 0 ELSE 1 END,
+                  CASE tp.reach_status WHEN 'normal' THEN 0 WHEN 'limited' THEN 1 ELSE 2 END,
                   CASE WHEN ?4 = 'interesting' THEN affinity_score ELSE 0 END DESC,
                   CASE WHEN ?4 = 'interesting'
                     THEN (rating_score * 4 + comment_count * 6) ELSE 0 END DESC,

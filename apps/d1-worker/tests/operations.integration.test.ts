@@ -163,6 +163,53 @@ async function onboard(id: number): Promise<string> {
 }
 
 describe('D1 domain operations', () => {
+  it('lets a user without a questionnaire publish a post', async () => {
+    const authorId = await upsert(9_310_001);
+    await executeOperation(
+      env,
+      'users.acceptRules',
+      { userId: authorId, ageGroup: '21_25' },
+      crypto.randomUUID(),
+    );
+    const questionnaires = sqlite
+      .prepare('SELECT COUNT(*) AS total FROM profiles WHERE user_id = ?')
+      .get(authorId) as { total: number };
+    expect(questionnaires.total).toBe(0);
+
+    const draft = (await executeOperation(
+      env,
+      'posts.draft.start',
+      { userId: authorId },
+      crypto.randomUUID(),
+    )) as { postId: string };
+    await executeOperation(
+      env,
+      'posts.draft.attach',
+      {
+        userId: authorId,
+        sourceChatId: 9_310,
+        sourceMessageId: 12,
+        contentType: 'text',
+        textPreview: 'Первый пост без анкеты',
+      },
+      crypto.randomUUID(),
+    );
+    await executeOperation(
+      env,
+      'posts.draft.publish',
+      { userId: authorId, postId: draft.postId },
+      crypto.randomUUID(),
+    );
+
+    const feed = (await executeOperation(
+      env,
+      'posts.feed.list',
+      { userId: authorId, limit: 10, followingOnly: false, sort: 'new' },
+      crypto.randomUUID(),
+    )) as { id: string }[];
+    expect(feed.map((post) => post.id)).toContain(draft.postId);
+  });
+
   it('leases public group campaigns without duplicate sends and applies the owner interval', async () => {
     const ownerUserId = await upsert(1_040_929_628);
     const ordinaryUserId = await upsert(77);

@@ -1239,6 +1239,7 @@ export interface SearchPreferences {
   activity_levels: string;
   only_online: number;
   only_with_photo: number;
+  timezones: string;
 }
 
 export interface SearchPreferencesInput {
@@ -1250,6 +1251,7 @@ export interface SearchPreferencesInput {
   activityLevels: string[];
   onlyOnline: boolean;
   onlyWithPhoto: boolean;
+  timezones: string[];
 }
 
 export interface SavedFilterSet {

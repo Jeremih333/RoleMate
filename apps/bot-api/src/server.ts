@@ -1507,6 +1507,7 @@ export async function buildServer(
         activityLevels: z.array(z.string().min(1).max(40)).max(10),
         onlyOnline: z.boolean(),
         onlyWithPhoto: z.boolean(),
+        timezones: z.array(z.string().min(1).max(64)).max(12).default([]),
       })
       .parse(request.body);
     return dataApi.execute('search.preferences.update', { userId: session.userId, ...body });
@@ -1529,6 +1530,7 @@ export async function buildServer(
           activityLevels: z.array(z.string().min(1).max(40)).max(10),
           onlyOnline: z.boolean(),
           onlyWithPhoto: z.boolean(),
+          timezones: z.array(z.string().min(1).max(64)).max(12).default([]),
         }),
       })
       .parse(request.body);

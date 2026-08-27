@@ -3706,7 +3706,7 @@ const handlers: { [K in WorkerOperation]: Handler<K> } = {
     const premium = Boolean(await premiumEnd(env, input.userId));
     const preferences = await env.DB.prepare(
       `SELECT age_groups, languages, genres, fandoms, writing_styles,
-              activity_levels, only_online, only_with_photo
+              activity_levels, only_online, only_with_photo, timezones
        FROM search_preferences WHERE user_id = ?1`,
     )
       .bind(input.userId)
@@ -3722,6 +3722,7 @@ const handlers: { [K in WorkerOperation]: Handler<K> } = {
         activity_levels: '[]',
         only_online: 0,
         only_with_photo: 0,
+        timezones: '[]',
       }),
     };
   },
@@ -3731,14 +3732,15 @@ const handlers: { [K in WorkerOperation]: Handler<K> } = {
       env.DB.prepare(
         `INSERT INTO search_preferences (
            user_id, age_groups, languages, genres, fandoms, writing_styles,
-           activity_levels, only_online, only_with_photo
-         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
+           activity_levels, only_online, only_with_photo, timezones
+         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)
          ON CONFLICT(user_id) DO UPDATE SET
            age_groups = excluded.age_groups, languages = excluded.languages,
            genres = excluded.genres, fandoms = excluded.fandoms,
            writing_styles = excluded.writing_styles,
            activity_levels = excluded.activity_levels,
            only_online = excluded.only_online, only_with_photo = excluded.only_with_photo,
+           timezones = excluded.timezones,
            updated_at = CURRENT_TIMESTAMP`,
       ).bind(
         input.userId,
@@ -3750,6 +3752,7 @@ const handlers: { [K in WorkerOperation]: Handler<K> } = {
         json(input.activityLevels),
         input.onlyOnline ? 1 : 0,
         input.onlyWithPhoto ? 1 : 0,
+        json(input.timezones),
       ),
       env.DB.prepare('UPDATE saved_filter_sets SET is_active = 0 WHERE user_id = ?1').bind(
         input.userId,
@@ -3804,19 +3807,22 @@ const handlers: { [K in WorkerOperation]: Handler<K> } = {
       activityLevels: string[];
       onlyOnline: boolean;
       onlyWithPhoto: boolean;
+      // Filter sets saved before timezones existed have no such field.
+      timezones?: string[];
     };
     await env.DB.batch([
       env.DB.prepare(
         `INSERT INTO search_preferences (
            user_id, age_groups, languages, genres, fandoms, writing_styles,
-           activity_levels, only_online, only_with_photo
-         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
+           activity_levels, only_online, only_with_photo, timezones
+         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)
          ON CONFLICT(user_id) DO UPDATE SET
            age_groups = excluded.age_groups, languages = excluded.languages,
            genres = excluded.genres, fandoms = excluded.fandoms,
            writing_styles = excluded.writing_styles,
            activity_levels = excluded.activity_levels,
            only_online = excluded.only_online, only_with_photo = excluded.only_with_photo,
+           timezones = excluded.timezones,
            updated_at = CURRENT_TIMESTAMP`,
       ).bind(
         input.userId,
@@ -3828,6 +3834,7 @@ const handlers: { [K in WorkerOperation]: Handler<K> } = {
         json(filters.activityLevels),
         filters.onlyOnline ? 1 : 0,
         filters.onlyWithPhoto ? 1 : 0,
+        json(filters.timezones ?? []),
       ),
       env.DB.prepare(
         'UPDATE saved_filter_sets SET is_active = CASE WHEN id = ?1 THEN 1 ELSE 0 END WHERE user_id = ?2',
@@ -3963,7 +3970,7 @@ const handlers: { [K in WorkerOperation]: Handler<K> } = {
     const preferences = premium
       ? await env.DB.prepare(
           `SELECT age_groups, languages, genres, fandoms, writing_styles,
-                  activity_levels, only_online, only_with_photo
+                  activity_levels, only_online, only_with_photo, timezones
            FROM search_preferences WHERE user_id = ?1`,
         )
           .bind(input.userId)
@@ -3976,6 +3983,7 @@ const handlers: { [K in WorkerOperation]: Handler<K> } = {
             activity_levels: string;
             only_online: number;
             only_with_photo: number;
+            timezones: string;
           }>()
       : null;
     const ageGroups = preferences?.age_groups ?? '[]';
@@ -3983,6 +3991,7 @@ const handlers: { [K in WorkerOperation]: Handler<K> } = {
     const fandoms = preferences?.fandoms ?? '[]';
     const writingStyles = preferences?.writing_styles ?? '[]';
     const activityLevels = preferences?.activity_levels ?? '[]';
+    const timezones = preferences?.timezones ?? '[]';
     const languages = preferences?.languages ?? '[]';
     const normalizedQuery = input.query.startsWith('@') ? input.query.slice(1) : input.query;
     const queryLike = `%${normalizedQuery
@@ -4186,6 +4195,7 @@ const handlers: { [K in WorkerOperation]: Handler<K> } = {
            SELECT 1 FROM questionnaire_media pm
            WHERE pm.questionnaire_id = p.id AND pm.moderation_status = 'approved'
          ))
+         AND (json_array_length(?19) = 0 OR p.timezone IN (SELECT value FROM json_each(?19)))
          AND (
            ?13 = ''
            OR p.display_name LIKE ?14 ESCAPE '~'
@@ -4246,6 +4256,7 @@ const handlers: { [K in WorkerOperation]: Handler<K> } = {
         viewer.genres,
         viewer.languages,
         viewer.tags,
+        timezones,
       )
       .all<Record<string, unknown>>();
     const response = results.results

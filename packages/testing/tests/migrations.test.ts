@@ -94,6 +94,7 @@ describe('D1 migrations', () => {
       '0064_unicode_taxonomy_canonicalization.sql',
       '0065_engagement_reminder_query_indexes.sql',
       '0066_profile_badges.sql',
+      '0067_search_timezones.sql',
     ]);
     expect(() => applyMigrations()).not.toThrow();
     const postColumns = database.prepare('PRAGMA table_info(telegram_posts)').all() as Array<{

@@ -908,6 +908,7 @@ export const ru = {
       dislikes: 'не нравится',
       demographicsHidden: 'скрыто с Premium',
       filterAge: 'Возрастные группы',
+      filterTimezone: 'Часовые пояса',
       filterGenres: 'Жанры через запятую',
       filterFandoms: 'Фандомы через запятую',
       filterWritingStyles: 'Стили письма через запятую',

@@ -411,6 +411,7 @@ export const workerOperations = {
     activityLevels: z.array(z.string().min(1).max(40)).max(10),
     onlyOnline: z.boolean(),
     onlyWithPhoto: z.boolean(),
+    timezones: z.array(z.string().min(1).max(64)).max(12).default([]),
   }),
   'search.filterSets.list': z.object({ userId: z.string().uuid() }),
   'search.filterSets.save': z.object({
@@ -425,6 +426,7 @@ export const workerOperations = {
       activityLevels: z.array(z.string().min(1).max(40)).max(10),
       onlyOnline: z.boolean(),
       onlyWithPhoto: z.boolean(),
+      timezones: z.array(z.string().min(1).max(64)).max(12).default([]),
     }),
   }),
   'search.filterSets.activate': z.object({

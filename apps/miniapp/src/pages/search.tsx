@@ -1232,6 +1232,7 @@ function SearchFilters({
   );
   const [onlyOnline, setOnlyOnline] = useState(Boolean(preferences.only_online));
   const [onlyWithPhoto, setOnlyWithPhoto] = useState(Boolean(preferences.only_with_photo));
+  const [timezones, setTimezones] = useState(list(preferences.timezones));
   const [filterSetName, setFilterSetName] = useState('');
   const filterSets = useQuery({ queryKey: ['filter-sets'], queryFn: api.filterSets });
   const emptyInput: SearchPreferencesInput = {
@@ -1243,6 +1244,7 @@ function SearchFilters({
     activityLevels: [],
     onlyOnline: false,
     onlyWithPhoto: false,
+    timezones: [],
   };
   const completeSave = () => {
     void queryClient.invalidateQueries({ queryKey: ['search-preferences'] });
@@ -1263,6 +1265,7 @@ function SearchFilters({
       setActivityLevels('');
       setOnlyOnline(false);
       setOnlyWithPhoto(false);
+      setTimezones([]);
       completeSave();
     },
   });
@@ -1280,6 +1283,7 @@ function SearchFilters({
     activityLevels: split(activityLevels),
     onlyOnline,
     onlyWithPhoto,
+    timezones,
   });
   const saveSet = useMutation({
     mutationFn: () => api.saveFilterSet(filterSetName, currentInput()),
@@ -1331,6 +1335,26 @@ function SearchFilters({
           placeholder={String(placeholder)}
         />
       ))}
+      <p className="text-sm font-semibold">{ru.miniApp.search.filterTimezone}</p>
+      <div className="flex flex-wrap gap-2">
+        {ru.miniApp.profile.timezoneOptions.map(([value, label]) => (
+          <button
+            key={value}
+            type="button"
+            className={`tag ${timezones.includes(value) ? 'status-pill' : ''}`}
+            aria-pressed={timezones.includes(value)}
+            onClick={() =>
+              setTimezones((current) =>
+                current.includes(value)
+                  ? current.filter((item) => item !== value)
+                  : [...current, value],
+              )
+            }
+          >
+            {label}
+          </button>
+        ))}
+      </div>
       <label className="setting-row">
         {ru.miniApp.search.onlyOnline}
         <input

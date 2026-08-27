@@ -1,4 +1,4 @@
-import { Fragment, useCallback, useEffect, useRef, useState } from 'react';
+import { Fragment, useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { ru } from '@rolemate/shared';
 import {
@@ -75,10 +75,19 @@ import { useViewerTime } from '../components/viewer-time.js';
 
 export function MatchesPage() {
   const queryClient = useQueryClient();
-  const matches = useQuery({ queryKey: ['matches'], queryFn: api.matches });
+  // Names and headlines here come from the live profile, but the list was served
+  // from cache on every return to the screen, so renames never showed.
+  const matches = useQuery({
+    queryKey: ['matches'],
+    queryFn: api.matches,
+    refetchOnMount: 'always',
+    refetchOnWindowFocus: 'always',
+  });
   const incoming = useQuery({
     queryKey: ['incoming-likes'],
     queryFn: api.incomingLikes,
+    refetchOnMount: 'always',
+    refetchOnWindowFocus: 'always',
   });
   const likeBack = useMutation({
     mutationFn: (userId: string) => api.swipe(userId, 'like'),
@@ -137,54 +146,59 @@ export function MatchesPage() {
       </div>
       <div className="space-y-3">
         {incoming.data?.map((like) => (
-          <Card
+          <SwipeToDismiss
             key={like.swipe_id}
-            className={`incoming-like-card p-4 ${like.action === 'super_like' ? 'is-super-like' : ''}`}
+            label={ru.miniApp.community.dismissLike}
+            onDismiss={() => dismissLike.mutate(like.user_id)}
           >
-            <div className="flex items-center justify-between gap-3">
-              <Link
-                className="profile-author-link flex min-w-0 items-center gap-3"
-                href={`/profiles/${like.user_id}`}
-              >
-                <ProfileAvatar
-                  mediaId={like.avatar_media_id}
-                  renderMode={like.avatar_render_mode}
-                  name={like.display_name}
-                />
-                <div className="min-w-0">
-                  <strong className="flex items-center gap-1">
-                    {like.display_name}
-                    <VerificationBadge kind={like.verification_kind} premium={like.has_premium} />
-                  </strong>
-                  {like.username ? (
-                    <p className="truncate text-xs text-lilac">@{like.username}</p>
-                  ) : null}
-                  <p className="truncate text-sm text-muted">{like.short_headline}</p>
-                </div>
-              </Link>
-              <span className="incoming-like-kind">
-                {like.action === 'super_like' ? (
-                  <>
-                    <DoubleHeartIcon /> {ru.miniApp.community.superLikeIncoming}
-                  </>
-                ) : (
-                  ru.miniApp.community.like
-                )}
-              </span>
-            </div>
-            <div className="incoming-like-actions mt-3">
-              <Button onClick={() => likeBack.mutate(like.user_id)} loading={likeBack.isPending}>
-                <Heart className="h-4 w-4" /> {ru.miniApp.community.likeBack}
-              </Button>
-              <Button
-                variant="secondary"
-                onClick={() => dismissLike.mutate(like.user_id)}
-                loading={dismissLike.isPending}
-              >
-                <X className="h-4 w-4" /> {ru.miniApp.community.dismissLike}
-              </Button>
-            </div>
-          </Card>
+            <Card
+              className={`incoming-like-card p-4 ${like.action === 'super_like' ? 'is-super-like' : ''}`}
+            >
+              <div className="flex items-center justify-between gap-3">
+                <Link
+                  className="profile-author-link flex min-w-0 items-center gap-3"
+                  href={`/profiles/${like.user_id}`}
+                >
+                  <ProfileAvatar
+                    mediaId={like.avatar_media_id}
+                    renderMode={like.avatar_render_mode}
+                    name={like.display_name}
+                  />
+                  <div className="min-w-0">
+                    <strong className="flex items-center gap-1">
+                      {like.display_name}
+                      <VerificationBadge kind={like.verification_kind} premium={like.has_premium} />
+                    </strong>
+                    {like.username ? (
+                      <p className="truncate text-xs text-lilac">@{like.username}</p>
+                    ) : null}
+                    <p className="truncate text-sm text-muted">{like.short_headline}</p>
+                  </div>
+                </Link>
+                <span className="incoming-like-kind">
+                  {like.action === 'super_like' ? (
+                    <>
+                      <DoubleHeartIcon /> {ru.miniApp.community.superLikeIncoming}
+                    </>
+                  ) : (
+                    ru.miniApp.community.like
+                  )}
+                </span>
+              </div>
+              <div className="incoming-like-actions mt-3">
+                <Button onClick={() => likeBack.mutate(like.user_id)} loading={likeBack.isPending}>
+                  <Heart className="h-4 w-4" /> {ru.miniApp.community.likeBack}
+                </Button>
+                <Button
+                  variant="secondary"
+                  onClick={() => dismissLike.mutate(like.user_id)}
+                  loading={dismissLike.isPending}
+                >
+                  <X className="h-4 w-4" /> {ru.miniApp.community.dismissLike}
+                </Button>
+              </div>
+            </Card>
+          </SwipeToDismiss>
         ))}
         {!incoming.isLoading && !incoming.data?.length ? (
           <Card className="p-4 text-sm text-soft">{ru.miniApp.community.incomingLikesEmpty}</Card>
@@ -685,6 +699,21 @@ function conversationListPreview(chat: Conversation): string {
 }
 
 function chatPinnedPreview(message: PinnedConversationMessage): string {
+  // Same trap as the reply quote: a pinned shared profile or entity is JSON, and
+  // printing text_content verbatim would show the payload.
+  const text = message.text_content?.trim();
+  if (message.message_type === 'profile' || parseTelegramProfileShare(text)) {
+    return ru.miniApp.community.sharedProfileMessage;
+  }
+  if (message.message_type === 'scenario') return ru.miniApp.community.sharedScenarioMessage;
+  const shared = parseSharedEntity(text);
+  if (shared) {
+    return shared.entityType === 'post'
+      ? ru.miniApp.community.sharedPostMessage
+      : ru.miniApp.community.sharedQuestionnaireMessage;
+  }
+  if (text) return text;
+  if (message.file_name?.trim()) return message.file_name.trim();
   if (message.message_type === 'photo') return ru.miniApp.community.photoMessage;
   if (message.message_type === 'video') return ru.miniApp.community.videoMessage;
   if (message.message_type === 'animation') return ru.miniApp.community.animationMessage;
@@ -820,7 +849,7 @@ function ChatPinnedBar({
   const index = Math.min(Math.max(activeIndex, 0), pins.length - 1);
   const active = pins[index];
   if (!active) return null;
-  const preview = active.text_content || active.file_name || chatPinnedPreview(active);
+  const preview = chatPinnedPreview(active);
   return (
     <div className="chat-pinned-strip" aria-label={ru.miniApp.community.pinnedMessages}>
       {pins.length > 1 ? (
@@ -881,7 +910,7 @@ function ChatPinnedBar({
                     }}
                   >
                     <strong>{pin.sender_name}</strong>
-                    <small>{pin.text_content || pin.file_name || chatPinnedPreview(pin)}</small>
+                    <small>{chatPinnedPreview(pin)}</small>
                   </button>
                   <button
                     type="button"
@@ -917,6 +946,68 @@ function useMessageReaction(conversationId: string, messageId: string, onDone?: 
       void queryClient.invalidateQueries({ queryKey: ['conversation-messages', conversationId] });
     },
   });
+}
+
+/**
+ * Swipe a row left to reveal a red delete affordance, the way lists behave in
+ * Telegram and iOS. Tapping the revealed button removes the entry; releasing
+ * short of the threshold springs it back.
+ */
+function SwipeToDismiss({
+  label,
+  onDismiss,
+  children,
+}: {
+  label: string;
+  onDismiss: () => void;
+  children: ReactNode;
+}) {
+  const [offset, setOffset] = useState(0);
+  const start = useRef<{ x: number; y: number } | null>(null);
+  const REVEAL = 72;
+  return (
+    <div className="swipe-dismiss">
+      <button
+        type="button"
+        className="swipe-dismiss-action"
+        aria-label={label}
+        title={label}
+        tabIndex={offset > 0 ? 0 : -1}
+        onClick={() => {
+          setOffset(0);
+          onDismiss();
+        }}
+      >
+        <Trash2 aria-hidden />
+      </button>
+      <div
+        className="swipe-dismiss-content"
+        style={{ transform: `translateX(-${offset}px)` }}
+        onPointerDown={(event) => {
+          start.current = { x: event.clientX, y: event.clientY };
+        }}
+        onPointerMove={(event) => {
+          const from = start.current;
+          if (!from) return;
+          const dx = from.x - event.clientX;
+          const dy = Math.abs(from.y - event.clientY);
+          // Let vertical scrolling win, so the list still scrolls normally.
+          if (dy > Math.abs(dx)) return;
+          setOffset(Math.max(0, Math.min(REVEAL, dx)));
+        }}
+        onPointerUp={() => {
+          start.current = null;
+          setOffset((current) => (current > REVEAL / 2 ? REVEAL : 0));
+        }}
+        onPointerCancel={() => {
+          start.current = null;
+          setOffset(0);
+        }}
+      >
+        {children}
+      </div>
+    </div>
+  );
 }
 
 function pickRandom<T>(values: readonly T[], exclude?: T): T {
@@ -2360,9 +2451,22 @@ function groupConversationMessages(messages: ConversationMessage[]): Conversatio
 }
 
 function repliedMessageSummary(message: ConversationMessage): string {
-  if (message.reply_text_content?.trim()) return message.reply_text_content.trim();
-  if (message.reply_file_name?.trim()) return message.reply_file_name.trim();
   const type = message.reply_message_type;
+  // A shared profile, scenario or entity is stored as JSON. Quoting it verbatim
+  // printed the raw payload into the reply bubble.
+  const quoted = message.reply_text_content?.trim();
+  if (type === 'profile' || parseTelegramProfileShare(quoted)) {
+    return ru.miniApp.community.sharedProfileMessage;
+  }
+  if (type === 'scenario') return ru.miniApp.community.sharedScenarioMessage;
+  const shared = parseSharedEntity(quoted);
+  if (shared) {
+    return shared.entityType === 'post'
+      ? ru.miniApp.community.sharedPostMessage
+      : ru.miniApp.community.sharedQuestionnaireMessage;
+  }
+  if (quoted) return quoted;
+  if (message.reply_file_name?.trim()) return message.reply_file_name.trim();
   if (type === 'photo') return ru.miniApp.community.photoMessage;
   if (type === 'video') return ru.miniApp.community.videoMessage;
   if (type === 'animation') return ru.miniApp.community.animationMessage;
@@ -2399,15 +2503,10 @@ function ConversationReplyQuote({ message }: { message: ConversationMessage }) {
 function ForwardedMessageAuthor({ message }: { message: ConversationMessage }) {
   const content = (
     <>
-      {message.forwarded_author_user_id ? (
-        <ProfileAvatar
-          mediaId={message.forwarded_author_avatar_media_id}
-          renderMode={message.forwarded_author_avatar_render_mode}
-          name={message.forwarded_author_name ?? ru.miniApp.community.roleplayer}
-        />
-      ) : null}
+      {/* Telegram states it on one line with the author's name, no avatar block. */}
+      <Forward aria-hidden />
       <span>
-        <small>{ru.miniApp.community.forwardedMessage}</small>
+        <small>{ru.miniApp.community.forwardedFrom}</small>
         <strong>
           {message.forwarded_author_name || ru.miniApp.community.forwardedAuthorHidden}
           {message.forwarded_author_user_id ? (

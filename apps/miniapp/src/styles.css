@@ -5631,44 +5631,59 @@ body:has(.global-music-player) .telegram-conversation {
   color: white;
   background: #d24d67;
 }
+/* The preview holds a player row and an optional caption block. It used to be a
+   three-column grid pinned over the composer, so the caption and notice were laid
+   out as extra columns and every control was squeezed sideways. */
 .voice-recorder-preview {
   position: absolute;
   z-index: 8;
-  inset: 0;
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto auto;
-  align-items: center;
-  gap: 4px;
-  border-radius: 22px;
-  padding: 4px;
-  background: #182535;
+  inset: auto 0 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  border: 1px solid var(--border);
+  border-radius: 18px;
+  padding: 6px;
+  background: var(--surface-solid);
 }
 .voice-recorder-preview audio {
   width: 100%;
   min-width: 0;
-  height: 38px;
+  height: 32px;
 }
 .voice-recorder-preview button {
   display: grid;
-  width: 38px;
-  height: 38px;
+  width: 32px;
+  height: 32px;
+  flex: none;
   place-items: center;
   border: 0;
   border-radius: 50%;
-  color: white;
-  background: #6942ad;
+  color: var(--soft);
+  background: transparent;
+}
+.voice-recorder-preview button svg {
+  width: 16px;
+  height: 16px;
+}
+.voice-recorder-preview .voice-caption-toggle.is-open,
+.voice-recorder-preview .voice-recorder-send {
+  color: var(--accent-text);
+  background: var(--accent);
 }
 .voice-recorder-preview small {
-  position: absolute;
-  top: -24px;
-  right: 0;
-  color: #ffadb5;
+  padding: 0 4px;
+  color: #f2789a;
+  font-size: 12px;
 }
 
+/* A fixed 70vw width pushed the player past the bubble, which shoved the
+   timestamp and receipt out of view. It now fits whatever the bubble allows. */
 .chat-voice-player {
   display: grid;
-  width: min(320px, 70vw);
-  grid-template-columns: auto minmax(80px, 1fr) auto;
+  width: 100%;
+  max-width: min(300px, 62vw);
+  grid-template-columns: auto minmax(60px, 1fr) auto;
   align-items: center;
   gap: 7px;
 }
@@ -7322,39 +7337,47 @@ body {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+/* Telegram states it in one quiet line above the bubble content rather than in a
+   boxed card with its own avatar. */
 .chat-forwarded-author {
   display: flex;
-  width: min(100%, 320px);
+  max-width: 100%;
   min-width: 0;
-  align-items: center;
-  gap: 8px;
-  border-left: 3px solid color-mix(in srgb, var(--accent-strong) 78%, white);
-  border-radius: 4px 9px 9px 4px;
-  padding: 5px 7px;
+  align-items: baseline;
+  gap: 5px;
+  margin-bottom: 3px;
   color: var(--text);
-  background: rgb(255 255 255 / 7%);
+  text-decoration: none;
 }
-.chat-forwarded-author .profile-avatar {
-  width: 32px;
-  height: 32px;
-  min-width: 32px;
-  max-width: 32px;
-  flex-basis: 32px;
+.chat-forwarded-author > svg {
+  width: 13px;
+  height: 13px;
+  flex: none;
+  align-self: center;
+  color: var(--accent-strong);
+  opacity: 0.85;
 }
 .chat-forwarded-author > span {
-  display: grid;
+  display: flex;
   min-width: 0;
-  gap: 2px;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px;
 }
 .chat-forwarded-author small {
   color: var(--muted);
-  font-size: 9px;
-  text-transform: uppercase;
+  font-size: 12px;
 }
 .chat-forwarded-author strong {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
   overflow: hidden;
+  max-width: 100%;
+  color: var(--accent-strong);
+  font-size: 12.5px;
+  font-weight: 600;
   text-overflow: ellipsis;
-  font-size: 12px;
   white-space: nowrap;
 }
 .chat-message-action-backdrop,
@@ -7690,13 +7713,15 @@ body {
   row-gap: 10px;
 }
 
-/* Cormorant has deep descenders: a line-height of 1 made wrapped headings
-   collide with each other and with the row's action button. */
+/* Cormorant has deep descenders: a line-height of 1 made wrapped headings collide
+   with each other and with the row's action button. The scale was also display
+   sized for what are really subsection captions, so a two-word profile heading
+   ran into the card beneath it. */
 .section-title-row h2 {
   margin: 0;
-  font-size: clamp(29px, 7vw, 38px);
-  line-height: 1.16;
-  letter-spacing: -0.025em;
+  font-size: clamp(22px, 5.2vw, 28px);
+  line-height: 1.2;
+  letter-spacing: -0.02em;
   padding-bottom: 2px;
 }
 
@@ -9348,12 +9373,22 @@ body {
   font-weight: 600;
 }
 
-/* Content that still lives inside the sheet keeps the old padding. */
-.profile-sheet > :where(.owner-blessing, .swipe-playlist, .profile-people-list),
-.profile-sheet > .mt-5,
-.profile-sheet > .mt-4 {
+/* The sheet itself has no padding so the hero and the flat lists can run edge to
+   edge. Everything else inside it — the playlist, the edit button, the editor —
+   still needs the card's gutter, otherwise it sits flush against the border. */
+.profile-sheet > *:not(.profile-hero):not(.profile-info-list):not(.profile-link-list) {
   margin-left: 18px;
   margin-right: 18px;
+}
+.profile-sheet > .profile-link-list {
+  margin-top: 4px;
+}
+.profile-sheet > .swipe-playlist {
+  margin-top: 14px;
+}
+.profile-sheet > .button {
+  margin-top: 14px;
+  margin-bottom: 18px;
 }
 
 /* Telegram's unread affordances: a count on the row and a line marking where
@@ -9393,4 +9428,46 @@ body {
   color: var(--accent-strong);
   font-size: 11.5px;
   font-weight: 600;
+}
+
+/* ---- Swipe to dismiss ---- */
+.swipe-dismiss {
+  position: relative;
+  overflow: hidden;
+  border-radius: var(--radius-card, 20px);
+}
+.swipe-dismiss-action {
+  position: absolute;
+  inset: 0 0 0 auto;
+  display: grid;
+  width: 72px;
+  place-items: center;
+  border: 0;
+  background: #c2415c;
+  color: #fff;
+  cursor: pointer;
+}
+.swipe-dismiss-action svg {
+  width: 19px;
+  height: 19px;
+}
+.swipe-dismiss-content {
+  position: relative;
+  touch-action: pan-y;
+  transition: transform 180ms var(--ease-out, ease);
+}
+
+/* Section captions inside a profile sit directly above a card, so they need room
+   of their own rather than resting on its border. */
+#view-profile-questionnaires,
+#view-profile-posts,
+#own-profile-questionnaires,
+#own-profile-posts {
+  margin-top: 22px;
+}
+#view-profile-questionnaires .section-title,
+#view-profile-posts .section-title,
+#own-profile-questionnaires .section-title,
+#own-profile-posts .section-title {
+  margin-bottom: 12px;
 }

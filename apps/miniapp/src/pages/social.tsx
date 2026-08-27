@@ -326,7 +326,6 @@ export function PublicProfilePage() {
               premium={profile.data.has_premium}
             />
           </strong>
-          <ProfileUsernamesLine aliases={aliases} />
           <button
             className="profile-id-button"
             type="button"
@@ -347,8 +346,12 @@ export function PublicProfilePage() {
             ) : null}
             {aliases.length ? (
               <div className="profile-info-row">
-                <span className="profile-info-value profile-info-username">@{aliases[0]}</span>
-                <small>{ru.miniApp.social.usernameLabel}</small>
+                <ProfileUsernamesLine aliases={aliases} />
+                <small>
+                  {aliases.length > 1
+                    ? ru.miniApp.social.usernamesLabel
+                    : ru.miniApp.social.usernameLabel}
+                </small>
               </div>
             ) : null}
           </div>
@@ -1055,7 +1058,6 @@ export function PublicProfileViewerPage() {
               premium={profile.data.has_premium}
             />
           </strong>
-          <ProfileUsernamesLine aliases={aliases} />
           <div className="public-profile-actions-menu">
             <button
               className="icon-button"
@@ -1126,8 +1128,12 @@ export function PublicProfileViewerPage() {
           </div>
           {aliases.length ? (
             <div className="profile-info-row">
-              <span className="profile-info-value profile-info-username">@{aliases[0]}</span>
-              <small>{ru.miniApp.social.usernameLabel}</small>
+              <ProfileUsernamesLine aliases={aliases} />
+              <small>
+                {aliases.length > 1
+                  ? ru.miniApp.social.usernamesLabel
+                  : ru.miniApp.social.usernameLabel}
+              </small>
             </div>
           ) : null}
         </div>

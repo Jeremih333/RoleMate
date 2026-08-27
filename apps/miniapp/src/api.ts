@@ -983,6 +983,8 @@ export const api = {
     }),
 };
 
+export type VerificationKind = 'owner' | 'moderator' | 'tester';
+
 export interface SearchProfile {
   id: string;
   user_id: string;
@@ -1022,7 +1024,7 @@ export interface SearchProfile {
   own_rating?: -1 | 1 | null;
   view_count: number;
   username?: string | null;
-  verification_kind?: 'owner' | 'moderator' | null;
+  verification_kind?: VerificationKind | null;
   is_online?: number;
 }
 
@@ -1037,7 +1039,7 @@ export interface BlockedUser {
   id: string;
   display_name: string | null;
   username: string | null;
-  verification_kind: 'owner' | 'moderator' | null;
+  verification_kind: VerificationKind | null;
   has_premium: number;
   blocked_at: string;
 }
@@ -1051,7 +1053,7 @@ export interface PublicUserProfile {
   avatar_media_items?: string;
   moderation_status: 'active' | 'blocked';
   moderation_reason: string | null;
-  verification_kind: 'owner' | 'moderator' | null;
+  verification_kind: VerificationKind | null;
   usernames: string;
   featured_audio_items: string;
   questionnaire_count: number;
@@ -1146,7 +1148,7 @@ export interface SocialPost {
   display_name: string;
   avatar_media_id: string | null;
   avatar_render_mode: 'photo' | 'animation' | 'still' | null;
-  verification_kind: 'owner' | 'moderator' | null;
+  verification_kind: VerificationKind | null;
   has_premium: number;
   repost_source_post_id?: string | null;
   original_author_user_id?: string | null;
@@ -1177,7 +1179,7 @@ export interface PostEngagementUser {
   display_name: string;
   avatar_media_id: string | null;
   avatar_render_mode: 'photo' | 'animation' | 'still' | null;
-  verification_kind: 'owner' | 'moderator' | null;
+  verification_kind: VerificationKind | null;
   has_premium: number;
   value: -1 | 1 | null;
   activity_at: string;
@@ -1195,7 +1197,7 @@ export interface PostComment {
   display_name: string;
   avatar_media_id: string | null;
   avatar_render_mode: 'photo' | 'animation' | 'still' | null;
-  verification_kind: 'owner' | 'moderator' | null;
+  verification_kind: VerificationKind | null;
   has_premium: number;
   likes: number;
   dislikes: number;
@@ -1307,7 +1309,7 @@ export interface Conversation {
   short_headline?: string;
   avatar_media_id?: string | null;
   avatar_render_mode?: 'photo' | 'animation' | 'still' | null;
-  verification_kind?: 'owner' | 'moderator' | null;
+  verification_kind?: VerificationKind | null;
   has_premium?: number;
   own_rating?: -1 | 1 | null;
   contact_reveal_status: string;
@@ -1364,7 +1366,7 @@ export interface ConversationMessage {
   forwarded_author_avatar_media_id?: string | null;
   forwarded_author_avatar_render_mode?: 'photo' | 'animation' | 'still' | null;
   forwarded_author_has_premium?: number;
-  forwarded_author_verification_kind?: 'owner' | 'moderator' | null;
+  forwarded_author_verification_kind?: VerificationKind | null;
   caption_position?: 'top' | 'bottom' | null;
   reply_count?: number;
   pinned_by_me?: number;
@@ -1392,7 +1394,7 @@ export interface Match {
   short_headline?: string;
   avatar_media_id?: string | null;
   avatar_render_mode?: 'photo' | 'animation' | 'still' | null;
-  verification_kind?: 'owner' | 'moderator' | null;
+  verification_kind?: VerificationKind | null;
   has_premium?: number;
 }
 
@@ -1591,7 +1593,7 @@ export interface AdminPublicProfile {
   avatar_render_mode: 'photo' | 'animation' | 'still' | null;
   moderation_status: 'active' | 'blocked';
   moderation_reason: string | null;
-  verification_kind: 'owner' | 'moderator' | null;
+  verification_kind: VerificationKind | null;
   usernames: string;
   risk_score: number;
   telegram_user_id: number;

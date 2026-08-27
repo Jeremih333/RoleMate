@@ -586,6 +586,7 @@ export const ru = {
       editProfile: 'Редактировать профиль',
       ownerVerification: 'Владелец RoleMate',
       moderatorVerification: 'Модератор RoleMate',
+      testerVerification: 'Тестировщик RoleMate',
       premiumBadge: 'Пользователь RoleMate Premium',
       usernameTitle: 'Юзернейм RoleMate',
       usernameDescription:

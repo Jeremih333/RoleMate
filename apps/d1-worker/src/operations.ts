@@ -1865,6 +1865,10 @@ const handlers: { [K in WorkerOperation]: Handler<K> } = {
                   SELECT 1 FROM moderator_assignments ma
                   WHERE ma.user_id = up.user_id AND ma.is_active = 1
                 ) THEN 'moderator'
+                WHEN EXISTS (
+                  SELECT 1 FROM profile_badges pb
+                  WHERE pb.user_id = up.user_id AND pb.badge = 'tester'
+                ) THEN 'tester'
                 ELSE NULL
               END AS verification_kind,
               COALESCE((
@@ -2023,6 +2027,10 @@ const handlers: { [K in WorkerOperation]: Handler<K> } = {
                   SELECT 1 FROM moderator_assignments ma
                   WHERE ma.user_id = up.user_id AND ma.is_active = 1
                 ) THEN 'moderator'
+                WHEN EXISTS (
+                  SELECT 1 FROM profile_badges pb
+                  WHERE pb.user_id = up.user_id AND pb.badge = 'tester'
+                ) THEN 'tester'
                 ELSE NULL
               END AS verification_kind,
               COALESCE((
@@ -2179,7 +2187,11 @@ const handlers: { [K in WorkerOperation]: Handler<K> } = {
                     SELECT 1 FROM moderator_assignments ma
                     WHERE ma.user_id = up.user_id AND ma.is_active = 1
                   ) THEN 'moderator'
-                  ELSE NULL
+                  WHEN EXISTS (
+                  SELECT 1 FROM profile_badges pb
+                  WHERE pb.user_id = up.user_id AND pb.badge = 'tester'
+                ) THEN 'tester'
+                ELSE NULL
                 END AS verification_kind,
                 COALESCE((
                   SELECT json_group_array(alias.username)
@@ -2334,7 +2346,11 @@ const handlers: { [K in WorkerOperation]: Handler<K> } = {
                 ) THEN 'still' ELSE up.avatar_render_mode END AS avatar_render_mode,
                 CASE WHEN u.telegram_user_id = 1040929628 THEN 'owner'
                      WHEN EXISTS (SELECT 1 FROM moderator_assignments ma WHERE ma.user_id = u.id AND ma.is_active = 1) THEN 'moderator'
-                     ELSE NULL END AS verification_kind,
+                     WHEN EXISTS (
+                  SELECT 1 FROM profile_badges pb
+                  WHERE pb.user_id = u.id AND pb.badge = 'tester'
+                ) THEN 'tester'
+                ELSE NULL END AS verification_kind,
                 EXISTS (
                   SELECT 1 FROM premium_entitlements premium
                   WHERE premium.user_id = up.user_id AND premium.status = 'active'
@@ -2376,7 +2392,11 @@ const handlers: { [K in WorkerOperation]: Handler<K> } = {
                 ) THEN 'still' ELSE up.avatar_render_mode END AS avatar_render_mode,
                 CASE WHEN u.telegram_user_id = 1040929628 THEN 'owner'
                      WHEN EXISTS (SELECT 1 FROM moderator_assignments ma WHERE ma.user_id = u.id AND ma.is_active = 1) THEN 'moderator'
-                     ELSE NULL END AS verification_kind,
+                     WHEN EXISTS (
+                  SELECT 1 FROM profile_badges pb
+                  WHERE pb.user_id = u.id AND pb.badge = 'tester'
+                ) THEN 'tester'
+                ELSE NULL END AS verification_kind,
                 EXISTS (
                   SELECT 1 FROM premium_entitlements premium
                   WHERE premium.user_id = up.user_id AND premium.status = 'active'
@@ -2743,7 +2763,11 @@ const handlers: { [K in WorkerOperation]: Handler<K> } = {
                     SELECT 1 FROM moderator_assignments ma
                     WHERE ma.user_id = q.user_id AND ma.is_active = 1
                   ) THEN 'moderator'
-                  ELSE NULL
+                  WHEN EXISTS (
+                  SELECT 1 FROM profile_badges pb
+                  WHERE pb.user_id = q.user_id AND pb.badge = 'tester'
+                ) THEN 'tester'
+                ELSE NULL
                 END AS verification_kind,
                 EXISTS (
                   SELECT 1 FROM premium_entitlements pe
@@ -2903,6 +2927,10 @@ const handlers: { [K in WorkerOperation]: Handler<K> } = {
                   SELECT 1 FROM moderator_assignments ma
                   WHERE ma.user_id = q.user_id AND ma.is_active = 1
                 ) THEN 'moderator'
+                WHEN EXISTS (
+                  SELECT 1 FROM profile_badges pb
+                  WHERE pb.user_id = q.user_id AND pb.badge = 'tester'
+                ) THEN 'tester'
                 ELSE NULL
               END AS verification_kind,
               EXISTS (
@@ -4004,6 +4032,10 @@ const handlers: { [K in WorkerOperation]: Handler<K> } = {
                   SELECT 1 FROM moderator_assignments ma
                   WHERE ma.user_id = p.user_id AND ma.is_active = 1
                 ) THEN 'moderator'
+                WHEN EXISTS (
+                  SELECT 1 FROM profile_badges pb
+                  WHERE pb.user_id = p.user_id AND pb.badge = 'tester'
+                ) THEN 'tester'
                 ELSE NULL
               END AS verification_kind,
               EXISTS (
@@ -4564,7 +4596,11 @@ const handlers: { [K in WorkerOperation]: Handler<K> } = {
                     SELECT 1 FROM moderator_assignments ma
                     WHERE ma.user_id = up.user_id AND ma.is_active = 1
                   ) THEN 'moderator'
-                  ELSE NULL
+                  WHEN EXISTS (
+                  SELECT 1 FROM profile_badges pb
+                  WHERE pb.user_id = up.user_id AND pb.badge = 'tester'
+                ) THEN 'tester'
+                ELSE NULL
                 END AS verification_kind,
                 EXISTS (
                   SELECT 1 FROM premium_entitlements premium
@@ -5894,6 +5930,10 @@ const handlers: { [K in WorkerOperation]: Handler<K> } = {
                   SELECT 1 FROM moderator_assignments moderator
                   WHERE moderator.user_id = other.id AND moderator.is_active = 1
                 ) THEN 'moderator'
+                WHEN EXISTS (
+                  SELECT 1 FROM profile_badges pb
+                  WHERE pb.user_id = other.id AND pb.badge = 'tester'
+                ) THEN 'tester'
                 ELSE NULL
               END AS verification_kind,
               EXISTS (
@@ -6144,6 +6184,10 @@ const handlers: { [K in WorkerOperation]: Handler<K> } = {
                   SELECT 1 FROM moderator_assignments moderator
                   WHERE moderator.user_id = other.id AND moderator.is_active = 1
                 ) THEN 'moderator'
+                WHEN EXISTS (
+                  SELECT 1 FROM profile_badges pb
+                  WHERE pb.user_id = other.id AND pb.badge = 'tester'
+                ) THEN 'tester'
                 ELSE NULL
               END AS verification_kind,
               (
@@ -8055,6 +8099,10 @@ const handlers: { [K in WorkerOperation]: Handler<K> } = {
                   SELECT 1 FROM moderator_assignments ma
                   WHERE ma.user_id = tp.author_user_id AND ma.is_active = 1
                 ) THEN 'moderator'
+                WHEN EXISTS (
+                  SELECT 1 FROM profile_badges pb
+                  WHERE pb.user_id = tp.author_user_id AND pb.badge = 'tester'
+                ) THEN 'tester'
                 ELSE NULL
               END AS verification_kind,
               EXISTS (
@@ -8180,6 +8228,10 @@ const handlers: { [K in WorkerOperation]: Handler<K> } = {
                   SELECT 1 FROM moderator_assignments ma
                   WHERE ma.user_id = tp.author_user_id AND ma.is_active = 1
                 ) THEN 'moderator'
+                WHEN EXISTS (
+                  SELECT 1 FROM profile_badges pb
+                  WHERE pb.user_id = tp.author_user_id AND pb.badge = 'tester'
+                ) THEN 'tester'
                 ELSE NULL
               END AS verification_kind,
               EXISTS (
@@ -8380,7 +8432,11 @@ const handlers: { [K in WorkerOperation]: Handler<K> } = {
                     SELECT 1 FROM moderator_assignments ma
                     WHERE ma.user_id = tp.author_user_id AND ma.is_active = 1
                   ) THEN 'moderator'
-                  ELSE NULL
+                  WHEN EXISTS (
+                  SELECT 1 FROM profile_badges pb
+                  WHERE pb.user_id = tp.author_user_id AND pb.badge = 'tester'
+                ) THEN 'tester'
+                ELSE NULL
                 END AS verification_kind,
                 EXISTS (
                   SELECT 1 FROM premium_entitlements premium
@@ -8521,7 +8577,11 @@ const handlers: { [K in WorkerOperation]: Handler<K> } = {
                     SELECT 1 FROM moderator_assignments ma
                     WHERE ma.user_id = tp.author_user_id AND ma.is_active = 1
                   ) THEN 'moderator'
-                  ELSE NULL
+                  WHEN EXISTS (
+                  SELECT 1 FROM profile_badges pb
+                  WHERE pb.user_id = tp.author_user_id AND pb.badge = 'tester'
+                ) THEN 'tester'
+                ELSE NULL
                 END AS verification_kind,
                 EXISTS (
                   SELECT 1 FROM premium_entitlements premium
@@ -8696,7 +8756,11 @@ const handlers: { [K in WorkerOperation]: Handler<K> } = {
                     SELECT 1 FROM moderator_assignments ma
                     WHERE ma.user_id = tp.author_user_id AND ma.is_active = 1
                   ) THEN 'moderator'
-                  ELSE NULL
+                  WHEN EXISTS (
+                  SELECT 1 FROM profile_badges pb
+                  WHERE pb.user_id = tp.author_user_id AND pb.badge = 'tester'
+                ) THEN 'tester'
+                ELSE NULL
                 END AS verification_kind,
                 EXISTS (
                   SELECT 1 FROM premium_entitlements premium
@@ -8842,7 +8906,11 @@ const handlers: { [K in WorkerOperation]: Handler<K> } = {
                     SELECT 1 FROM moderator_assignments ma
                     WHERE ma.user_id = tp.author_user_id AND ma.is_active = 1
                   ) THEN 'moderator'
-                  ELSE NULL
+                  WHEN EXISTS (
+                  SELECT 1 FROM profile_badges pb
+                  WHERE pb.user_id = tp.author_user_id AND pb.badge = 'tester'
+                ) THEN 'tester'
+                ELSE NULL
                 END AS verification_kind,
                 EXISTS (
                   SELECT 1 FROM premium_entitlements premium
@@ -8986,7 +9054,11 @@ const handlers: { [K in WorkerOperation]: Handler<K> } = {
                     SELECT 1 FROM moderator_assignments ma
                     WHERE ma.user_id = pc.author_user_id AND ma.is_active = 1
                   ) THEN 'moderator'
-                  ELSE NULL
+                  WHEN EXISTS (
+                  SELECT 1 FROM profile_badges pb
+                  WHERE pb.user_id = pc.author_user_id AND pb.badge = 'tester'
+                ) THEN 'tester'
+                ELSE NULL
                 END AS verification_kind,
                 EXISTS (
                   SELECT 1 FROM premium_entitlements premium
@@ -9267,6 +9339,10 @@ const handlers: { [K in WorkerOperation]: Handler<K> } = {
                     SELECT 1 FROM moderator_assignments moderator
                     WHERE moderator.user_id = profile.user_id AND moderator.is_active = 1
                   ) THEN 'moderator'
+                  WHEN EXISTS (
+                    SELECT 1 FROM profile_badges pb
+                    WHERE pb.user_id = profile.user_id AND pb.badge = 'tester'
+                  ) THEN 'tester'
                   ELSE NULL
                 END AS verification_kind
          FROM latest
@@ -9444,6 +9520,10 @@ const handlers: { [K in WorkerOperation]: Handler<K> } = {
                   SELECT 1 FROM moderator_assignments assignment
                   WHERE assignment.user_id = blocked.id AND assignment.is_active = 1
                 ) THEN 'moderator'
+                WHEN EXISTS (
+                  SELECT 1 FROM profile_badges pb
+                  WHERE pb.user_id = blocked.id AND pb.badge = 'tester'
+                ) THEN 'tester'
                 ELSE NULL
               END AS verification_kind,
               EXISTS (
@@ -10675,7 +10755,11 @@ const handlers: { [K in WorkerOperation]: Handler<K> } = {
                     SELECT 1 FROM moderator_assignments ma
                     WHERE ma.user_id = up.user_id AND ma.is_active = 1
                   ) THEN 'moderator'
-                  ELSE NULL
+                  WHEN EXISTS (
+                  SELECT 1 FROM profile_badges pb
+                  WHERE pb.user_id = up.user_id AND pb.badge = 'tester'
+                ) THEN 'tester'
+                ELSE NULL
                 END AS verification_kind,
                 COALESCE((
                   SELECT json_group_array(alias.username)
@@ -11104,7 +11188,11 @@ const handlers: { [K in WorkerOperation]: Handler<K> } = {
                                  SELECT 1 FROM moderator_assignments ma
                                  WHERE ma.user_id = thread.author_user_id AND ma.is_active = 1
                                ) THEN 'moderator'
-                               ELSE NULL
+                               WHEN EXISTS (
+                  SELECT 1 FROM profile_badges pb
+                  WHERE pb.user_id = thread.author_user_id AND pb.badge = 'tester'
+                ) THEN 'tester'
+                ELSE NULL
                              END AS verification_kind
                       FROM post_comments thread
                       JOIN user_profiles author ON author.user_id = thread.author_user_id

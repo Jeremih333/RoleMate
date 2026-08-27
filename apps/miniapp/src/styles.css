@@ -1919,6 +1919,10 @@ select:focus-visible {
   color: #4da3ff;
 }
 
+.verification-badge-tester {
+  color: #59d4b4;
+}
+
 @media (max-width: 460px) {
   .public-profile-header {
     grid-template-columns: auto minmax(0, 1fr);

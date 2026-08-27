@@ -1,18 +1,22 @@
-import { BadgeCheck, Crown } from 'lucide-react';
+import { BadgeCheck, Crown, FlaskConical } from 'lucide-react';
 import { ru } from '@rolemate/shared';
+import type { VerificationKind } from '../api.js';
+
+const BADGE_LABELS: Record<VerificationKind, string> = {
+  owner: ru.miniApp.social.ownerVerification,
+  moderator: ru.miniApp.social.moderatorVerification,
+  tester: ru.miniApp.social.testerVerification,
+};
 
 export function VerificationBadge({
   kind,
   premium = false,
 }: {
-  kind?: 'owner' | 'moderator' | null | undefined;
+  kind?: VerificationKind | null | undefined;
   premium?: boolean | number | null | undefined;
 }) {
   if (!kind && !premium) return null;
-  const label =
-    kind === 'owner'
-      ? ru.miniApp.social.ownerVerification
-      : ru.miniApp.social.moderatorVerification;
+  const label = kind ? BADGE_LABELS[kind] : '';
   return (
     <span className="verification-badges">
       {premium ? (
@@ -22,7 +26,11 @@ export function VerificationBadge({
       ) : null}
       {kind ? (
         <span className={`verification-badge verification-badge-${kind}`} title={label}>
-          <BadgeCheck aria-label={label} />
+          {kind === 'tester' ? (
+            <FlaskConical aria-label={label} />
+          ) : (
+            <BadgeCheck aria-label={label} />
+          )}
         </span>
       ) : null}
     </span>

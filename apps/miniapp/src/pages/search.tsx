@@ -325,6 +325,9 @@ export function ProfileCard({
               </div>
             </div>
             <div className="profile-card-header-actions">
+              {profile.is_ready_now ? (
+                <span className="ready-now-badge">{ru.miniApp.community.readyToChatBadge}</span>
+              ) : null}
               {profile.is_online ? (
                 <span className="activity-dot" title={ru.miniApp.search.onlineNow} />
               ) : null}

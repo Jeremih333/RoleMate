@@ -1589,6 +1589,26 @@ export async function buildServer(
     const { filterSetId } = z.object({ filterSetId: z.string().uuid() }).parse(request.params);
     return dataApi.execute('search.filterSets.delete', { userId: session.userId, filterSetId });
   });
+  app.post('/api/users/ready-to-chat', async (request) => {
+    const session = await mutateSafe(request);
+    const body = z.object({ minutes: z.number().int().min(0).max(720) }).parse(request.body);
+    return dataApi.execute('users.setReadyToChat', {
+      userId: session.userId,
+      minutes: body.minutes,
+    });
+  });
+  app.post('/api/conversations/:conversationId/end', async (request) => {
+    const session = await mutateSafe(request);
+    const { conversationId } = z
+      .object({ conversationId: z.string().uuid() })
+      .parse(request.params);
+    // The courteous note is sent by the client through the ordinary message
+    // endpoint first, so it reaches the other side over the tested relay path.
+    return dataApi.execute('conversations.endGently', {
+      userId: session.userId,
+      conversationId,
+    });
+  });
   app.post('/api/search/state', async (request) => {
     const session = await mutateSafe(request);
     const body = z.object({ enabled: z.boolean() }).parse(request.body);

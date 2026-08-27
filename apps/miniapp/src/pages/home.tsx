@@ -1,4 +1,5 @@
-import { useQuery } from '@tanstack/react-query';
+import { useState } from 'react';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   ArrowRight,
   BookOpen,
@@ -12,7 +13,7 @@ import {
 import { Link } from 'wouter';
 import { NEWS_CHANNEL_URL, PROMO_CHAT_URL, ru } from '@rolemate/shared';
 import { api } from '../api.js';
-import { Card, SectionTitle, Skeleton } from '../components/ui.js';
+import { Button, Card, SectionTitle, Skeleton } from '../components/ui.js';
 
 function isCompletedProfileValue(value: unknown): boolean {
   if (Array.isArray(value)) return value.length > 0;
@@ -26,6 +27,44 @@ function isCompletedProfileValue(value: unknown): boolean {
   } catch {
     return false;
   }
+}
+
+/**
+ * Being findable is not the same as being available. Declaring "free right now"
+ * puts the profile at the front of everyone's search for the next couple of
+ * hours, then expires by itself.
+ */
+function ReadyToChatCard() {
+  const queryClient = useQueryClient();
+  const settings = useQuery({ queryKey: ['settings'], queryFn: api.settings });
+  const [readyUntil, setReadyUntil] = useState<string | null | undefined>(undefined);
+  const toggle = useMutation({
+    mutationFn: (minutes: number) => api.setReadyToChat(minutes),
+    onSuccess: (result) => {
+      setReadyUntil(result.readyUntil);
+      void queryClient.invalidateQueries({ queryKey: ['search'] });
+    },
+  });
+  const stored = settings.data?.ready_to_chat_until ?? null;
+  const value = readyUntil === undefined ? stored : readyUntil;
+  const active = Boolean(value && new Date(`${value}Z`).getTime() > Date.now());
+  return (
+    <Card className={`ready-to-chat${active ? ' is-active' : ''}`}>
+      <div className="ready-to-chat-copy">
+        <strong>{ru.miniApp.community.readyToChatTitle}</strong>
+        <p>
+          {active ? ru.miniApp.community.readyToChatActive : ru.miniApp.community.readyToChatHint}
+        </p>
+      </div>
+      <Button
+        variant={active ? 'secondary' : 'primary'}
+        loading={toggle.isPending}
+        onClick={() => toggle.mutate(active ? 0 : 120)}
+      >
+        {active ? ru.miniApp.community.readyToChatOff : ru.miniApp.community.readyToChatOn}
+      </Button>
+    </Card>
+  );
 }
 
 export function HomePage() {
@@ -86,6 +125,8 @@ export function HomePage() {
           </Link>
         </div>
       </section>
+
+      <ReadyToChatCard />
 
       <section>
         <SectionTitle eyebrow={ru.miniApp.home.progressEyebrow}>

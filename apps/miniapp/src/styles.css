@@ -9262,3 +9262,49 @@ body {
     transition-duration: 0.01ms;
   }
 }
+
+/* ---- Ready to chat ---- */
+.ready-to-chat {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  padding: 16px 18px;
+  flex-wrap: wrap;
+}
+.ready-to-chat-copy {
+  min-width: 0;
+  flex: 1 1 200px;
+}
+.ready-to-chat-copy strong {
+  display: block;
+  font-size: 15px;
+}
+.ready-to-chat-copy p {
+  margin-top: 4px;
+  color: var(--muted);
+  font-size: 12.5px;
+  line-height: 1.45;
+}
+.ready-to-chat.is-active {
+  border-color: rgba(76, 190, 130, 0.45);
+}
+.ready-to-chat.is-active .ready-to-chat-copy p {
+  color: #6fd6a0;
+}
+.ready-now-badge {
+  display: inline-flex;
+  align-items: center;
+  flex: none;
+  padding: 4px 10px;
+  border-radius: 999px;
+  background: rgba(76, 190, 130, 0.16);
+  color: #6fd6a0;
+  font-size: 11px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+:root[data-theme='light'] .ready-now-badge,
+:root[data-theme='light'] .ready-to-chat.is-active .ready-to-chat-copy p {
+  color: #1d7a4c;
+}

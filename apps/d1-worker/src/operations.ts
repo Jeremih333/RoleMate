@@ -786,18 +786,20 @@ const handlers: { [K in WorkerOperation]: Handler<K> } = {
       .first();
     if (!settings) throw new ApiError(404, 'SETTINGS_NOT_FOUND', 'Settings not found');
     const searchRow = await env.DB.prepare(
-      'SELECT is_search_enabled FROM users WHERE id = ?1 AND deleted_at IS NULL',
+      'SELECT is_search_enabled, ready_to_chat_until FROM users WHERE id = ?1 AND deleted_at IS NULL',
     )
       .bind(input.userId)
-      .first<{ is_search_enabled: number }>();
+      .first<{ is_search_enabled: number; ready_to_chat_until: string | null }>();
     const search_enabled = searchRow?.is_search_enabled ? 1 : 0;
+    const ready_to_chat_until = searchRow?.ready_to_chat_until ?? null;
     const premium = Boolean(await premiumEnd(env, input.userId));
     return premium
-      ? { ...settings, premium, search_enabled }
+      ? { ...settings, premium, search_enabled, ready_to_chat_until }
       : {
           ...settings,
           premium,
           search_enabled,
+          ready_to_chat_until,
           show_online_status: 1,
           show_premium_badge: 1,
           hide_demographics: 0,
@@ -4085,6 +4087,8 @@ const handlers: { [K in WorkerOperation]: Handler<K> } = {
                 WHERE active_pe.user_id = p.user_id AND active_pe.status = 'active'
                   AND active_pe.ends_at > CURRENT_TIMESTAMP
               ) AS has_premium,
+              CASE WHEN u.ready_to_chat_until > CURRENT_TIMESTAMP THEN 1 ELSE 0 END
+                AS is_ready_now,
               (SELECT pm.id FROM questionnaire_media pm
                WHERE pm.questionnaire_id = p.id AND pm.moderation_status = 'approved'
                  AND (
@@ -4247,6 +4251,12 @@ const handlers: { [K in WorkerOperation]: Handler<K> } = {
          )
        ORDER BY CASE
                   WHEN ?13 <> '' AND p.display_name = ?13 COLLATE NOCASE THEN 1
+                  ELSE 0
+                END DESC,
+                -- Someone who said they are free right now is the likeliest to
+                -- answer, so they lead regardless of how well interests line up.
+                CASE
+                  WHEN u.ready_to_chat_until > CURRENT_TIMESTAMP THEN 1
                   ELSE 0
                 END DESC,
                 -- Someone who is around and answers is worth more than a perfect
@@ -6379,6 +6389,93 @@ const handlers: { [K in WorkerOperation]: Handler<K> } = {
       .first<{ activity: 'typing' | 'recording_voice' | 'sending_media' | null }>();
     if (!row) throw new ApiError(404, 'CONVERSATION_NOT_FOUND', 'Conversation not found');
     return { activity: row.activity };
+  },
+  'users.setReadyToChat': async (env, input) => {
+    // Self-declared availability with a deadline: nobody stays marked "ready"
+    // after they have closed the app and forgotten about it.
+    const result = await env.DB.prepare(
+      `UPDATE users
+       SET ready_to_chat_until = CASE
+             WHEN ?2 = 0 THEN NULL
+             ELSE datetime('now', printf('+%d minute', ?2))
+           END,
+           updated_at = CURRENT_TIMESTAMP
+       WHERE id = ?1 AND is_banned = 0 AND deleted_at IS NULL`,
+    )
+      .bind(input.userId, input.minutes)
+      .run();
+    if (result.meta.changes !== 1) {
+      throw new ApiError(404, 'USER_NOT_FOUND', 'User not found');
+    }
+    const row = await env.DB.prepare('SELECT ready_to_chat_until FROM users WHERE id = ?1')
+      .bind(input.userId)
+      .first<{ ready_to_chat_until: string | null }>();
+    return { readyUntil: row?.ready_to_chat_until ?? null };
+  },
+  'conversations.endGently': async (env, input) => {
+    // Leaving without a word is what makes people avoid ending a chat at all, so
+    // closing one archives it for both sides after a courteous note is sent.
+    const participant = await env.DB.prepare(
+      `SELECT c.id FROM conversations c
+       JOIN conversation_participants me
+         ON me.conversation_id = c.id AND me.user_id = ?2 AND me.left_at IS NULL
+       WHERE c.id = ?1 AND c.status = 'active'`,
+    )
+      .bind(input.conversationId, input.userId)
+      .first<{ id: string }>();
+    if (!participant) {
+      throw new ApiError(404, 'CONVERSATION_NOT_FOUND', 'Conversation not found');
+    }
+    await env.DB.batch([
+      env.DB.prepare(
+        `UPDATE conversations
+         SET status = 'closed', closed_at = CURRENT_TIMESTAMP, closed_reason = 'ended_by_user'
+         WHERE id = ?1`,
+      ).bind(input.conversationId),
+      env.DB.prepare(
+        `UPDATE conversation_participants
+         SET archived_at = CURRENT_TIMESTAMP, pinned_order = NULL
+         WHERE conversation_id = ?1`,
+      ).bind(input.conversationId),
+    ]);
+    return { closed: true };
+  },
+  'conversations.sweepDeadMatches': async (env, input) => {
+    // A match where neither side ever wrote is dead weight in the chat list. It is
+    // closed after the configured window and marked, so the sweep never revisits it
+    // and a chat the user closed by hand is never mistaken for its work.
+    const days = await configInt(env, 'dead_match_days', 7, 1, 90);
+    const limit = Math.min(Math.max(input.limit ?? 50, 1), 200);
+    const stale = await env.DB.prepare(
+      `SELECT c.id FROM conversations c
+       WHERE c.status = 'active'
+         AND c.last_message_at IS NULL
+         AND c.created_at <= datetime('now', printf('-%d day', ?1))
+         AND NOT EXISTS (
+           SELECT 1 FROM conversation_messages m
+           WHERE m.conversation_id = c.id AND m.deleted_at IS NULL
+         )
+       ORDER BY c.created_at
+       LIMIT ?2`,
+    )
+      .bind(days, limit)
+      .all<{ id: string }>();
+    if (!stale.results.length) return { closed: 0, conversationIds: [] };
+    const ids = stale.results.map((row) => row.id);
+    const placeholders = ids.map((_, index) => `?${index + 1}`).join(', ');
+    await env.DB.batch([
+      env.DB.prepare(
+        `UPDATE conversations
+         SET status = 'closed', closed_at = CURRENT_TIMESTAMP, closed_reason = 'dead_match'
+         WHERE id IN (${placeholders})`,
+      ).bind(...ids),
+      env.DB.prepare(
+        `UPDATE conversation_participants
+         SET archived_at = CURRENT_TIMESTAMP, pinned_order = NULL
+         WHERE conversation_id IN (${placeholders})`,
+      ).bind(...ids),
+    ]);
+    return { closed: ids.length, conversationIds: ids };
   },
   'conversations.archive': async (env, input) => {
     const result = await env.DB.prepare(

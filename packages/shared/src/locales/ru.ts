@@ -1625,6 +1625,19 @@ export const ru = {
       searchStateActive: 'Анкеты участвуют в поиске',
       searchStatePaused: 'Анкеты скрыты из поиска',
       searchStateFailed: 'Не удалось изменить состояние поиска. Попробуй ещё раз.',
+      readyToChatTitle: 'Готов(а) общаться сейчас',
+      readyToChatHint:
+        'Два часа тебя будут показывать первыми тем, кто ищет собеседника прямо сейчас.',
+      readyToChatOn: 'Включить на 2 часа',
+      readyToChatOff: 'Выключить',
+      readyToChatActive: 'Ты в подборке «сейчас на связи»',
+      readyToChatBadge: 'Готов(а) сейчас',
+      gentleGoodbyeTitle: 'Завершить диалог',
+      gentleGoodbyeHint:
+        'Мы отправим короткое вежливое сообщение и уберём чат из списка у обоих. Написать снова будет можно.',
+      gentleGoodbyeMessage:
+        'Спасибо за общение! Кажется, нам не по пути — желаю найти отличного соавтора. Хорошего дня 🙂',
+      gentleGoodbyeConfirm: 'Завершить',
       settingsSaved: 'Настройки сохранены.',
       premiumPrivacyOnly:
         'Скрытие онлайн-статуса, Premium-значка, возраста и пола доступно с Premium.',

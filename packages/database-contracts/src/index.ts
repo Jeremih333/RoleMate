@@ -126,6 +126,18 @@ export const workerOperations = {
     userId: z.string().uuid(),
     conversationId: z.string().uuid(),
   }),
+  'users.setReadyToChat': z.object({
+    userId: z.string().uuid(),
+    // Zero clears the flag; anything else is how long the window lasts.
+    minutes: z.number().int().min(0).max(720),
+  }),
+  'conversations.endGently': z.object({
+    userId: z.string().uuid(),
+    conversationId: z.string().uuid(),
+  }),
+  'conversations.sweepDeadMatches': z.object({
+    limit: z.number().int().min(1).max(200).optional(),
+  }),
   'settings.get': z.object({ userId: z.string().uuid() }),
   'settings.update': z.object({
     userId: z.string().uuid(),

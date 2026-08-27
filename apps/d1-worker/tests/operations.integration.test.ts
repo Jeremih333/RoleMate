@@ -5617,6 +5617,74 @@ describe('D1 domain operations', () => {
     ).toEqual({ status: 'completed', sent_count: 2 });
   });
 
+  it('expires the ready-to-chat window and closes matches nobody wrote in', async () => {
+    const userId = await onboard(2_410);
+
+    await executeOperation(
+      env,
+      'users.setReadyToChat',
+      { userId, minutes: 120 },
+      crypto.randomUUID(),
+    );
+    const active = sqlite
+      .prepare('SELECT ready_to_chat_until > CURRENT_TIMESTAMP AS ready FROM users WHERE id = ?')
+      .get(userId) as { ready: number };
+    expect(active.ready).toBe(1);
+
+    await executeOperation(
+      env,
+      'users.setReadyToChat',
+      { userId, minutes: 0 },
+      crypto.randomUUID(),
+    );
+    const cleared = sqlite
+      .prepare('SELECT ready_to_chat_until FROM users WHERE id = ?')
+      .get(userId) as { ready_to_chat_until: string | null };
+    expect(cleared.ready_to_chat_until).toBeNull();
+
+    // A match created a fortnight ago in which nobody ever wrote is swept away.
+    const otherId = await onboard(2_411);
+    const matchId = crypto.randomUUID();
+    const conversationId = crypto.randomUUID();
+    sqlite
+      .prepare('INSERT INTO matches (id, user_a_id, user_b_id) VALUES (?, ?, ?)')
+      .run(matchId, userId, otherId);
+    sqlite
+      .prepare(
+        "INSERT INTO conversations (id, match_id, created_at) VALUES (?, ?, datetime('now', '-14 day'))",
+      )
+      .run(conversationId, matchId);
+    const insertParticipant = sqlite.prepare(
+      `INSERT INTO conversation_participants (conversation_id, user_id, anonymous_alias)
+       VALUES (?, ?, ?)`,
+    );
+    insertParticipant.run(conversationId, userId, 'Первый');
+    insertParticipant.run(conversationId, otherId, 'Второй');
+
+    // The suite shares one database, so a small limit could be used up by stale
+    // conversations other tests left behind; assert on this conversation's state.
+    await executeOperation(
+      env,
+      'conversations.sweepDeadMatches',
+      { limit: 200 },
+      crypto.randomUUID(),
+    );
+
+    const closed = sqlite
+      .prepare('SELECT status, closed_reason FROM conversations WHERE id = ?')
+      .get(conversationId) as { status: string; closed_reason: string };
+    expect(closed).toEqual({ status: 'closed', closed_reason: 'dead_match' });
+
+    // The sweep must not pick the same conversation up again.
+    const again = (await executeOperation(
+      env,
+      'conversations.sweepDeadMatches',
+      { limit: 200 },
+      crypto.randomUUID(),
+    )) as { conversationIds: string[] };
+    expect(again.conversationIds).not.toContain(conversationId);
+  });
+
   it('clears an incoming like once the viewer passes on it', async () => {
     const viewer = await onboard(2_310);
     const admirer = await onboard(2_311);

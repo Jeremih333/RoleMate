@@ -18,6 +18,7 @@ import {
   Heart,
   MessageCircle,
   Forward,
+  HeartHandshake,
   PauseCircle,
   Pause,
   Pencil,
@@ -844,7 +845,11 @@ function ChatPinnedBar({
       </button>
       {manageOpen ? (
         <div className="confirm-dialog-backdrop" role="presentation">
-          <Card className="confirm-dialog chat-pinned-manage-dialog" role="dialog" aria-modal="true">
+          <Card
+            className="confirm-dialog chat-pinned-manage-dialog"
+            role="dialog"
+            aria-modal="true"
+          >
             <header>
               <h2>{ru.miniApp.community.managePins}</h2>
               <button
@@ -923,11 +928,7 @@ function ChatIcebreakers({
     <div className="chat-icebreakers">
       <strong>{copy.title}</strong>
       <p>
-        {copy.invitation(
-          name,
-          context.data?.sharedInterests ?? 0,
-          Boolean(context.data?.isOnline),
-        )}
+        {copy.invitation(name, context.data?.sharedInterests ?? 0, Boolean(context.data?.isOnline))}
       </p>
 
       <div className="chat-icebreaker-card">
@@ -1010,6 +1011,22 @@ function ConversationView({
   const [replyTarget, setReplyTarget] = useState<ConversationMessage | null>(null);
   const [actionMessage, setActionMessage] = useState<ConversationMessage | null>(null);
   const [forwardOpen, setForwardOpen] = useState(false);
+  const [goodbyeOpen, setGoodbyeOpen] = useState(false);
+  // Ending a chat is a two-step courtesy: the note goes out over the ordinary
+  // message path, then the conversation is closed and archived for both sides.
+  const endGently = useMutation({
+    mutationFn: async () => {
+      await api
+        .sendConversationMessage(chat.id, ru.miniApp.community.gentleGoodbyeMessage)
+        .catch(() => undefined);
+      return api.endConversation(chat.id);
+    },
+    onSuccess: () => {
+      setGoodbyeOpen(false);
+      void queryClient.invalidateQueries({ queryKey: ['conversations'] });
+      onBack();
+    },
+  });
   const sendIcebreaker = useMutation({
     mutationFn: (message: string) => api.sendConversationMessage(chat.id, message),
     onSuccess: () => {
@@ -1328,6 +1345,17 @@ function ConversationView({
               </button>
               <button
                 type="button"
+                aria-label={ru.miniApp.community.gentleGoodbyeTitle}
+                title={ru.miniApp.community.gentleGoodbyeTitle}
+                onClick={() => {
+                  setMenuOpen(false);
+                  setGoodbyeOpen(true);
+                }}
+              >
+                <HeartHandshake /> <span>{ru.miniApp.community.gentleGoodbyeTitle}</span>
+              </button>
+              <button
+                type="button"
                 aria-label={ru.miniApp.community.block}
                 title={ru.miniApp.community.block}
                 onClick={() => {
@@ -1426,9 +1454,7 @@ function ConversationView({
             setActivePinIndex(index);
             void scrollToMessage(pin.id);
           }}
-          onUnpin={(pin) =>
-            pinMessage.mutate({ messageId: pin.id, pinned: false, shared: false })
-          }
+          onUnpin={(pin) => pinMessage.mutate({ messageId: pin.id, pinned: false, shared: false })}
           unpinning={pinMessage.isPending}
         />
       ) : null}
@@ -1703,6 +1729,16 @@ function ConversationView({
         loading={deleteChat.isPending}
         onConfirm={() => deleteChat.mutate()}
         onCancel={() => setConfirmation(null)}
+      />
+      <ConfirmDialog
+        open={goodbyeOpen}
+        title={ru.miniApp.community.gentleGoodbyeTitle}
+        description={ru.miniApp.community.gentleGoodbyeHint}
+        confirmLabel={ru.miniApp.community.gentleGoodbyeConfirm}
+        cancelLabel={ru.miniApp.community.cancelAction}
+        loading={endGently.isPending}
+        onConfirm={() => endGently.mutate()}
+        onCancel={() => setGoodbyeOpen(false)}
       />
       {pinCandidate ? (
         <div className="confirm-dialog-backdrop" role="presentation">

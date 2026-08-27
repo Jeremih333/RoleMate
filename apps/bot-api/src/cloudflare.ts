@@ -225,6 +225,16 @@ async function dispatchScheduledTasks(env: WorkerEnv, scheduledTime: number): Pr
         error: error instanceof Error ? error.message : 'unknown',
       });
     });
+    // Matches where neither side ever wrote clog the chat list and make the app
+    // look emptier than it is. Sweeping them hourly keeps the list honest.
+    await dataApi
+      .execute('conversations.sweepDeadMatches', { limit: 50 })
+      .catch((error: unknown) => {
+        console.error({
+          event: 'scheduled_dead_match_sweep_failed',
+          error: error instanceof Error ? error.message : 'unknown',
+        });
+      });
   }
   await dispatchTelegramNotificationBatch(bot, dataApi, runtime, (error) => {
     console.error({

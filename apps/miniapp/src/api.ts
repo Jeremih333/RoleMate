@@ -749,6 +749,16 @@ export const api = {
       method: 'PUT',
       body: JSON.stringify(settings),
     }),
+  setReadyToChat: (minutes: number) =>
+    request<{ readyUntil: string | null }>('/users/ready-to-chat', {
+      method: 'POST',
+      body: JSON.stringify({ minutes }),
+    }),
+  endConversation: (conversationId: string) =>
+    request<{ closed: true }>(`/conversations/${conversationId}/end`, {
+      method: 'POST',
+      body: '{}',
+    }),
   setSearchEnabled: (enabled: boolean) =>
     request<{ enabled: boolean }>('/search/state', {
       method: 'POST',
@@ -1009,6 +1019,7 @@ export interface SearchProfile {
   display_name: string;
   age_group: string | null;
   gender: string | null;
+  is_ready_now?: number;
   short_headline: string;
   about: string;
   fandoms: string;
@@ -1452,6 +1463,7 @@ export interface UserSettings {
   quick_reaction: string;
   theme: 'telegram' | 'light' | 'dark';
   search_enabled: number;
+  ready_to_chat_until: string | null;
 }
 
 export interface SettingsInput {

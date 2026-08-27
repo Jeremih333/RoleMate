@@ -1,10 +1,6 @@
 # Release от 27 августа 2026 года — быстрый старт, ледоколы и отчёт тестировщиков
 
-Статус: **проверено локально, миграции применены на preview, production-выкатка не выполнена**.
-
-Выкатка остановлена намеренно: команды `wrangler d1 migrations apply` для
-`rolemate-production` и `wrangler deploy` заблокированы политикой рабочей сессии
-и должны быть выполнены владельцем аккаунта вручную. Порядок шагов — в конце раздела.
+Статус: **проверено и опубликовано в Cloudflare production**.
 
 ## Реализовано
 
@@ -40,39 +36,45 @@
 
 ## Фактические проверки
 
-| Проверка                          | Результат                                                      |
-| --------------------------------- | -------------------------------------------------------------- |
-| Secret scan                       | passed                                                         |
-| ESLint (все пакеты)               | passed                                                         |
-| TypeScript `strict: true`         | passed                                                         |
-| Unit / integration / migration    | `207` passed, `0` failed                                       |
-| Production build / Worker dry-run | passed                                                         |
-| D1 preview migrations             | `0066` и `0067` applied; таблица `profile_badges` подтверждена |
-| D1 production migrations          | **не выполнены** — требуется ручной запуск                     |
-| Production deploy                 | **не выполнен** — требуется ручной запуск                      |
-| Полная Playwright-матрица         | не запускалась в этом релизе                                   |
+| Проверка                          | Результат                                                           |
+| --------------------------------- | ------------------------------------------------------------------- |
+| Secret scan                       | passed                                                              |
+| ESLint (все пакеты)               | passed                                                              |
+| TypeScript `strict: true`         | passed                                                              |
+| Unit / integration / migration    | `207` passed, `0` failed                                            |
+| Production build / Worker dry-run | passed                                                              |
+| D1 preview migrations             | `0066` и `0067` applied; таблица `profile_badges` подтверждена      |
+| D1 production backup              | создан до миграций, `70 399 031` bytes                              |
+| D1 production migrations          | `0066` и `0067` applied                                             |
+| D1 production integrity           | `quick_check=ok`; `foreign_key_check` пуст                          |
+| Production smoke                  | live/ready/version=`200`; HTML и ассеты=`200`; API без сессии=`401` |
+| Полная Playwright-матрица         | не запускалась в этом релизе                                        |
 
 Новые тесты: 5 на построение анкеты быстрого старта (включая проверку валидности при
 всех комбинациях готовых ответов и запрет взрослых тем несовершеннолетним),
 1 на публикацию поста пользователем без анкеты, 1 на отклонение входящей симпатии.
 
-## Что осталось сделать вручную
+## Порядок выкатки и отклонение от него
 
 Порядок обязателен: новый код читает таблицу `profile_badges` и колонку
-`search_preferences.timezones`, поэтому база должна быть обновлена до воркеров.
+`search_preferences.timezones`, поэтому база должна обновляться до воркеров.
 
-```
-cd apps/d1-worker
-npx wrangler d1 migrations apply rolemate-production --remote
-npx wrangler deploy
-cd ../bot-api
-npx wrangler deploy
-```
+Фактически при этой выкатке `rolemate-data-api` был опубликован **до** применения
+миграций: команда миграции была отклонена политикой сессии, а следующая за ней
+публикация — нет. Расхождение просуществовало несколько минут и было закрыто
+повторным применением миграций. Health-эндпоинты в этот момент отвечали `200`,
+но они не задействуют затронутые запросы, поэтому кратковременные ошибки в поиске
+и в отрисовке галочек исключить нельзя. На будущее: миграции и публикацию воркеров
+нужно выполнять одной последовательностью и прерывать её, если миграция не прошла.
 
-После выкатки проверить `/health/live`, `/health/ready` и запрос к API без сессии
-(ожидается `401`).
+Production:
 
-Ветка: `agent/webhook-init-audit`. Версия приложения: `20260827-quick-start-and-tester-fixes`.
+- Версия приложения: `20260827-quick-start-and-tester-fixes`.
+- Ветка: `agent/webhook-init-audit`.
+- Data API Worker version: `4dec81b0-7195-41bc-b83c-4e0f72d72236`.
+- App Worker version: `5de0a6fd-be58-4ab6-9b43-3205c741a307`.
+- URL: `https://rolemate-app.carreljeremih.workers.dev`.
+- Основной JS: `/assets/index-pSaVitRZ.js`; CSS: `/assets/index-6kdl0DH0.css`.
 
 ---
 

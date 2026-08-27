@@ -1597,6 +1597,16 @@ export async function buildServer(
       enabled: body.enabled,
     });
   });
+  app.get('/api/conversations/:conversationId/icebreaker', async (request) => {
+    const session = await authenticate(request);
+    const { conversationId } = z
+      .object({ conversationId: z.string().uuid() })
+      .parse(request.params);
+    return dataApi.execute('conversations.icebreaker', {
+      userId: session.userId,
+      conversationId,
+    });
+  });
   app.post('/api/swipes', async (request) => {
     const session = await mutateSafe(request);
     const body = swipeBodySchema.parse(request.body);

@@ -86,6 +86,10 @@ export function MatchesPage() {
       void queryClient.invalidateQueries({ queryKey: ['incoming-likes'] });
     },
   });
+  const dismissLike = useMutation({
+    mutationFn: (userId: string) => api.swipe(userId, 'skip'),
+    onSuccess: () => void queryClient.invalidateQueries({ queryKey: ['incoming-likes'] }),
+  });
   if (matches.isLoading) return <Skeleton className="h-80" />;
   return (
     <div className="matches-page">
@@ -167,13 +171,18 @@ export function MatchesPage() {
                 )}
               </span>
             </div>
-            <Button
-              className="mt-3"
-              onClick={() => likeBack.mutate(like.user_id)}
-              loading={likeBack.isPending}
-            >
-              <Heart className="h-4 w-4" /> {ru.miniApp.community.likeBack}
-            </Button>
+            <div className="incoming-like-actions mt-3">
+              <Button onClick={() => likeBack.mutate(like.user_id)} loading={likeBack.isPending}>
+                <Heart className="h-4 w-4" /> {ru.miniApp.community.likeBack}
+              </Button>
+              <Button
+                variant="secondary"
+                onClick={() => dismissLike.mutate(like.user_id)}
+                loading={dismissLike.isPending}
+              >
+                <X className="h-4 w-4" /> {ru.miniApp.community.dismissLike}
+              </Button>
+            </div>
           </Card>
         ))}
         {!incoming.isLoading && !incoming.data?.length ? (
@@ -777,6 +786,109 @@ function chatMessageDisplayText(message: ConversationMessage): string {
   return message.text_content || chatMessagePreview(message);
 }
 
+function pickRandom<T>(values: readonly T[], exclude?: T): T {
+  const pool = exclude === undefined ? values : values.filter((value) => value !== exclude);
+  const source = pool.length ? pool : values;
+  return source[Math.floor(Math.random() * source.length)]!;
+}
+
+/**
+ * A fresh match stalls because both sides wait for the other to write first, so an
+ * empty chat offers three ready openings instead of an empty history line.
+ */
+function ChatIcebreakers({
+  conversationId,
+  name,
+  onPick,
+  sending,
+  failed,
+}: {
+  conversationId: string;
+  name: string;
+  onPick: (message: string) => void;
+  sending: boolean;
+  failed: boolean;
+}) {
+  const copy = ru.miniApp.icebreakers;
+  const context = useQuery({
+    queryKey: ['icebreaker', conversationId],
+    queryFn: () => api.conversationIcebreaker(conversationId),
+    staleTime: 60_000,
+  });
+  const [scene, setScene] = useState(() => pickRandom(copy.scenes));
+  const [question, setQuestion] = useState(() => pickRandom(copy.questions));
+  const [hooksOpen, setHooksOpen] = useState(false);
+  return (
+    <div className="chat-icebreakers">
+      <strong>{copy.title}</strong>
+      <p>
+        {copy.invitation(
+          name,
+          context.data?.sharedInterests ?? 0,
+          Boolean(context.data?.isOnline),
+        )}
+      </p>
+
+      <div className="chat-icebreaker-card">
+        <span>{scene}</span>
+        <div className="chat-icebreaker-actions">
+          <button type="button" disabled={sending} onClick={() => onPick(scene)}>
+            {copy.randomScene}
+          </button>
+          <button
+            type="button"
+            className="is-ghost"
+            onClick={() => setScene((current) => pickRandom(copy.scenes, current))}
+          >
+            {copy.another}
+          </button>
+        </div>
+      </div>
+
+      <div className="chat-icebreaker-card">
+        <span>{question}</span>
+        <div className="chat-icebreaker-actions">
+          <button type="button" disabled={sending} onClick={() => onPick(question)}>
+            {copy.askCharacter}
+          </button>
+          <button
+            type="button"
+            className="is-ghost"
+            onClick={() => setQuestion((current) => pickRandom(copy.questions, current))}
+          >
+            {copy.another}
+          </button>
+        </div>
+      </div>
+
+      <div className="chat-icebreaker-card">
+        <button
+          type="button"
+          className="chat-icebreaker-expand"
+          aria-expanded={hooksOpen}
+          onClick={() => setHooksOpen((open) => !open)}
+        >
+          {copy.pickHook}
+        </button>
+        {hooksOpen ? (
+          <>
+            <small>{copy.pickHookHint}</small>
+            <div className="chat-icebreaker-hooks">
+              {copy.hooks.map((hook) => (
+                <button key={hook} type="button" disabled={sending} onClick={() => onPick(hook)}>
+                  {hook}
+                </button>
+              ))}
+            </div>
+          </>
+        ) : null}
+      </div>
+
+      {failed ? <p className="chat-icebreaker-error">{copy.sendFailed}</p> : null}
+    </div>
+  );
+}
+
 function ConversationView({
   chat,
   premium,
@@ -797,6 +909,13 @@ function ConversationView({
   const [replyTarget, setReplyTarget] = useState<ConversationMessage | null>(null);
   const [actionMessage, setActionMessage] = useState<ConversationMessage | null>(null);
   const [forwardOpen, setForwardOpen] = useState(false);
+  const sendIcebreaker = useMutation({
+    mutationFn: (message: string) => api.sendConversationMessage(chat.id, message),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ['conversation-messages', chat.id] });
+      void queryClient.invalidateQueries({ queryKey: ['conversations'] });
+    },
+  });
   const [editMessageId, setEditMessageId] = useState<string | null>(null);
   const [pinCandidate, setPinCandidate] = useState<ConversationMessage | null>(null);
   const [pinForParticipant, setPinForParticipant] = useState(false);
@@ -1207,7 +1326,13 @@ function ConversationView({
       <div ref={messagesListRef} className="telegram-message-list" aria-live="polite">
         {messages.isLoading ? <Skeleton className="h-48" /> : null}
         {!messages.isLoading && !messages.data?.length ? (
-          <p className="chat-empty-history">{ru.miniApp.community.noMessages}</p>
+          <ChatIcebreakers
+            conversationId={chat.id}
+            name={chat.display_name ?? chat.anonymous_alias}
+            onPick={(message) => sendIcebreaker.mutate(message)}
+            sending={sendIcebreaker.isPending}
+            failed={sendIcebreaker.isError}
+          />
         ) : null}
         {messageGroups.map((group) => {
           const message = group[0]!;

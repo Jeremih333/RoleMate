@@ -8877,3 +8877,104 @@ body {
   text-align: center;
   text-decoration: underline;
 }
+
+/* ---- Chat icebreakers ---- */
+.chat-icebreakers {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin: 12px auto;
+  max-width: 460px;
+  padding: 16px;
+  border: 1px solid var(--border);
+  border-radius: 18px;
+  background: var(--surface);
+}
+.chat-icebreakers > strong {
+  font-size: 14px;
+}
+.chat-icebreakers > p {
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.5;
+}
+.chat-icebreaker-card {
+  display: flex;
+  flex-direction: column;
+  gap: 9px;
+  padding: 13px;
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  background: var(--surface-elevated);
+}
+.chat-icebreaker-card > span {
+  color: var(--soft);
+  font-size: 13.5px;
+  line-height: 1.5;
+}
+.chat-icebreaker-card small {
+  color: var(--muted);
+  font-size: 12px;
+}
+.chat-icebreaker-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.chat-icebreaker-actions button,
+.chat-icebreaker-hooks button,
+.chat-icebreaker-expand {
+  padding: 9px 13px;
+  border: 0;
+  border-radius: 11px;
+  background: var(--accent);
+  color: var(--accent-text);
+  font: inherit;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: transform 160ms ease, opacity 160ms ease;
+}
+.chat-icebreaker-actions button:active,
+.chat-icebreaker-hooks button:active,
+.chat-icebreaker-expand:active {
+  transform: scale(0.97);
+}
+.chat-icebreaker-actions button:disabled,
+.chat-icebreaker-hooks button:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+.chat-icebreaker-actions .is-ghost {
+  background: transparent;
+  color: var(--muted);
+  font-weight: 500;
+}
+.chat-icebreaker-hooks {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.chat-icebreaker-hooks button {
+  background: transparent;
+  border: 1px solid var(--border);
+  color: var(--text);
+  font-weight: 500;
+  text-align: left;
+  line-height: 1.45;
+}
+.chat-icebreaker-error {
+  color: #f2789a;
+  font-size: 12.5px;
+}
+
+.incoming-like-actions {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 8px;
+}
+@media (max-width: 360px) {
+  .incoming-like-actions {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}

@@ -622,6 +622,10 @@ export const api = {
       method: 'POST',
       body: JSON.stringify({ targetUserId }),
     }),
+  conversationIcebreaker: (conversationId: string) =>
+    request<{ sharedInterests: number; isOnline: boolean }>(
+      `/conversations/${conversationId}/icebreaker`,
+    ),
   sendConversationMessage: (conversationId: string, text: string, replyToMessageId?: string) =>
     request<{ sent: true; messageId: string }>(`/conversations/${conversationId}/messages`, {
       method: 'POST',

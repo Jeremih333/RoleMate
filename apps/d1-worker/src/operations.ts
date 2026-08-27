@@ -4688,7 +4688,13 @@ const handlers: { [K in WorkerOperation]: Handler<K> } = {
              SELECT 1 FROM swipes own_response
              WHERE own_response.actor_user_id = ?1
                AND own_response.target_user_id = s.actor_user_id
-               AND own_response.action IN ('like', 'super_like')
+               AND (
+                 own_response.action IN ('like', 'super_like')
+                 -- A pass has to clear the like as well, otherwise a like the
+                 -- viewer declined stays in the list for good. Only a pass made
+                 -- after this like counts, so someone can be liked again later.
+                 OR (own_response.action = 'skip' AND own_response.created_at >= s.created_at)
+               )
            )
          ORDER BY CASE s.action WHEN 'super_like' THEN 0 ELSE 1 END,
                   s.created_at DESC LIMIT ?2`,
@@ -6265,6 +6271,57 @@ const handlers: { [K in WorkerOperation]: Handler<K> } = {
       .bind(input.userId, input.limit, input.archived ? 1 : 0)
       .all();
     return rows.results.map((row) => premiumPresentation(row));
+  },
+  'conversations.icebreaker': async (env, input) => {
+    // Shown only in a conversation that has no messages yet, so the extra read
+    // happens once per new match rather than on every chat list render.
+    const participant = await env.DB.prepare(
+      `SELECT other.user_id AS other_user_id
+       FROM conversation_participants me
+       JOIN conversation_participants other
+         ON other.conversation_id = me.conversation_id AND other.user_id <> me.user_id
+       WHERE me.conversation_id = ?1 AND me.user_id = ?2`,
+    )
+      .bind(input.conversationId, input.userId)
+      .first<{ other_user_id: string }>();
+    if (!participant) {
+      throw new ApiError(404, 'CONVERSATION_NOT_FOUND', 'Conversation not found');
+    }
+    const profiles = await env.DB.prepare(
+      `SELECT user_id, fandoms, genres, tags FROM profiles WHERE user_id IN (?1, ?2)`,
+    )
+      .bind(input.userId, participant.other_user_id)
+      .all<{ user_id: string; fandoms: string; genres: string; tags: string }>();
+    const interests = (row?: { fandoms: string; genres: string; tags: string }) => {
+      if (!row) return new Set<string>();
+      const values: string[] = [];
+      for (const column of [row.fandoms, row.genres, row.tags]) {
+        try {
+          const parsed: unknown = JSON.parse(column ?? '[]');
+          if (Array.isArray(parsed)) {
+            for (const value of parsed) {
+              if (typeof value === 'string') values.push(value.trim().toLocaleLowerCase('ru-RU'));
+            }
+          }
+        } catch {
+          // A malformed column simply contributes nothing to the overlap.
+        }
+      }
+      return new Set(values.filter(Boolean));
+    };
+    const mine = interests(profiles.results.find((row) => row.user_id === input.userId));
+    const theirs = interests(
+      profiles.results.find((row) => row.user_id === participant.other_user_id),
+    );
+    let shared = 0;
+    for (const value of mine) if (theirs.has(value)) shared += 1;
+    const presence = await env.DB.prepare(
+      `SELECT last_activity_at >= datetime('now', '-5 minute') AS is_online
+       FROM users WHERE id = ?1`,
+    )
+      .bind(participant.other_user_id)
+      .first<{ is_online: number }>();
+    return { sharedInterests: shared, isOnline: Boolean(presence?.is_online) };
   },
   'conversations.presence.set': async (env, input) => {
     const result = await env.DB.prepare(

@@ -5617,6 +5617,44 @@ describe('D1 domain operations', () => {
     ).toEqual({ status: 'completed', sent_count: 2 });
   });
 
+  it('clears an incoming like once the viewer passes on it', async () => {
+    const viewer = await onboard(2_310);
+    const admirer = await onboard(2_311);
+
+    await executeOperation(
+      env,
+      'swipes.create',
+      {
+        userId: admirer,
+        targetUserId: viewer,
+        action: 'like',
+        source: 'miniapp',
+        idempotencyKey: 'dismissable-like',
+      },
+      crypto.randomUUID(),
+    );
+    await expect(
+      executeOperation(env, 'swipes.incoming', { userId: viewer, limit: 20 }, crypto.randomUUID()),
+    ).resolves.toEqual([expect.objectContaining({ user_id: admirer })]);
+
+    await executeOperation(
+      env,
+      'swipes.create',
+      {
+        userId: viewer,
+        targetUserId: admirer,
+        action: 'skip',
+        source: 'miniapp',
+        idempotencyKey: 'dismiss-the-like',
+      },
+      crypto.randomUUID(),
+    );
+
+    await expect(
+      executeOperation(env, 'swipes.incoming', { userId: viewer, limit: 20 }, crypto.randomUUID()),
+    ).resolves.toEqual([]);
+  });
+
   it('enforces Premium capabilities and configurable free usage limits', async () => {
     const freeUser = await onboard(2200);
     const firstTarget = await onboard(2201);

@@ -164,7 +164,7 @@ export function PublicProfilePage() {
       setUsernameInitialized(false);
       void queryClient.invalidateQueries({ queryKey: ['public-profile'] });
       void queryClient.invalidateQueries({ queryKey: ['public-profile-usernames'] });
-      void queryClient.invalidateQueries({ queryKey: ['own-posts'] });
+      invalidatePostLists(queryClient);
     },
   });
   const claimUsername = useMutation({
@@ -1731,7 +1731,11 @@ export function PostCard({
   });
   const rateComment = useMutation({
     mutationFn: ({ id, value }: { id: string; value: -1 | 1 }) => api.ratePostComment(id, value),
-    onSuccess: () => void queryClient.invalidateQueries({ queryKey: ['post-comments', post.id] }),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ['post-comments', post.id] });
+      // The card features the highest-rated comment, so a vote can change it.
+      invalidatePostLists(queryClient);
+    },
   });
   const updateComment = useMutation({
     mutationFn: () => {
@@ -1785,7 +1789,6 @@ export function PostCard({
       }),
     onSuccess: () => {
       setSettingsOpen(false);
-      void queryClient.invalidateQueries({ queryKey: ['own-posts'] });
       invalidatePostLists(queryClient);
     },
   });
@@ -1794,14 +1797,12 @@ export function PostCard({
     onSuccess: () => {
       setPostMediaToDelete(null);
       setMediaIndex(0);
-      void queryClient.invalidateQueries({ queryKey: ['own-posts'] });
       invalidatePostLists(queryClient);
     },
   });
   const deletePost = useMutation({
     mutationFn: () => api.deleteOwnPost(post.id),
     onSuccess: () => {
-      void queryClient.invalidateQueries({ queryKey: ['own-posts'] });
       invalidatePostLists(queryClient);
     },
   });

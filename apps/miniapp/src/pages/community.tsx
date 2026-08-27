@@ -211,14 +211,17 @@ export function ChatsPage() {
     refetchOnWindowFocus: 'always',
     refetchInterval: 20_000,
   });
+  const settings = useQuery({ queryKey: ['settings'], queryFn: api.settings });
   const archivedChats = useQuery({
     queryKey: ['conversations', 'archived'],
     queryFn: () => api.conversations(true),
     refetchOnMount: 'always',
     refetchOnWindowFocus: 'always',
-    refetchInterval: 20_000,
+    // The archive was polled every 20 seconds even while hidden, and archived
+    // chats barely move; it is fetched only when the section can be shown.
+    enabled: settings.data?.chat_archive_visible !== 0,
+    refetchInterval: 60_000,
   });
-  const settings = useQuery({ queryKey: ['settings'], queryFn: api.settings });
   const archiveVisibility = useMutation({
     mutationFn: async (visible: boolean) => {
       if (!settings.data) throw new Error(ru.api.requestFailed);
@@ -1073,7 +1076,9 @@ function ConversationView({
   const pinnedMessages = useQuery({
     queryKey: ['conversation-message-pins', chat.id],
     queryFn: () => api.pinnedConversationMessages(chat.id),
-    refetchInterval: 8_000,
+    // Pins change rarely and our own changes invalidate immediately, so an
+    // eight-second poll was spending reads for nothing.
+    refetchInterval: 60_000,
   });
   const livePresence = useQuery({
     queryKey: ['conversation-presence', chat.id],

@@ -4,8 +4,10 @@ export default {
   theme: {
     extend: {
       fontFamily: {
-        sans: ['Inter', 'ui-sans-serif', 'system-ui'],
-        display: ['Cormorant Garamond', 'Georgia', 'serif'],
+        // Both stacks live in styles.css as tokens so the system-first UI face and
+        // the display face stay in step wherever they are referenced.
+        sans: ['var(--font-ui)'],
+        display: ['var(--font-display)'],
       },
       colors: {
         ink: '#0d0b12',

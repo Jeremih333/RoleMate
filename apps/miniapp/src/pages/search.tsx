@@ -1392,9 +1392,7 @@ function SearchFilters({
                 type="button"
                 className="filter-chip is-selected"
                 aria-pressed
-                onClick={() =>
-                  setTimezones((current) => current.filter((item) => item !== value))
-                }
+                onClick={() => setTimezones((current) => current.filter((item) => item !== value))}
               >
                 {timezoneLabels.get(value) ?? value}
               </button>

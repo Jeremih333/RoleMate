@@ -6,6 +6,13 @@
 :root {
   color-scheme: dark;
   --app-vh: 100dvh;
+  /* Telegram renders in the platform's own UI face — SF Pro on iOS, Roboto on
+     Android. Leading with the system stack is what makes the mini app stop
+     feeling like a web page inside the client. Inter stays as the fallback. */
+  --font-ui:
+    -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Segoe UI', Roboto, Inter, ui-sans-serif,
+    system-ui, sans-serif;
+  --font-display: 'Cormorant Garamond', Georgia, serif;
   --bg: var(--tg-theme-bg-color, #0d0b12);
   --surface: rgba(30, 25, 40, 0.76);
   --surface-solid: #18141f;
@@ -59,7 +66,7 @@ body {
     radial-gradient(circle at 20% -10%, rgba(124, 81, 216, 0.18), transparent 38rem),
     radial-gradient(circle at 100% 30%, rgba(97, 55, 168, 0.1), transparent 30rem), var(--bg);
   color: var(--text);
-  font-family: Inter, ui-sans-serif, system-ui, sans-serif;
+  font-family: var(--font-ui);
   overflow-x: hidden;
 }
 
@@ -137,7 +144,7 @@ button {
   flex-direction: column;
 }
 .brand strong {
-  font-family: 'Cormorant Garamond', Georgia, serif;
+  font-family: var(--font-display);
   font-size: 21px;
   line-height: 1;
 }
@@ -381,7 +388,7 @@ select:focus-visible {
   padding-top: 14px;
   border-top: 1px solid rgba(218, 179, 92, 0.18);
   color: #d7b96f;
-  font-family: 'Cormorant Garamond', serif;
+  font-family: var(--font-display);
   font-size: 16px;
   font-style: italic;
   letter-spacing: 0.025em;
@@ -999,7 +1006,7 @@ select:focus-visible {
   font-weight: 800;
 }
 .confirm-dialog h2 {
-  font-family: 'Cormorant Garamond', serif;
+  font-family: var(--font-display);
   font-size: 30px;
   font-weight: 700;
 }
@@ -1302,7 +1309,7 @@ select:focus-visible {
 }
 .stats-grid strong {
   margin-top: 9px;
-  font-family: Inter, ui-sans-serif, system-ui, sans-serif;
+  font-family: var(--font-ui);
   font-size: 24px;
   font-variant-numeric: tabular-nums;
   line-height: 1;
@@ -3168,12 +3175,12 @@ select:focus-visible {
   border-radius: 16px;
   background: rgba(13, 9, 18, 0.72);
   color: #dacfff;
-  font-family: 'Cormorant Garamond', serif;
+  font-family: var(--font-display);
   font-size: 23px;
   backdrop-filter: blur(12px);
 }
 .compatibility span {
-  font-family: Inter, sans-serif;
+  font-family: var(--font-ui);
   font-size: 7px;
   letter-spacing: 0.12em;
   text-transform: uppercase;
@@ -4299,7 +4306,7 @@ audio {
 }
 .admin-stat strong {
   min-width: 0;
-  font-family: 'Cormorant Garamond', serif;
+  font-family: var(--font-display);
   font-size: 25px;
   line-height: 1;
 }
@@ -4377,7 +4384,7 @@ audio {
   font-size: 12px;
 }
 .splash h1 {
-  font-family: 'Cormorant Garamond', serif;
+  font-family: var(--font-display);
   font-size: 30px;
 }
 .splash .error-code {
@@ -6172,10 +6179,7 @@ body:has(.global-music-player) .telegram-conversation {
   color: var(--text);
   outline: 0;
   background: transparent;
-  font:
-    400 14px/1.35 Inter,
-    system-ui,
-    sans-serif;
+  font: 400 14px/1.35 var(--font-ui);
   scrollbar-width: thin;
 }
 .telegram-send-button {
@@ -8307,7 +8311,9 @@ body {
   color: var(--text);
   font-size: 13px;
   font-weight: 600;
-  transition: background 160ms ease, border-color 160ms ease;
+  transition:
+    background 160ms ease,
+    border-color 160ms ease;
 }
 .search-state-dot {
   width: 9px;
@@ -8353,7 +8359,10 @@ body {
   font-size: 13px;
   font-weight: 600;
   cursor: pointer;
-  transition: background 160ms ease, color 160ms ease, transform 160ms ease;
+  transition:
+    background 160ms ease,
+    color 160ms ease,
+    transform 160ms ease;
 }
 .settings-segment:active {
   transform: scale(0.98);
@@ -8797,7 +8806,7 @@ body {
   color: var(--accent-strong);
 }
 .quick-start-intro h1 {
-  font-family: 'Cormorant Garamond', Georgia, serif;
+  font-family: var(--font-display);
   font-size: clamp(24px, 6vw, 31px);
   line-height: 1.2;
 }
@@ -8821,7 +8830,7 @@ body {
   background: var(--surface);
 }
 .quick-start-step h2 {
-  font-family: 'Cormorant Garamond', Georgia, serif;
+  font-family: var(--font-display);
   font-size: 23px;
   line-height: 1.2;
 }
@@ -9020,7 +9029,9 @@ body {
   font-size: 13px;
   font-weight: 600;
   cursor: pointer;
-  transition: transform 160ms ease, opacity 160ms ease;
+  transition:
+    transform 160ms ease,
+    opacity 160ms ease;
 }
 .chat-icebreaker-actions button:active,
 .chat-icebreaker-hooks button:active,
@@ -9091,7 +9102,9 @@ body {
   color: inherit;
   font: inherit;
   cursor: pointer;
-  transition: background 160ms ease, transform 160ms ease;
+  transition:
+    background 160ms ease,
+    transform 160ms ease;
 }
 .profile-stat:active {
   transform: scale(0.97);
@@ -9180,4 +9193,72 @@ body {
   height: 15px;
   flex: none;
   color: var(--accent-strong);
+}
+
+/* ---- Motion ----
+   Telegram's polish comes from short, consistent easing rather than long
+   flourishes: content settles in, controls answer a press immediately. */
+:root {
+  --ease-out: cubic-bezier(0.22, 0.9, 0.28, 1);
+  --dur-fast: 140ms;
+  --dur-base: 220ms;
+}
+
+@keyframes surface-in {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+.glass-card,
+.quick-start-step,
+.search-filters,
+.telegram-chat-row-wrap,
+.quick-start-result {
+  animation: surface-in var(--dur-base) var(--ease-out) both;
+}
+
+/* Anything tappable should acknowledge the touch the way a native row does. */
+.button,
+.filter-chip,
+.profile-stat,
+.settings-segment,
+.quick-start-option,
+.telegram-chat-row,
+.search-filters-picker-list button {
+  transition:
+    transform var(--dur-fast) var(--ease-out),
+    background-color var(--dur-fast) var(--ease-out),
+    border-color var(--dur-fast) var(--ease-out),
+    opacity var(--dur-fast) var(--ease-out);
+}
+
+.telegram-chat-row:active,
+.search-filters-picker-list button:active {
+  background-color: var(--accent-soft);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .glass-card,
+  .quick-start-step,
+  .search-filters,
+  .telegram-chat-row-wrap,
+  .quick-start-result {
+    animation: none;
+  }
+
+  .button,
+  .filter-chip,
+  .profile-stat,
+  .settings-segment,
+  .quick-start-option,
+  .telegram-chat-row,
+  .search-filters-picker-list button {
+    transition-duration: 0.01ms;
+  }
 }

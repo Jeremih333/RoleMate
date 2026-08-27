@@ -1,4 +1,4 @@
-import { BadgeCheck, Crown, FlaskConical } from 'lucide-react';
+import { BadgeCheck, Crown } from 'lucide-react';
 import { ru } from '@rolemate/shared';
 import type { VerificationKind } from '../api.js';
 
@@ -26,8 +26,10 @@ export function VerificationBadge({
       ) : null}
       {kind ? (
         <span className={`verification-badge verification-badge-${kind}`} title={label}>
+          {/* The tester mark is custom art. It is painted as a mask so it takes the
+              badge colour and stays visible on both the light and dark themes. */}
           {kind === 'tester' ? (
-            <FlaskConical aria-label={label} />
+            <i className="tester-badge-glyph" role="img" aria-label={label} />
           ) : (
             <BadgeCheck aria-label={label} />
           )}

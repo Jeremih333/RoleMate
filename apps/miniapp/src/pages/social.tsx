@@ -317,7 +317,7 @@ export function PublicProfilePage() {
             className="profile-avatar-large"
           />
           <div className="public-profile-identity">
-            <strong className="flex items-center gap-1 break-words">
+            <strong>
               {displayName}
               <VerificationBadge
                 kind={profile.data.verification_kind}
@@ -335,10 +335,7 @@ export function PublicProfilePage() {
             <Info aria-hidden />
           </button>
         </div>
-        <div className="profile-about-block">
-          <strong>{ru.miniApp.social.aboutLabel}</strong>
-          <p>{profile.data.bio || ru.miniApp.social.bioEmpty}</p>
-        </div>
+        {profile.data.bio ? <p className="profile-bio">{profile.data.bio}</p> : null}
         {featuredAudio.length ? (
           <SwipePlaylist
             emptyLabel={ru.miniApp.search.trackUnknown}
@@ -1025,7 +1022,7 @@ export function PublicProfileViewerPage() {
             accessVersion={mediaAccessVersion}
           />
           <div className="public-profile-identity">
-            <strong className="flex items-center gap-1 break-words">
+            <strong>
               {profile.data.display_name}
               <VerificationBadge
                 kind={profile.data.verification_kind}
@@ -1095,8 +1092,7 @@ export function PublicProfileViewerPage() {
             ) : null}
           </div>
         </div>
-        <div className="profile-about-block">
-          <strong>{ru.miniApp.social.aboutLabel}</strong>
+        <div className="profile-bio">
           <ExpandableText text={profile.data.bio} emptyText={ru.miniApp.social.bioEmpty} />
         </div>
         {contentAccess && featuredAudio.length ? (

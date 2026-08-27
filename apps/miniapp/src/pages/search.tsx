@@ -414,15 +414,13 @@ export function ProfileCard({
               {ru.miniApp.profile.openMedia}
             </a>
           ))}
-          <div className="metric-row mt-4 text-xs text-muted">
-            <span
-              className="status-pill metric-pill"
-              title={formatMetric(Number(profile.view_count ?? 0) + viewDelta, true)}
-            >
-              <Eye className="h-4 w-4" aria-hidden />
-              {formatMetric(Number(profile.view_count ?? 0) + viewDelta, expanded)}
-            </span>
-          </div>
+          <p
+            className="questionnaire-views"
+            title={formatMetric(Number(profile.view_count ?? 0) + viewDelta, true)}
+          >
+            <Eye aria-hidden />
+            {formatMetric(Number(profile.view_count ?? 0) + viewDelta, expanded)}
+          </p>
           <div className="mt-5 grid grid-cols-2 gap-2 text-xs text-muted">
             <span>
               {ru.miniApp.search.style}:{' '}
@@ -1287,6 +1285,16 @@ function SearchFilters({
     onlyWithPhoto,
     timezones,
   });
+  const [timezonesOpen, setTimezonesOpen] = useState(false);
+  const [timezoneQuery, setTimezoneQuery] = useState('');
+  const timezoneLabels = new Map<string, string>(ru.miniApp.profile.timezoneOptions);
+  const timezoneNeedle = timezoneQuery.trim().toLocaleLowerCase('ru-RU');
+  const visibleTimezones = ru.miniApp.profile.timezoneOptions.filter(([value, label]) =>
+    timezoneNeedle
+      ? label.toLocaleLowerCase('ru-RU').includes(timezoneNeedle) ||
+        value.toLocaleLowerCase('ru-RU').includes(timezoneNeedle)
+      : true,
+  );
   const activeFilterCount =
     ageGroups.length +
     timezones.length +
@@ -1374,25 +1382,68 @@ function SearchFilters({
 
       <section className="search-filters-section">
         <h3>{ru.miniApp.search.filterTimezone}</h3>
-        <div className="search-filters-chips">
-          {ru.miniApp.profile.timezoneOptions.map(([value, label]) => (
-            <button
-              key={value}
-              type="button"
-              className={`filter-chip ${timezones.includes(value) ? 'is-selected' : ''}`}
-              aria-pressed={timezones.includes(value)}
-              onClick={() =>
-                setTimezones((current) =>
-                  current.includes(value)
-                    ? current.filter((item) => item !== value)
-                    : [...current, value],
-                )
-              }
-            >
-              {label}
-            </button>
-          ))}
-        </div>
+        {/* There are 37 zones with long labels. Listing them all buried the rest of
+            the panel, so only the chosen ones show until the picker is opened. */}
+        {timezones.length ? (
+          <div className="search-filters-chips">
+            {timezones.map((value) => (
+              <button
+                key={value}
+                type="button"
+                className="filter-chip is-selected"
+                aria-pressed
+                onClick={() =>
+                  setTimezones((current) => current.filter((item) => item !== value))
+                }
+              >
+                {timezoneLabels.get(value) ?? value}
+              </button>
+            ))}
+          </div>
+        ) : (
+          <p className="search-filters-note">{ru.miniApp.search.timezoneAny}</p>
+        )}
+        <button
+          type="button"
+          className="search-filters-disclosure"
+          aria-expanded={timezonesOpen}
+          onClick={() => setTimezonesOpen((open) => !open)}
+        >
+          {timezonesOpen ? ru.miniApp.search.hideTimezones : ru.miniApp.search.chooseTimezones}
+        </button>
+        {timezonesOpen ? (
+          <div className="search-filters-picker">
+            <input
+              className="search-filters-set-name"
+              value={timezoneQuery}
+              placeholder={ru.miniApp.search.timezoneSearch}
+              onChange={(event) => setTimezoneQuery(event.target.value)}
+            />
+            <div className="search-filters-picker-list">
+              {visibleTimezones.map(([value, label]) => (
+                <button
+                  key={value}
+                  type="button"
+                  className={timezones.includes(value) ? 'is-selected' : ''}
+                  aria-pressed={timezones.includes(value)}
+                  onClick={() =>
+                    setTimezones((current) =>
+                      current.includes(value)
+                        ? current.filter((item) => item !== value)
+                        : [...current, value],
+                    )
+                  }
+                >
+                  {timezones.includes(value) ? <Check aria-hidden /> : null}
+                  <span>{label}</span>
+                </button>
+              ))}
+              {!visibleTimezones.length ? (
+                <p className="search-filters-note">{ru.miniApp.search.timezoneNothingFound}</p>
+              ) : null}
+            </div>
+          </div>
+        ) : null}
       </section>
 
       <section className="search-filters-section">

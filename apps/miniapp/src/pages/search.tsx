@@ -817,7 +817,10 @@ export function SearchPage() {
           preferences={preferences.data}
           onSaved={() => {
             setFiltersOpen(false);
-            void profiles.refetch();
+            // The feed is an infinite query: refetching it would re-request every
+            // page already scrolled through, under the new filters, and stitch
+            // the results together. New filters mean starting from the top.
+            void queryClient.resetQueries({ queryKey: ['search', query] });
             void availability.refetch();
           }}
         />

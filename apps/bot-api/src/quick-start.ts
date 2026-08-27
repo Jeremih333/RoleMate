@@ -59,7 +59,7 @@ export function buildQuickStartProfile(answers: QuickStartAnswers): ProfileInput
     activityFrequency: activityFrequency(formats),
     timezone: answers.timezone ?? 'UTC+3',
     activeHours: ru.miniApp.profile.defaults.activeHours,
-    languages: ['Русский'],
+    languages: [quickStart.defaultLanguage],
     fandoms: [quickStart.ownStoriesFandom],
     genres: formats,
     tags: formats,

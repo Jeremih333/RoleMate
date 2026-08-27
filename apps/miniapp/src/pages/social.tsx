@@ -362,27 +362,29 @@ export function PublicProfilePage() {
         {profile.data.owner_liked ? (
           <p className="owner-blessing">{ru.miniApp.social.ownerBlessing}</p>
         ) : null}
-        <div className="profile-section-links mt-4">
+        <div className="profile-stat-row">
           <button
-            className="status-pill"
+            className="profile-stat"
             type="button"
             onClick={() =>
               setOpenPeopleSection((value) => (value === 'followers' ? null : 'followers'))
             }
           >
-            {ru.miniApp.social.followers}: {profile.data.followers_count ?? 0}
+            <strong>{profile.data.followers_count ?? 0}</strong>
+            <span>{ru.miniApp.social.followers}</span>
           </button>
           <button
-            className="status-pill"
+            className="profile-stat"
             type="button"
             onClick={() =>
               setOpenPeopleSection((value) => (value === 'following' ? null : 'following'))
             }
           >
-            {ru.miniApp.social.following}: {profile.data.following_count ?? 0}
+            <strong>{profile.data.following_count ?? 0}</strong>
+            <span>{ru.miniApp.social.following}</span>
           </button>
           <button
-            className="status-pill"
+            className="profile-stat"
             type="button"
             onClick={() =>
               document
@@ -390,16 +392,18 @@ export function PublicProfilePage() {
                 ?.scrollIntoView({ behavior: 'smooth' })
             }
           >
-            {ru.miniApp.social.questionnaireCount(profile.data.questionnaire_count)}
+            <strong>{profile.data.questionnaire_count}</strong>
+            <span>{ru.miniApp.social.questionnairesLabel}</span>
           </button>
           <button
-            className="status-pill"
+            className="profile-stat"
             type="button"
             onClick={() =>
               document.getElementById('own-profile-posts')?.scrollIntoView({ behavior: 'smooth' })
             }
           >
-            {ru.miniApp.social.postCount(profile.data.post_count)}
+            <strong>{profile.data.post_count}</strong>
+            <span>{ru.miniApp.social.postsLabel}</span>
           </button>
         </div>
         {openPeopleSection ? (

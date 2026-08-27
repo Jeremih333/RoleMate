@@ -632,6 +632,8 @@ export const ru = {
       botMediaUploadNotice: 'Отправьте медиа в личный чат с ботом',
       profileBlocked: 'Профиль скрыт модерацией',
       questionnaireCount: (count: number) => `Анкет: ${count}`,
+      questionnairesLabel: 'Анкеты',
+      postsLabel: 'Посты',
       postCount: (count: number) => `Постов: ${count}`,
       profileRating: 'Рейтинг профиля',
       premiumProfile: 'Premium-профиль',
@@ -870,6 +872,7 @@ export const ru = {
       whyHook: 'Это первое, что видят другие. С крючком отвечают заметно чаще.',
       fillLater: 'Заполнить позже',
       ownStoriesFandom: 'Свои сюжеты',
+      defaultLanguage: 'Русский',
       defaultBoundaries:
         'Границы пока не описаны — обсуждаю их в начале общения. Уточню в анкете позже.',
       aboutTemplate: (hook: string, lookingFor: readonly string[], formats: readonly string[]) =>

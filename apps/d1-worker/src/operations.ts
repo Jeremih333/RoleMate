@@ -6902,13 +6902,23 @@ const handlers: { [K in WorkerOperation]: Handler<K> } = {
          WHERE conversation_id = ?1 AND user_id <> ?2`,
       ).bind(input.conversationId, input.userId),
       env.DB.prepare(
+        // Refreshed at most twice a minute instead of on every poll: presence is
+        // read with a five-minute window, so a per-poll write bought nothing.
         `UPDATE conversation_participants SET active_in_chat_at = CURRENT_TIMESTAMP
-         WHERE conversation_id = ?1 AND user_id = ?2`,
+         WHERE conversation_id = ?1 AND user_id = ?2
+           AND (
+             active_in_chat_at IS NULL
+             OR active_in_chat_at <= datetime('now', '-30 second')
+           )`,
       ).bind(input.conversationId, input.userId),
       env.DB.prepare(
-        `UPDATE conversation_messages SET read_at = COALESCE(read_at, CURRENT_TIMESTAMP)
+        // Without "read_at IS NULL" this rewrote every message in the chat on
+        // every poll — the message list refetches every few seconds, so a long
+        // conversation burned thousands of D1 row writes per minute.
+        `UPDATE conversation_messages SET read_at = CURRENT_TIMESTAMP
          WHERE conversation_id = ?1 AND sender_user_id <> ?2
-           AND delivered_at IS NOT NULL AND deleted_at IS NULL`,
+           AND delivered_at IS NOT NULL AND deleted_at IS NULL
+           AND read_at IS NULL`,
       ).bind(input.conversationId, input.userId),
       env.DB.prepare(
         `UPDATE user_notifications SET dismissed_at = COALESCE(dismissed_at, CURRENT_TIMESTAMP),
@@ -6947,13 +6957,23 @@ const handlers: { [K in WorkerOperation]: Handler<K> } = {
     if (!participant) throw new ApiError(404, 'CONVERSATION_NOT_FOUND', 'Conversation not found');
     await env.DB.batch([
       env.DB.prepare(
+        // Refreshed at most twice a minute instead of on every poll: presence is
+        // read with a five-minute window, so a per-poll write bought nothing.
         `UPDATE conversation_participants SET active_in_chat_at = CURRENT_TIMESTAMP
-         WHERE conversation_id = ?1 AND user_id = ?2`,
+         WHERE conversation_id = ?1 AND user_id = ?2
+           AND (
+             active_in_chat_at IS NULL
+             OR active_in_chat_at <= datetime('now', '-30 second')
+           )`,
       ).bind(input.conversationId, input.userId),
       env.DB.prepare(
-        `UPDATE conversation_messages SET read_at = COALESCE(read_at, CURRENT_TIMESTAMP)
+        // Without "read_at IS NULL" this rewrote every message in the chat on
+        // every poll — the message list refetches every few seconds, so a long
+        // conversation burned thousands of D1 row writes per minute.
+        `UPDATE conversation_messages SET read_at = CURRENT_TIMESTAMP
          WHERE conversation_id = ?1 AND sender_user_id <> ?2
-           AND delivered_at IS NOT NULL AND deleted_at IS NULL`,
+           AND delivered_at IS NOT NULL AND deleted_at IS NULL
+           AND read_at IS NULL`,
       ).bind(input.conversationId, input.userId),
       env.DB.prepare(
         `UPDATE user_notifications SET dismissed_at = COALESCE(dismissed_at, CURRENT_TIMESTAMP),
@@ -7616,13 +7636,23 @@ const handlers: { [K in WorkerOperation]: Handler<K> } = {
          WHERE conversation_id = ?1 AND user_id <> ?2`,
       ).bind(input.conversationId, input.senderUserId),
       env.DB.prepare(
+        // Refreshed at most twice a minute instead of on every poll: presence is
+        // read with a five-minute window, so a per-poll write bought nothing.
         `UPDATE conversation_participants SET active_in_chat_at = CURRENT_TIMESTAMP
-         WHERE conversation_id = ?1 AND user_id = ?2`,
+         WHERE conversation_id = ?1 AND user_id = ?2
+           AND (
+             active_in_chat_at IS NULL
+             OR active_in_chat_at <= datetime('now', '-30 second')
+           )`,
       ).bind(input.conversationId, input.senderUserId),
       env.DB.prepare(
-        `UPDATE conversation_messages SET read_at = COALESCE(read_at, CURRENT_TIMESTAMP)
+        // Without "read_at IS NULL" this rewrote every message in the chat on
+        // every poll — the message list refetches every few seconds, so a long
+        // conversation burned thousands of D1 row writes per minute.
+        `UPDATE conversation_messages SET read_at = CURRENT_TIMESTAMP
          WHERE conversation_id = ?1 AND sender_user_id <> ?2
-           AND delivered_at IS NOT NULL AND deleted_at IS NULL`,
+           AND delivered_at IS NOT NULL AND deleted_at IS NULL
+           AND read_at IS NULL`,
       ).bind(input.conversationId, input.senderUserId),
       env.DB.prepare(
         `DELETE FROM conversation_drafts

@@ -892,6 +892,23 @@ function ChatPinnedBar({
   );
 }
 
+/**
+ * Reacting to a message was implemented three times over — in the message row, in
+ * the action sheet and in the media viewer — with the same call and the same
+ * invalidation each time.
+ */
+function useMessageReaction(conversationId: string, messageId: string, onDone?: () => void) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (reaction: ChatReaction) =>
+      api.reactConversationMessage(conversationId, messageId, reaction),
+    onSuccess: () => {
+      onDone?.();
+      void queryClient.invalidateQueries({ queryKey: ['conversation-messages', conversationId] });
+    },
+  });
+}
+
 function pickRandom<T>(values: readonly T[], exclude?: T): T {
   const pool = exclude === undefined ? values : values.filter((value) => value !== exclude);
   const source = pool.length ? pool : values;
@@ -1061,7 +1078,9 @@ function ConversationView({
   const livePresence = useQuery({
     queryKey: ['conversation-presence', chat.id],
     queryFn: () => api.conversationPresence(chat.id),
-    refetchInterval: 1_500,
+    // The typing flag lives for five seconds, so polling faster than this spent
+    // D1 reads without showing anything sooner.
+    refetchInterval: 2_500,
     refetchIntervalInBackground: false,
   });
   // Which pin the bar shows follows the scroll position: the last pinned message
@@ -1111,6 +1130,8 @@ function ConversationView({
       setSelectionMode(false);
       setConfirmation(null);
       void queryClient.invalidateQueries({ queryKey: ['conversation-messages', chat.id] });
+      // Deleting the newest message leaves a stale preview in the chat list.
+      void queryClient.invalidateQueries({ queryKey: ['conversations'] });
     },
   });
   const deleteChat = useMutation({
@@ -1808,14 +1829,7 @@ function ConversationAudioPlaylist({
   const [reactionMenuOpen, setReactionMenuOpen] = useState(false);
   const lastTapRef = useRef(0);
   const primary = messages[0]!;
-  const react = useMutation({
-    mutationFn: (reaction: ChatReaction) =>
-      api.reactConversationMessage(conversationId, primary.id, reaction),
-    onSuccess: () => {
-      setReactionMenuOpen(false);
-      void queryClient.invalidateQueries({ queryKey: ['conversation-messages', conversationId] });
-    },
-  });
+  const react = useMessageReaction(conversationId, primary.id, () => setReactionMenuOpen(false));
   const share = useMutation({
     mutationFn: (conversationIds: string[]) =>
       api.sharePlaylist({
@@ -1939,13 +1953,7 @@ function ConversationMessageContent({
   const [editText, setEditText] = useState(message.text_content ?? '');
   const [telegramAvatarFailed, setTelegramAvatarFailed] = useState(false);
   const lastTapRef = useRef(0);
-  const react = useMutation({
-    mutationFn: (reaction: ChatReaction) =>
-      api.reactConversationMessage(conversationId, message.id, reaction),
-    onSuccess: () => {
-      void queryClient.invalidateQueries({ queryKey: ['conversation-messages', conversationId] });
-    },
-  });
+  const react = useMessageReaction(conversationId, message.id);
   const updateText = useMutation({
     mutationFn: () => api.updateConversationMessageText(conversationId, message.id, editText),
     onSuccess: () => {
@@ -2695,13 +2703,7 @@ function ConversationMediaCarousel({
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
   }, [fullscreen, messages.length]);
-  const react = useMutation({
-    mutationFn: (reaction: ChatReaction) =>
-      api.reactConversationMessage(conversationId, primary.id, reaction),
-    onSuccess: () => {
-      void queryClient.invalidateQueries({ queryKey: ['conversation-messages', conversationId] });
-    },
-  });
+  const react = useMessageReaction(conversationId, primary.id);
   const reorder = useMutation({
     mutationFn: () =>
       api.reorderConversationMedia(conversationId, primary.media_group_id ?? '', [
@@ -3094,10 +3096,15 @@ function ChatComposer({
     mutationFn: (message: string) =>
       api.sendConversationMessage(conversationId, message, replyTarget?.id),
     onMutate: (message) => onSending(message),
-    onSuccess: () => {
+    onSuccess: async () => {
       stopTyping();
       setText('');
       void api.deleteConversationDraft(conversationId).catch(() => undefined);
+      // The optimistic bubble is only cleared once the real message has been
+      // fetched. Without this the text vanished and reappeared on the next poll.
+      await queryClient.invalidateQueries({
+        queryKey: ['conversation-messages', conversationId],
+      });
       void queryClient.invalidateQueries({ queryKey: ['conversations'] });
       onSettled();
       onSent();

@@ -2,10 +2,11 @@ import { StrictMode } from 'react';
 import { createRoot } from 'react-dom/client';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { App } from './app.js';
-import { initializeTelegram } from './telegram.js';
+import { initializeTelegram, trackViewportHeight } from './telegram.js';
 import './styles.css';
 
 initializeTelegram();
+trackViewportHeight();
 
 const queryClient = new QueryClient({
   defaultOptions: {

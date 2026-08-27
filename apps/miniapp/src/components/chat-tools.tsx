@@ -11,6 +11,7 @@ import {
   Paperclip,
   Square,
   Send,
+  Type,
   X,
   UserRound,
   Video,
@@ -578,6 +579,7 @@ export function VoiceRecorderButton({
   const [notice, setNotice] = useState('');
   const [voiceCaption, setVoiceCaption] = useState('');
   const [voiceCaptionPosition, setVoiceCaptionPosition] = useState<'top' | 'bottom'>('bottom');
+  const [captionOpen, setCaptionOpen] = useState(false);
   const recorderRef = useRef<MediaRecorder | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
   const chunksRef = useRef<Blob[]>([]);
@@ -664,6 +666,7 @@ export function VoiceRecorderButton({
       URL.revokeObjectURL(pending.url);
       setPending(null);
       setVoiceCaption('');
+      setCaptionOpen(false);
       onSent?.();
     } catch (error) {
       setNotice(error instanceof Error ? error.message : ru.api.requestFailed);
@@ -676,42 +679,64 @@ export function VoiceRecorderButton({
   if (pending) {
     return (
       <div className="voice-recorder-preview">
-        <audio src={pending.url} controls preload="metadata" />
-        <textarea
-          value={voiceCaption}
-          maxLength={4_000}
-          placeholder={ru.miniApp.community.mediaCaptionPlaceholder}
-          onChange={(event) => setVoiceCaption(event.target.value)}
-        />
-        <button
-          type="button"
-          onClick={() => setVoiceCaptionPosition((value) => (value === 'top' ? 'bottom' : 'top'))}
-          aria-label={
-            voiceCaptionPosition === 'top'
-              ? ru.miniApp.community.captionAbove
-              : ru.miniApp.community.captionBelow
-          }
-        >
-          {voiceCaptionPosition === 'top' ? <ChevronUp /> : <ChevronDown />}
-        </button>
-        <button
-          type="button"
-          onClick={() => {
-            URL.revokeObjectURL(pending.url);
-            setPending(null);
-          }}
-          aria-label={ru.miniApp.community.cancelAction}
-        >
-          <X />
-        </button>
-        <button
-          type="button"
-          disabled={busy}
-          onClick={() => void send()}
-          aria-label={ru.miniApp.community.sendMessage}
-        >
-          <Send />
-        </button>
+        <div className="voice-recorder-row">
+          <audio src={pending.url} controls preload="metadata" />
+          <button
+            type="button"
+            className={`voice-caption-toggle${captionOpen ? ' is-open' : ''}`}
+            aria-pressed={captionOpen}
+            aria-label={ru.miniApp.community.addCaptionOptional}
+            title={ru.miniApp.community.addCaptionOptional}
+            onClick={() => setCaptionOpen((open) => !open)}
+          >
+            <Type />
+          </button>
+          <button
+            type="button"
+            onClick={() => {
+              URL.revokeObjectURL(pending.url);
+              setPending(null);
+              setVoiceCaption('');
+              setCaptionOpen(false);
+            }}
+            aria-label={ru.miniApp.community.cancelAction}
+          >
+            <X />
+          </button>
+          <button
+            type="button"
+            className="voice-recorder-send"
+            disabled={busy}
+            onClick={() => void send()}
+            aria-label={ru.miniApp.community.sendMessage}
+          >
+            <Send />
+          </button>
+        </div>
+        {captionOpen ? (
+          <div className="voice-recorder-caption">
+            <textarea
+              value={voiceCaption}
+              maxLength={4_000}
+              placeholder={ru.miniApp.community.mediaCaptionPlaceholder}
+              onChange={(event) => setVoiceCaption(event.target.value)}
+            />
+            <button
+              type="button"
+              className="chat-caption-position"
+              onClick={() =>
+                setVoiceCaptionPosition((value) => (value === 'top' ? 'bottom' : 'top'))
+              }
+            >
+              {voiceCaptionPosition === 'top' ? <ChevronUp /> : <ChevronDown />}
+              <span>
+                {voiceCaptionPosition === 'top'
+                  ? ru.miniApp.community.captionAbove
+                  : ru.miniApp.community.captionBelow}
+              </span>
+            </button>
+          </div>
+        ) : null}
         {notice ? <small>{notice}</small> : null}
       </div>
     );

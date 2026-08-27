@@ -5,6 +5,7 @@
 
 :root {
   color-scheme: dark;
+  --app-vh: 100dvh;
   --bg: var(--tg-theme-bg-color, #0d0b12);
   --surface: rgba(30, 25, 40, 0.76);
   --surface-solid: #18141f;
@@ -1935,7 +1936,7 @@ select:focus-visible {
   position: relative;
   display: grid;
   width: min(100%, 1200px);
-  height: calc(100dvh - 128px - var(--safe-top) - var(--safe-bottom));
+  height: calc(var(--app-vh, 100dvh) - 128px - var(--safe-top) - var(--safe-bottom));
   place-items: center;
   overflow: hidden;
 }
@@ -2521,6 +2522,31 @@ select:focus-visible {
   gap: 6px;
 }
 .chat-media-caption-field textarea,
+.voice-recorder-row {
+  display: flex;
+  width: 100%;
+  align-items: center;
+  gap: 8px;
+}
+.voice-recorder-row audio {
+  flex: 1 1 auto;
+  min-width: 0;
+  height: 38px;
+}
+.voice-caption-toggle.is-open {
+  color: var(--accent-text);
+  background: var(--accent);
+}
+.voice-recorder-send {
+  color: var(--accent-text);
+  background: var(--accent);
+}
+.voice-recorder-caption {
+  display: flex;
+  width: 100%;
+  flex-direction: column;
+  gap: 8px;
+}
 .voice-recorder-preview textarea {
   width: 100%;
   min-height: 72px;
@@ -2765,7 +2791,7 @@ select:focus-visible {
 .post-gif-media-fullscreen {
   display: grid;
   width: min(100vw, 1200px);
-  max-height: 100dvh;
+  max-height: var(--app-vh, 100dvh);
   place-items: center;
 }
 .post-audio-fullscreen {
@@ -2843,7 +2869,7 @@ select:focus-visible {
   width: 100%;
   height: 100%;
   max-width: 1200px;
-  max-height: calc(100dvh - 36px - var(--safe-top) - var(--safe-bottom));
+  max-height: calc(var(--app-vh, 100dvh) - 36px - var(--safe-top) - var(--safe-bottom));
   object-fit: contain;
 }
 .profile-media-dots {
@@ -4503,7 +4529,7 @@ audio {
   left: 0;
   display: grid;
   width: 100vw;
-  height: 100dvh;
+  height: var(--app-vh, 100dvh);
   box-sizing: border-box;
   place-items: center;
   overflow: hidden;
@@ -4995,9 +5021,9 @@ audio {
   position: relative;
   display: flex;
   min-width: 0;
-  height: calc(100dvh - 150px);
+  height: calc(var(--app-vh, 100dvh) - 150px);
   min-height: 460px;
-  max-height: calc(100dvh - 150px);
+  max-height: calc(var(--app-vh, 100dvh) - 150px);
   flex-direction: column;
   overflow: hidden;
   border: 1px solid var(--border);
@@ -5021,9 +5047,9 @@ audio {
   flex: 0 0 auto;
 }
 body:has(.global-music-player) .telegram-conversation {
-  height: calc(100dvh - 210px);
+  height: calc(var(--app-vh, 100dvh) - 210px);
   min-height: 400px;
-  max-height: calc(100dvh - 210px);
+  max-height: calc(var(--app-vh, 100dvh) - 210px);
   margin-top: 60px;
 }
 .chat-icon-button,
@@ -6000,7 +6026,7 @@ body:has(.global-music-player) .telegram-conversation {
 }
 .chat-media-lightbox .chat-media-stage {
   width: 100vw;
-  height: 100dvh;
+  height: var(--app-vh, 100dvh);
 }
 .chat-media-lightbox .chat-media-stage :where(img, video) {
   width: 100%;
@@ -6039,9 +6065,9 @@ body:has(.global-music-player) .telegram-conversation {
 
 @media (max-width: 520px) {
   .telegram-conversation {
-    height: calc(100dvh - 132px);
+    height: calc(var(--app-vh, 100dvh) - 132px);
     min-height: 420px;
-    max-height: calc(100dvh - 132px);
+    max-height: calc(var(--app-vh, 100dvh) - 132px);
     border-radius: 16px;
   }
 }
@@ -6102,7 +6128,7 @@ body:has(.global-music-player) .telegram-conversation {
 }
 @media (max-width: 430px) {
   .telegram-conversation {
-    min-height: calc(100dvh - 130px);
+    min-height: calc(var(--app-vh, 100dvh) - 130px);
     margin-inline: -8px;
     border-radius: 18px;
   }
@@ -6115,8 +6141,8 @@ body:has(.global-music-player) .telegram-conversation {
 }
 
 body:has(.page > .telegram-conversation) {
-  height: 100dvh;
-  min-height: 100dvh;
+  height: var(--app-vh, 100dvh);
+  min-height: var(--app-vh, 100dvh);
   overflow: hidden;
 }
 .chat-media-upload-progress {
@@ -6167,14 +6193,14 @@ body:has(.page > .telegram-conversation) {
   box-shadow: 0 14px 38px rgb(55 35 80 / 18%);
 }
 .app-shell:has(.page > .telegram-conversation) {
-  height: 100dvh;
+  height: var(--app-vh, 100dvh);
   min-height: 0;
   overflow: hidden;
 }
 .page:has(> .telegram-conversation) {
   display: flex;
   width: 100%;
-  height: calc(100dvh - 64px - var(--safe-top));
+  height: calc(var(--app-vh, 100dvh) - 64px - var(--safe-top));
   min-height: 0;
   align-items: center;
   justify-content: center;
@@ -7806,7 +7832,7 @@ body {
 .splash {
   position: relative;
   isolation: isolate;
-  min-height: 100dvh;
+  min-height: var(--app-vh, 100dvh);
   overflow: hidden;
   gap: var(--space-6);
   padding: max(32px, var(--safe-top)) 22px max(32px, var(--safe-bottom));

@@ -137,8 +137,8 @@ export function PublicProfilePage() {
     setUsernameInitialized(true);
   }, [usernameInitialized, usernames.data]);
   const save = useMutation({
-    mutationFn: () =>
-      api.savePublicProfile({
+    mutationFn: async () => {
+      await api.savePublicProfile({
         displayName,
         bio,
         avatarMediaIds,
@@ -149,10 +149,18 @@ export function PublicProfilePage() {
         showPosts: profile.data?.show_posts !== 0,
         showLastSeen: profile.data?.show_last_seen !== 0,
         directMessagePolicy: profile.data?.direct_message_policy ?? 'everyone',
-      }),
+      });
+      // A username typed but never claimed used to be silently dropped when the
+      // editor closed, so saving the profile claims it too.
+      const typed = username.trim().replace(/^@/, '').toLowerCase();
+      const current = (usernames.data?.[0]?.username ?? '').toLowerCase();
+      if (typed && typed !== current) await api.claimPublicProfileUsername(typed);
+    },
     onSuccess: () => {
       setEditing(false);
+      setUsernameInitialized(false);
       void queryClient.invalidateQueries({ queryKey: ['public-profile'] });
+      void queryClient.invalidateQueries({ queryKey: ['public-profile-usernames'] });
       void queryClient.invalidateQueries({ queryKey: ['own-posts'] });
     },
   });
@@ -234,6 +242,21 @@ export function PublicProfilePage() {
     const timeout = window.setTimeout(() => setBotUploadNotice(false), 3_500);
     return () => window.clearTimeout(timeout);
   }, [botUploadNotice]);
+  // Media is uploaded in the bot chat, so anything sent while the mini app was
+  // in the background has to be picked up the moment the user comes back.
+  useEffect(() => {
+    const refresh = () => {
+      if (document.visibilityState !== 'visible') return;
+      void queryClient.invalidateQueries({ queryKey: ['profile-media'] });
+      void queryClient.invalidateQueries({ queryKey: ['public-profile'] });
+    };
+    document.addEventListener('visibilitychange', refresh);
+    window.addEventListener('focus', refresh);
+    return () => {
+      document.removeEventListener('visibilitychange', refresh);
+      window.removeEventListener('focus', refresh);
+    };
+  }, [queryClient]);
   if (profile.isLoading) return <Skeleton className="h-80" />;
   if (!profile.data) return null;
   const avatarItems = parseAvatarMediaItems(
@@ -607,7 +630,7 @@ export function PublicProfilePage() {
                 ) : null}
                 <div className="mt-3 flex flex-wrap gap-2">
                   <Button variant="secondary" onClick={() => openBot('profile_photo')}>
-                    <ImagePlus className="h-4 w-4" /> {ru.miniApp.social.addAvatar}
+                    <ImagePlus className="h-4 w-4" /> {ru.miniApp.social.uploadVisualMedia}
                   </Button>
                   {avatarMediaIds.length ? (
                     <Button variant="ghost" onClick={() => setAvatarMediaIds([])}>
@@ -619,9 +642,6 @@ export function PublicProfilePage() {
               <div className="profile-upload-actions mt-5">
                 <Button variant="secondary" onClick={() => openBot('profile_music')}>
                   <Music2 className="h-4 w-4" /> {ru.miniApp.profile.uploadMusic}
-                </Button>
-                <Button variant="secondary" onClick={() => openBot('profile_photo')}>
-                  <ImagePlus className="h-4 w-4" /> {ru.miniApp.profile.uploadMedia}
                 </Button>
               </div>
               {media.data?.length ? (

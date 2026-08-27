@@ -73,3 +73,31 @@ export function applyThemePreference(preference: ThemePreference): 'light' | 'da
 export function haptic(style: 'light' | 'medium' | 'heavy' = 'light'): void {
   getTelegram()?.HapticFeedback?.impactOccurred(style);
 }
+
+/**
+ * Telegram's iOS WebView keeps `100dvh` at its full height while the keyboard is
+ * open, so anything sized against it is pushed under the keyboard and cannot be
+ * scrolled back. Mirroring the visual viewport into `--app-vh` gives the layout a
+ * height that actually shrinks.
+ */
+export function trackViewportHeight(): () => void {
+  if (typeof window === 'undefined') return () => {};
+  const root = document.documentElement;
+  const apply = () => {
+    const height = window.visualViewport?.height ?? window.innerHeight;
+    if (!height) return;
+    root.style.setProperty('--app-vh', `${Math.round(height)}px`);
+  };
+  apply();
+  const viewport = window.visualViewport;
+  viewport?.addEventListener('resize', apply);
+  viewport?.addEventListener('scroll', apply);
+  window.addEventListener('resize', apply);
+  window.addEventListener('orientationchange', apply);
+  return () => {
+    viewport?.removeEventListener('resize', apply);
+    viewport?.removeEventListener('scroll', apply);
+    window.removeEventListener('resize', apply);
+    window.removeEventListener('orientationchange', apply);
+  };
+}

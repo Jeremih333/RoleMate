@@ -752,6 +752,8 @@ export function ProfileEditorPage() {
     defaultValues: defaults,
   });
   const resetForm = form.reset;
+  const draftKey = `rolemate:questionnaire-draft:${questionnaireId ?? 'new'}`;
+  const [draftSavedAt, setDraftSavedAt] = useState(0);
   useEffect(() => {
     if (profile.data) {
       resetForm(existingProfile(profile.data));
@@ -760,6 +762,66 @@ export function ProfileEditorPage() {
       }
     }
   }, [profile.data, questionnaireId, resetForm]);
+  // A half-filled questionnaire cannot be saved on the server without passing
+  // validation, so leaving the editor used to throw the work away. The draft is
+  // kept locally instead and restored the next time the editor opens.
+  const draftRestored = useRef(false);
+  const draftTimerRef = useRef(0);
+  useEffect(() => {
+    if (draftRestored.current) return;
+    if (questionnaireId && !profile.data) return;
+    draftRestored.current = true;
+    try {
+      const stored = window.localStorage.getItem(draftKey);
+      if (!stored) return;
+      const parsed = JSON.parse(stored) as { profile?: ProfileInput; title?: string };
+      if (parsed.profile) resetForm(parsed.profile, { keepDefaultValues: true });
+      if (parsed.title) setQuestionnaireTitle(parsed.title);
+    } catch {
+      window.localStorage.removeItem(draftKey);
+    }
+  }, [draftKey, profile.data, questionnaireId, resetForm]);
+  const saveDraft = () => {
+    try {
+      window.localStorage.setItem(
+        draftKey,
+        JSON.stringify({ profile: form.getValues(), title: questionnaireTitle }),
+      );
+      setDraftSavedAt(Date.now());
+    } catch {
+      // A full or disabled storage quota must not block editing.
+    }
+  };
+  // Autosave, because the work is usually lost by navigating away rather than by
+  // pressing anything.
+  useEffect(() => {
+    if (!draftRestored.current) return;
+    const subscription = form.watch(() => {
+      window.clearTimeout(draftTimerRef.current);
+      draftTimerRef.current = window.setTimeout(() => {
+        if (!form.formState.isDirty) return;
+        try {
+          window.localStorage.setItem(
+            draftKey,
+            JSON.stringify({ profile: form.getValues(), title: questionnaireTitle }),
+          );
+        } catch {
+          // See saveDraft: storage failures must not interrupt editing.
+        }
+      }, 800);
+    });
+    return () => {
+      subscription.unsubscribe();
+      window.clearTimeout(draftTimerRef.current);
+    };
+  }, [draftKey, form, questionnaireTitle]);
+  const clearDraft = () => {
+    try {
+      window.localStorage.removeItem(draftKey);
+    } catch {
+      // Nothing to recover from: the draft is a convenience, not state we own.
+    }
+  };
   useEffect(() => {
     if (!validationNotice) return;
     const timeout = window.setTimeout(() => setValidationNotice(null), 6_000);
@@ -783,6 +845,7 @@ export function ProfileEditorPage() {
       }
     },
     onSuccess: (_result, submittedProfile) => {
+      clearDraft();
       form.reset(submittedProfile);
       void queryClient.invalidateQueries({ queryKey: ['profile'] });
       void queryClient.invalidateQueries({ queryKey: ['questionnaires'] });
@@ -1557,6 +1620,9 @@ export function ProfileEditorPage() {
             <X className="h-4 w-4" /> {ru.miniApp.profile.cancelEditing}
           </Button>
         </div>
+        <button type="button" className="questionnaire-draft-button" onClick={saveDraft}>
+          {draftSavedAt ? ru.miniApp.profile.draftSaved : ru.miniApp.profile.saveDraft}
+        </button>
       </div>
     </form>
   );

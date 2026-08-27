@@ -1170,6 +1170,8 @@ export const ru = {
         'Файл исчезнет из профиля, анкет, аватара и музыкального блока. Отменить это действие нельзя.',
       cancelMediaDeletion: 'Оставить файл',
       submit: 'Сохранить и опубликовать',
+      saveDraft: 'Сохранить черновик',
+      draftSaved: 'Черновик сохранён',
       published: 'Опубликовано!',
       publishValidationTitle: 'Анкету пока нельзя опубликовать',
       publishValidationFields: (fields: string[]) =>

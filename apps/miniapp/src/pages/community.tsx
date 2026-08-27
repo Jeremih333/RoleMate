@@ -503,6 +503,15 @@ function ChatListRow({
   const dragging = useRef(false);
   const suppressNextClick = useRef(false);
   const preview = conversationListPreview(chat);
+  // Telegram closes a held-open chat preview on any tap outside it, and on Escape.
+  useEffect(() => {
+    if (!actionsOpen) return;
+    const close = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') setActionsOpen(false);
+    };
+    window.addEventListener('keydown', close);
+    return () => window.removeEventListener('keydown', close);
+  }, [actionsOpen]);
   const previewMessages = useQuery({
     queryKey: ['conversation-preview', chat.id],
     queryFn: () => api.conversationMessages(chat.id),
@@ -578,7 +587,15 @@ function ChatListRow({
         )}
       </button>
       {actionsOpen ? (
-        <div className="chat-row-quick-actions">
+        <button
+          type="button"
+          className="chat-row-actions-backdrop"
+          aria-label={ru.miniApp.community.closePreview}
+          onClick={() => setActionsOpen(false)}
+        />
+      ) : null}
+      {actionsOpen ? (
+        <div className="chat-row-quick-actions" role="menu">
           <div className="chat-hold-preview">
             <strong>{chat.display_name ?? chat.anonymous_alias}</strong>
             {previewMessages.isLoading ? <Skeleton className="h-20" /> : null}

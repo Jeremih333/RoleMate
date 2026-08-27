@@ -2,6 +2,7 @@ import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from '@tansta
 import { motion, AnimatePresence } from 'framer-motion';
 import {
   Ban,
+  Check,
   ChevronLeft,
   ChevronRight,
   Eye,
@@ -16,6 +17,7 @@ import {
   Shield,
   SlidersHorizontal,
   Star,
+  Trash2,
   X,
 } from 'lucide-react';
 import { useEffect, useRef, useState } from 'react';
@@ -1285,6 +1287,15 @@ function SearchFilters({
     onlyWithPhoto,
     timezones,
   });
+  const activeFilterCount =
+    ageGroups.length +
+    timezones.length +
+    split(genres).length +
+    split(fandoms).length +
+    split(writingStyles).length +
+    split(activityLevels).length +
+    (onlyOnline ? 1 : 0) +
+    (onlyWithPhoto ? 1 : 0);
   const saveSet = useMutation({
     mutationFn: () => api.saveFilterSet(filterSetName, currentInput()),
     onSuccess: () => {
@@ -1304,99 +1315,111 @@ function SearchFilters({
     onSuccess: () => void queryClient.invalidateQueries({ queryKey: ['filter-sets'] }),
   });
   return (
-    <Card className="mb-4 space-y-3 p-4 text-left" data-testid="search-filters-panel">
-      <p className="text-sm font-semibold">{ru.miniApp.search.filterAge}</p>
-      <div className="flex flex-wrap gap-2">
-        {ageOptions.map((age, index) => (
-          <button
-            key={age}
-            className={`tag ${ageGroups.includes(age) ? 'status-pill' : ''}`}
-            onClick={() =>
-              setAgeGroups((current) =>
-                current.includes(age) ? current.filter((item) => item !== age) : [...current, age],
-              )
-            }
-          >
-            {ru.miniApp.profile.ageOptions[index]}
-          </button>
+    <Card className="search-filters mb-4 text-left" data-testid="search-filters-panel">
+      <header className="search-filters-header">
+        <div>
+          <strong>{ru.miniApp.search.filtersTitle}</strong>
+          <p>{ru.miniApp.search.filtersHint}</p>
+        </div>
+        {activeFilterCount ? (
+          <span className="search-filters-count">{activeFilterCount}</span>
+        ) : null}
+      </header>
+
+      <section className="search-filters-section">
+        <h3>{ru.miniApp.search.filterAge}</h3>
+        <div className="search-filters-chips">
+          {ageOptions.map((age, index) => (
+            <button
+              key={age}
+              type="button"
+              className={`filter-chip ${ageGroups.includes(age) ? 'is-selected' : ''}`}
+              aria-pressed={ageGroups.includes(age)}
+              onClick={() =>
+                setAgeGroups((current) =>
+                  current.includes(age)
+                    ? current.filter((item) => item !== age)
+                    : [...current, age],
+                )
+              }
+            >
+              {ru.miniApp.profile.ageOptions[index]}
+            </button>
+          ))}
+        </div>
+      </section>
+
+      <section className="search-filters-section">
+        <h3>{ru.miniApp.search.filtersSectionInterests}</h3>
+        <p className="search-filters-note">{ru.miniApp.search.filtersCommaHint}</p>
+        {(
+          [
+            [genres, setGenres, ru.miniApp.search.filterGenres],
+            [fandoms, setFandoms, ru.miniApp.search.filterFandoms],
+            [writingStyles, setWritingStyles, ru.miniApp.search.filterWritingStyles],
+            [activityLevels, setActivityLevels, ru.miniApp.search.filterActivity],
+          ] as const
+        ).map(([value, setter, placeholder]) => (
+          <label className="search-filters-field" key={placeholder}>
+            <span>{placeholder}</span>
+            <input
+              className="input-field"
+              value={value}
+              onChange={(event) => setter(event.target.value)}
+              placeholder={placeholder}
+            />
+          </label>
         ))}
-      </div>
-      {[
-        [genres, setGenres, ru.miniApp.search.filterGenres],
-        [fandoms, setFandoms, ru.miniApp.search.filterFandoms],
-        [writingStyles, setWritingStyles, ru.miniApp.search.filterWritingStyles],
-        [activityLevels, setActivityLevels, ru.miniApp.search.filterActivity],
-      ].map(([value, setter, placeholder]) => (
-        <input
-          key={String(placeholder)}
-          className="input-field"
-          value={String(value)}
-          onChange={(event) => (setter as (value: string) => void)(event.target.value)}
-          placeholder={String(placeholder)}
-        />
-      ))}
-      <p className="text-sm font-semibold">{ru.miniApp.search.filterTimezone}</p>
-      <div className="flex flex-wrap gap-2">
-        {ru.miniApp.profile.timezoneOptions.map(([value, label]) => (
-          <button
-            key={value}
-            type="button"
-            className={`tag ${timezones.includes(value) ? 'status-pill' : ''}`}
-            aria-pressed={timezones.includes(value)}
-            onClick={() =>
-              setTimezones((current) =>
-                current.includes(value)
-                  ? current.filter((item) => item !== value)
-                  : [...current, value],
-              )
-            }
-          >
-            {label}
-          </button>
-        ))}
-      </div>
-      <label className="setting-row">
-        {ru.miniApp.search.onlyOnline}
-        <input
-          type="checkbox"
-          checked={onlyOnline}
-          onChange={(event) => setOnlyOnline(event.target.checked)}
-        />
-      </label>
-      <label className="setting-row">
-        {ru.miniApp.search.onlyWithPhoto}
-        <input
-          type="checkbox"
-          checked={onlyWithPhoto}
-          onChange={(event) => setOnlyWithPhoto(event.target.checked)}
-        />
-      </label>
-      <div className="flex flex-wrap gap-2">
-        <Button
-          loading={save.isPending}
-          onClick={() =>
-            save.mutate({
-              ...currentInput(),
-            })
-          }
-        >
-          {ru.miniApp.search.saveFilters}
-        </Button>
-        <Button
-          data-testid="reset-search-filters"
-          type="button"
-          variant="secondary"
-          loading={reset.isPending}
-          onClick={() => reset.mutate()}
-        >
-          {ru.miniApp.search.resetFilters}
-        </Button>
-      </div>
-      <div className="border-t border-white/10 pt-3">
-        <p className="mb-2 text-sm font-semibold">{ru.miniApp.search.savedFilterSets}</p>
-        <div className="flex gap-2">
+      </section>
+
+      <section className="search-filters-section">
+        <h3>{ru.miniApp.search.filterTimezone}</h3>
+        <div className="search-filters-chips">
+          {ru.miniApp.profile.timezoneOptions.map(([value, label]) => (
+            <button
+              key={value}
+              type="button"
+              className={`filter-chip ${timezones.includes(value) ? 'is-selected' : ''}`}
+              aria-pressed={timezones.includes(value)}
+              onClick={() =>
+                setTimezones((current) =>
+                  current.includes(value)
+                    ? current.filter((item) => item !== value)
+                    : [...current, value],
+                )
+              }
+            >
+              {label}
+            </button>
+          ))}
+        </div>
+      </section>
+
+      <section className="search-filters-section">
+        <h3>{ru.miniApp.search.filtersSectionExtra}</h3>
+        <label className="search-filters-switch">
+          <span>{ru.miniApp.search.onlyOnline}</span>
           <input
-            className="input-field"
+            type="checkbox"
+            checked={onlyOnline}
+            onChange={(event) => setOnlyOnline(event.target.checked)}
+          />
+        </label>
+        <label className="search-filters-switch">
+          <span>{ru.miniApp.search.onlyWithPhoto}</span>
+          <input
+            type="checkbox"
+            checked={onlyWithPhoto}
+            onChange={(event) => setOnlyWithPhoto(event.target.checked)}
+          />
+        </label>
+      </section>
+
+      <section className="search-filters-section">
+        <h3>{ru.miniApp.search.savedFilterSets}</h3>
+        <div className="search-filters-set-form">
+          <input
+            className="search-filters-set-name"
             value={filterSetName}
             maxLength={40}
             onChange={(event) => setFilterSetName(event.target.value)}
@@ -1411,24 +1434,47 @@ function SearchFilters({
             {ru.miniApp.search.saveFilterSet}
           </Button>
         </div>
-        <div className="mt-2 space-y-2">
-          {filterSets.data?.map((item) => (
-            <div className="setting-row" key={item.id}>
-              <span>
-                {item.name}
-                {item.is_active ? ' ✓' : ''}
-              </span>
-              <span className="flex gap-2">
-                <button onClick={() => activateSet.mutate(item.id)}>
-                  {ru.miniApp.search.activateFilterSet}
+        {filterSets.data?.length ? (
+          <ul className="search-filters-sets">
+            {filterSets.data.map((item) => (
+              <li className={item.is_active ? 'is-active' : ''} key={item.id}>
+                <button
+                  type="button"
+                  className="search-filters-set-name-button"
+                  onClick={() => activateSet.mutate(item.id)}
+                >
+                  {item.is_active ? <Check aria-hidden /> : null}
+                  <span>{item.name}</span>
                 </button>
-                <button onClick={() => deleteSet.mutate(item.id)}>
-                  {ru.miniApp.search.deleteFilterSet}
+                <button
+                  type="button"
+                  className="search-filters-set-delete"
+                  aria-label={ru.miniApp.search.deleteFilterSet}
+                  onClick={() => deleteSet.mutate(item.id)}
+                >
+                  <Trash2 aria-hidden />
                 </button>
-              </span>
-            </div>
-          ))}
-        </div>
+              </li>
+            ))}
+          </ul>
+        ) : (
+          <p className="search-filters-note">{ru.miniApp.search.noFilterSets}</p>
+        )}
+      </section>
+
+      <div className="search-filters-actions">
+        <Button loading={save.isPending} onClick={() => save.mutate({ ...currentInput() })}>
+          {ru.miniApp.search.saveFilters}
+        </Button>
+        <Button
+          data-testid="reset-search-filters"
+          type="button"
+          variant="secondary"
+          loading={reset.isPending}
+          onClick={() => reset.mutate()}
+        >
+          {ru.miniApp.search.resetFilters}
+        </Button>
       </div>
     </Card>
   );

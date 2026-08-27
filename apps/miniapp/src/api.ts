@@ -1332,6 +1332,7 @@ export interface PremiumStats {
 }
 
 export interface Conversation {
+  unread_count?: number;
   id: string;
   status: string;
   anonymous_alias: string;
@@ -1364,6 +1365,7 @@ export type ChatLiveActivity = 'typing' | 'recording_voice' | 'sending_media';
 export type ChatReaction = string;
 
 export interface ConversationMessage {
+  is_first_unread?: number;
   id: string;
   sender_user_id: string;
   message_type: ChatMediaKind | 'text' | 'profile' | 'scenario' | 'sticker' | 'document';

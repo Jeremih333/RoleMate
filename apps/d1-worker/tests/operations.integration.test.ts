@@ -5688,6 +5688,62 @@ describe('D1 domain operations', () => {
     expect(again.conversationIds).not.toContain(conversationId);
   });
 
+  it('counts unread messages and marks where reading left off', async () => {
+    const author = await onboard(2_610);
+    const reader = await onboard(2_611);
+    const [firstId, secondId] = [author, reader].sort();
+    const matchId = crypto.randomUUID();
+    const conversationId = crypto.randomUUID();
+    sqlite
+      .prepare('INSERT INTO matches (id, user_a_id, user_b_id) VALUES (?, ?, ?)')
+      .run(matchId, firstId, secondId);
+    sqlite
+      .prepare('INSERT INTO conversations (id, match_id) VALUES (?, ?)')
+      .run(conversationId, matchId);
+    const insertParticipant = sqlite.prepare(
+      `INSERT INTO conversation_participants (conversation_id, user_id, anonymous_alias)
+       VALUES (?, ?, ?)`,
+    );
+    insertParticipant.run(conversationId, author, 'Автор');
+    insertParticipant.run(conversationId, reader, 'Читатель');
+    const insertMessage = sqlite.prepare(
+      `INSERT INTO conversation_messages
+         (id, conversation_id, sender_user_id, message_type, encrypted_content, delivered_at,
+          created_at)
+       VALUES (?, ?, ?, 'text', 'x', CURRENT_TIMESTAMP, ?)`,
+    );
+    const olderId = crypto.randomUUID();
+    const newerId = crypto.randomUUID();
+    insertMessage.run(olderId, conversationId, author, '2026-01-01 10:00:00');
+    insertMessage.run(newerId, conversationId, author, '2026-01-01 11:00:00');
+
+    const list = (await executeOperation(
+      env,
+      'conversations.list',
+      { userId: reader, limit: 20, archived: false },
+      crypto.randomUUID(),
+    )) as Array<{ id: string; unread_count: number }>;
+    expect(list.find((row) => row.id === conversationId)?.unread_count).toBe(2);
+
+    const messages = (await executeOperation(
+      env,
+      'conversations.messages.list',
+      { userId: reader, conversationId, limit: 50 },
+      crypto.randomUUID(),
+    )) as Array<{ id: string; is_first_unread: number }>;
+    // The divider belongs to the oldest unread message, and the reader's own
+    // messages never count.
+    expect(messages.find((row) => row.is_first_unread === 1)?.id).toBe(olderId);
+
+    const afterReading = (await executeOperation(
+      env,
+      'conversations.list',
+      { userId: reader, limit: 20, archived: false },
+      crypto.randomUUID(),
+    )) as Array<{ id: string; unread_count: number }>;
+    expect(afterReading.find((row) => row.id === conversationId)?.unread_count).toBe(0);
+  });
+
   it('does not rewrite already-read messages when the chat list is polled', async () => {
     const author = await onboard(2_510);
     const reader = await onboard(2_511);

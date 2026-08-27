@@ -9355,3 +9355,42 @@ body {
   margin-left: 18px;
   margin-right: 18px;
 }
+
+/* Telegram's unread affordances: a count on the row and a line marking where
+   reading left off. Neither existed, so there was no way to tell a chat had
+   new messages. */
+.telegram-chat-meta {
+  display: flex;
+  flex: none;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 5px;
+}
+.chat-unread-badge {
+  display: inline-flex;
+  min-width: 20px;
+  height: 20px;
+  align-items: center;
+  justify-content: center;
+  padding: 0 6px;
+  border-radius: 999px;
+  background: var(--accent);
+  color: var(--accent-text);
+  font-size: 11px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+.chat-unread-divider {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin: 10px 0;
+}
+.chat-unread-divider span {
+  padding: 4px 12px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--accent) 22%, transparent);
+  color: var(--accent-strong);
+  font-size: 11.5px;
+  font-weight: 600;
+}

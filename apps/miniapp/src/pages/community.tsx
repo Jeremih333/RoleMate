@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { Fragment, useCallback, useEffect, useRef, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { ru } from '@rolemate/shared';
 import {
@@ -591,13 +591,20 @@ function ChatListRow({
             {preview}
           </span>
         </span>
-        {chat.is_online ? (
-          <span className="activity-dot" aria-label={ru.miniApp.community.chatOnline} />
-        ) : (
-          <small className="chat-list-presence">
-            {conversationPresence(chat, viewerTime.relative)}
-          </small>
-        )}
+        <span className="telegram-chat-meta">
+          {chat.is_online ? (
+            <span className="activity-dot" aria-label={ru.miniApp.community.chatOnline} />
+          ) : (
+            <small className="chat-list-presence">
+              {conversationPresence(chat, viewerTime.relative)}
+            </small>
+          )}
+          {chat.unread_count ? (
+            <span className="chat-unread-badge" aria-label={ru.miniApp.community.unreadCount}>
+              {chat.unread_count > 99 ? '99+' : chat.unread_count}
+            </span>
+          ) : null}
+        </span>
       </button>
       {actionsOpen ? (
         <button
@@ -1500,129 +1507,139 @@ function ConversationView({
           const message = group[0]!;
           const selected = selectedMessages.includes(message.id);
           const selectable = selectionMode;
+          // Telegram's "unread from here" line. The server resolves it before it
+          // marks the chat read, otherwise it could never be shown.
+          const unreadDivider = group.some((item) => item.is_first_unread) ? (
+            <div className="chat-unread-divider" key={`${message.id}-unread`}>
+              <span>{ru.miniApp.community.unreadDivider}</span>
+            </div>
+          ) : null;
           return (
-            <div
-              key={message.id}
-              data-message-id={message.id}
-              className={`telegram-message-row ${message.is_own ? 'is-own' : ''} ${
-                selected ? 'is-selected' : ''
-              } ${highlightedMessageId === message.id ? 'is-highlighted' : ''}`}
-              onClick={
-                selectable
-                  ? () =>
-                      setSelectedMessages((current) =>
-                        current.includes(message.id)
-                          ? current.filter((id) => id !== message.id)
-                          : [...current, message.id],
-                      )
-                  : undefined
-              }
-              onContextMenu={(event) => {
-                if (selectionMode) return;
-                event.preventDefault();
-                setActionMessage(message);
-              }}
-              onPointerDown={(event) => {
-                const target = event.target as HTMLElement;
-                if (
-                  selectionMode ||
-                  target.closest('a,audio,input,textarea,select') ||
-                  (target.closest('button') && !target.closest('.chat-media-stage'))
-                )
-                  return;
-                const timer = window.setTimeout(() => setActionMessage(message), 480);
-                messageGestureRef.current = {
-                  timer,
-                  messageId: message.id,
-                  x: event.clientX,
-                  y: event.clientY,
-                  replied: false,
-                  row: event.currentTarget,
-                };
-              }}
-              onPointerMove={(event) => {
-                const gesture = messageGestureRef.current;
-                if (!gesture || gesture.messageId !== message.id || gesture.replied) return;
-                const deltaX = event.clientX - gesture.x;
-                const deltaY = event.clientY - gesture.y;
-                if (Math.abs(deltaX) > 10 || Math.abs(deltaY) > 10) {
-                  window.clearTimeout(gesture.timer);
+            <Fragment key={`${message.id}-block`}>
+              {unreadDivider}
+              <div
+                key={message.id}
+                data-message-id={message.id}
+                className={`telegram-message-row ${message.is_own ? 'is-own' : ''} ${
+                  selected ? 'is-selected' : ''
+                } ${highlightedMessageId === message.id ? 'is-highlighted' : ''}`}
+                onClick={
+                  selectable
+                    ? () =>
+                        setSelectedMessages((current) =>
+                          current.includes(message.id)
+                            ? current.filter((id) => id !== message.id)
+                            : [...current, message.id],
+                        )
+                    : undefined
                 }
-                const replyDistance = message.is_own ? -deltaX : deltaX;
-                if (replyDistance > 0 && Math.abs(deltaX) > Math.abs(deltaY) * 1.15) {
-                  if (!event.currentTarget.hasPointerCapture(event.pointerId)) {
-                    try {
-                      event.currentTarget.setPointerCapture(event.pointerId);
-                    } catch {
-                      // Synthetic test events can lack an active pointer; real gestures are captured.
+                onContextMenu={(event) => {
+                  if (selectionMode) return;
+                  event.preventDefault();
+                  setActionMessage(message);
+                }}
+                onPointerDown={(event) => {
+                  const target = event.target as HTMLElement;
+                  if (
+                    selectionMode ||
+                    target.closest('a,audio,input,textarea,select') ||
+                    (target.closest('button') && !target.closest('.chat-media-stage'))
+                  )
+                    return;
+                  const timer = window.setTimeout(() => setActionMessage(message), 480);
+                  messageGestureRef.current = {
+                    timer,
+                    messageId: message.id,
+                    x: event.clientX,
+                    y: event.clientY,
+                    replied: false,
+                    row: event.currentTarget,
+                  };
+                }}
+                onPointerMove={(event) => {
+                  const gesture = messageGestureRef.current;
+                  if (!gesture || gesture.messageId !== message.id || gesture.replied) return;
+                  const deltaX = event.clientX - gesture.x;
+                  const deltaY = event.clientY - gesture.y;
+                  if (Math.abs(deltaX) > 10 || Math.abs(deltaY) > 10) {
+                    window.clearTimeout(gesture.timer);
+                  }
+                  const replyDistance = message.is_own ? -deltaX : deltaX;
+                  if (replyDistance > 0 && Math.abs(deltaX) > Math.abs(deltaY) * 1.15) {
+                    if (!event.currentTarget.hasPointerCapture(event.pointerId)) {
+                      try {
+                        event.currentTarget.setPointerCapture(event.pointerId);
+                      } catch {
+                        // Synthetic test events can lack an active pointer; real gestures are captured.
+                      }
+                    }
+                    const offset = Math.min(72, replyDistance * 0.72);
+                    gesture.row.style.setProperty(
+                      '--chat-reply-swipe-offset',
+                      `${message.is_own ? -offset : offset}px`,
+                    );
+                    gesture.row.classList.toggle('is-reply-ready', replyDistance >= 56);
+                    gesture.replied = replyDistance >= 56;
+                  } else {
+                    gesture.row.style.removeProperty('--chat-reply-swipe-offset');
+                    gesture.row.classList.remove('is-reply-ready');
+                    gesture.replied = false;
+                  }
+                }}
+                onPointerUp={(event) => {
+                  const gesture = messageGestureRef.current;
+                  if (gesture) {
+                    window.clearTimeout(gesture.timer);
+                    gesture.row.style.removeProperty('--chat-reply-swipe-offset');
+                    gesture.row.classList.remove('is-reply-ready');
+                    if (gesture.replied) {
+                      gesture.row.dataset.replySwiped = 'true';
+                      window.setTimeout(() => delete gesture.row.dataset.replySwiped, 280);
+                      setReplyTarget(message);
+                      event.preventDefault();
+                      event.stopPropagation();
                     }
                   }
-                  const offset = Math.min(72, replyDistance * 0.72);
-                  gesture.row.style.setProperty(
-                    '--chat-reply-swipe-offset',
-                    `${message.is_own ? -offset : offset}px`,
-                  );
-                  gesture.row.classList.toggle('is-reply-ready', replyDistance >= 56);
-                  gesture.replied = replyDistance >= 56;
-                } else {
-                  gesture.row.style.removeProperty('--chat-reply-swipe-offset');
-                  gesture.row.classList.remove('is-reply-ready');
-                  gesture.replied = false;
-                }
-              }}
-              onPointerUp={(event) => {
-                const gesture = messageGestureRef.current;
-                if (gesture) {
-                  window.clearTimeout(gesture.timer);
-                  gesture.row.style.removeProperty('--chat-reply-swipe-offset');
-                  gesture.row.classList.remove('is-reply-ready');
-                  if (gesture.replied) {
-                    gesture.row.dataset.replySwiped = 'true';
-                    window.setTimeout(() => delete gesture.row.dataset.replySwiped, 280);
-                    setReplyTarget(message);
-                    event.preventDefault();
-                    event.stopPropagation();
+                  messageGestureRef.current = null;
+                }}
+                onPointerCancel={() => {
+                  const gesture = messageGestureRef.current;
+                  if (gesture) {
+                    window.clearTimeout(gesture.timer);
+                    gesture.row.style.removeProperty('--chat-reply-swipe-offset');
+                    gesture.row.classList.remove('is-reply-ready');
                   }
-                }
-                messageGestureRef.current = null;
-              }}
-              onPointerCancel={() => {
-                const gesture = messageGestureRef.current;
-                if (gesture) {
-                  window.clearTimeout(gesture.timer);
-                  gesture.row.style.removeProperty('--chat-reply-swipe-offset');
-                  gesture.row.classList.remove('is-reply-ready');
-                }
-                messageGestureRef.current = null;
-              }}
-            >
-              {!selectable ? (
-                <span className="chat-swipe-reply-indicator" aria-hidden>
-                  <Reply />
-                </span>
-              ) : null}
-              {selectable ? (
-                <span className="chat-message-checkbox" aria-hidden>
-                  {selected ? <Check /> : null}
-                </span>
-              ) : null}
-              <div className="telegram-message-stack">
-                {group.length > 1 && ['audio', 'voice'].includes(message.message_type) ? (
-                  <ConversationAudioPlaylist conversationId={chat.id} messages={group} />
-                ) : group.length > 1 ||
-                  (message.has_media &&
-                    ['photo', 'animation', 'video'].includes(message.message_type)) ? (
-                  <ConversationMediaCarousel conversationId={chat.id} messages={group} />
-                ) : (
-                  <ConversationMessageContent
-                    conversationId={chat.id}
-                    message={message}
-                    editingRequested={editMessageId === message.id}
-                    onEditingHandled={() => setEditMessageId(null)}
-                  />
-                )}
+                  messageGestureRef.current = null;
+                }}
+              >
+                {!selectable ? (
+                  <span className="chat-swipe-reply-indicator" aria-hidden>
+                    <Reply />
+                  </span>
+                ) : null}
+                {selectable ? (
+                  <span className="chat-message-checkbox" aria-hidden>
+                    {selected ? <Check /> : null}
+                  </span>
+                ) : null}
+                <div className="telegram-message-stack">
+                  {group.length > 1 && ['audio', 'voice'].includes(message.message_type) ? (
+                    <ConversationAudioPlaylist conversationId={chat.id} messages={group} />
+                  ) : group.length > 1 ||
+                    (message.has_media &&
+                      ['photo', 'animation', 'video'].includes(message.message_type)) ? (
+                    <ConversationMediaCarousel conversationId={chat.id} messages={group} />
+                  ) : (
+                    <ConversationMessageContent
+                      conversationId={chat.id}
+                      message={message}
+                      editingRequested={editMessageId === message.id}
+                      onEditingHandled={() => setEditMessageId(null)}
+                    />
+                  )}
+                </div>
               </div>
-            </div>
+            </Fragment>
           );
         })}
         {pendingText ? (

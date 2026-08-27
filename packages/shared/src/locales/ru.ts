@@ -1415,6 +1415,8 @@ export const ru = {
       unblockUser: 'Разблокировать',
       chatListHint: 'Выбери диалог, чтобы продолжить общение',
       chatOnline: 'в сети',
+      unreadDivider: 'Непрочитанные сообщения',
+      unreadCount: 'Непрочитанных сообщений',
       chatTyping: 'печатает…',
       chatRecordingVoice: 'записывает голос…',
       chatSendingMedia: 'отправляет медиа…',

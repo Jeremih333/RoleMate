@@ -6175,6 +6175,13 @@ const handlers: { [K in WorkerOperation]: Handler<K> } = {
       `SELECT c.id, c.status, c.contact_reveal_status, c.last_message_at,
               own_cp.is_muted, own_cp.archived_at, own_cp.pinned_order,
               (
+                SELECT COUNT(*) FROM conversation_messages unread
+                WHERE unread.conversation_id = c.id
+                  AND unread.sender_user_id <> ?1
+                  AND unread.deleted_at IS NULL
+                  AND unread.read_at IS NULL
+              ) AS unread_count,
+              (
                 SELECT latest.message_type FROM conversation_messages latest
                 WHERE latest.conversation_id = c.id AND latest.deleted_at IS NULL
                 ORDER BY latest.created_at DESC, latest.id DESC LIMIT 1
@@ -6955,6 +6962,17 @@ const handlers: { [K in WorkerOperation]: Handler<K> } = {
       .bind(input.conversationId, input.userId)
       .first();
     if (!participant) throw new ApiError(404, 'CONVERSATION_NOT_FOUND', 'Conversation not found');
+    // Opening the chat marks everything read, so the "unread from here" divider
+    // has to be resolved before that happens or it can never be shown.
+    const firstUnread = await env.DB.prepare(
+      `SELECT id FROM conversation_messages
+       WHERE conversation_id = ?1 AND sender_user_id <> ?2
+         AND deleted_at IS NULL AND read_at IS NULL
+       ORDER BY created_at, id
+       LIMIT 1`,
+    )
+      .bind(input.conversationId, input.userId)
+      .first<{ id: string }>();
     await env.DB.batch([
       env.DB.prepare(
         // Refreshed at most twice a minute instead of on every poll: presence is
@@ -7055,7 +7073,12 @@ const handlers: { [K in WorkerOperation]: Handler<K> } = {
     )
       .bind(input.conversationId, input.userId, input.limit)
       .all();
-    return rows.results.reverse();
+    // Keeping the array shape: the divider travels as a flag on the row it
+    // belongs to rather than changing the response into an object.
+    return rows.results.reverse().map((row) => ({
+      ...row,
+      is_first_unread: firstUnread && row.id === firstUnread.id ? 1 : 0,
+    }));
   },
   'conversations.messages.get': async (env, input) => {
     const message = await env.DB.prepare(

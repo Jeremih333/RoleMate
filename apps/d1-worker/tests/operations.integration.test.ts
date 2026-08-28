@@ -5542,6 +5542,8 @@ describe('D1 domain operations', () => {
         message: 'A sufficiently long test announcement.',
         segment: 'all',
         rateLimitPerSecond: 20,
+        buttonText: 'Open RoleMate',
+        buttonUrl: 'https://example.com/rolemate',
       },
       crypto.randomUUID(),
     )) as { id: string };
@@ -5603,9 +5605,13 @@ describe('D1 domain operations', () => {
     )) as {
       broadcastId: string;
       jobId: string;
+      buttonText: string | null;
+      buttonUrl: string | null;
       deliveries: Array<{ deliveryId: string }>;
     };
     expect(claimed.deliveries).toHaveLength(2);
+    expect(claimed.buttonText).toBe('Open RoleMate');
+    expect(claimed.buttonUrl).toBe('https://example.com/rolemate');
     await executeOperation(
       env,
       'broadcasts.recordBatch',

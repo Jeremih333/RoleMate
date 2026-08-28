@@ -21,7 +21,7 @@ import {
   UserPlus,
   Users,
 } from 'lucide-react';
-import { Redirect, useSearch } from 'wouter';
+import { Redirect, useLocation, useSearch } from 'wouter';
 import {
   api,
   type AdminConfig,
@@ -31,7 +31,14 @@ import {
   type PostingRequirementInput,
   type Product,
 } from '../api.js';
-import { Button, Card, SectionTitle, Skeleton } from '../components/ui.js';
+import {
+  Button,
+  Card,
+  SectionTitle,
+  Skeleton,
+  useConfirmPrompt,
+  useTextPrompt,
+} from '../components/ui.js';
 import { ProfileAvatar } from '../components/profile-avatar.js';
 import { ProfileMarkdown } from '../components/markdown.js';
 import { VerificationBadge } from '../components/verification-badge.js';
@@ -57,15 +64,47 @@ type AdminSection =
   | 'moderators'
   | 'groupCampaigns';
 
+const adminSections: readonly AdminSection[] = [
+  'dashboard',
+  'users',
+  'publicProfiles',
+  'questionnaires',
+  'posts',
+  'reports',
+  'payments',
+  'referrals',
+  'broadcasts',
+  'flags',
+  'system',
+  'audit',
+  'promotions',
+  'postingRequirements',
+  'moderators',
+  'groupCampaigns',
+];
+
+function isAdminSection(value: string | null): value is AdminSection {
+  return value !== null && (adminSections as readonly string[]).includes(value);
+}
+
 export function AdminPage() {
   const isAdmin = useUserStore((state) => state.user?.isAdmin);
   const isOwner = useUserStore((state) => state.user?.isOwner);
   const search = useSearch();
   const query = new URLSearchParams(search);
   const linkedReportId = query.get('report');
-  const [section, setSection] = useState<AdminSection>(
-    query.get('section') === 'reports' ? 'reports' : isOwner ? 'dashboard' : 'users',
-  );
+  const [, navigate] = useLocation();
+  const requestedSection = query.get('section');
+  const section: AdminSection = isAdminSection(requestedSection)
+    ? requestedSection
+    : isOwner
+      ? 'dashboard'
+      : 'users';
+  // The open section lives in the URL so the Telegram back button and browser
+  // history return to the previous section instead of leaving the panel.
+  const setSection = (next: AdminSection) => {
+    navigate(`/admin?section=${next}`);
+  };
   if (!isAdmin) return <Redirect to="/" replace />;
   const ownerSections = [
     ['dashboard', ru.miniApp.admin.sections[0], Activity],
@@ -108,10 +147,10 @@ export function AdminPage() {
             data-testid={`admin-section-${key}`}
             variant={section === key ? 'primary' : 'secondary'}
             onClick={() => setSection(key)}
-            aria-label={label}
             title={label}
           >
             <Icon aria-hidden />
+            <span>{label}</span>
           </Button>
         ))}
       </div>
@@ -209,6 +248,7 @@ function Dashboard() {
 
 function UsersQueue({ isOwner }: { isOwner: boolean }) {
   const queryClient = useQueryClient();
+  const { ask, dialog } = useTextPrompt();
   const [search, setSearch] = useState('');
   const [feedbackUserId, setFeedbackUserId] = useState<string | null>(null);
   const users = useQuery({
@@ -223,7 +263,11 @@ function UsersQueue({ isOwner }: { isOwner: boolean }) {
       reason: string;
       bannedUntil?: string;
     }) => api.adminModerateUser(input.userId, input),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['admin-users'] }),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ['admin-users'] });
+      // Dashboard counters track these queues, so they go stale after every action.
+      void queryClient.invalidateQueries({ queryKey: ['admin-dashboard'] });
+    },
   });
   const premium = useMutation({
     mutationFn: (input: {
@@ -233,12 +277,20 @@ function UsersQueue({ isOwner }: { isOwner: boolean }) {
       idempotencyKey: string;
     }) =>
       api.adminGrantPremium(input.userId, input.durationDays, input.reason, input.idempotencyKey),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['admin-users'] }),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ['admin-users'] });
+      // Dashboard counters track these queues, so they go stale after every action.
+      void queryClient.invalidateQueries({ queryKey: ['admin-dashboard'] });
+    },
   });
   const revokePremium = useMutation({
     mutationFn: (userId: string) =>
       api.adminRevokePremium(userId, ru.miniApp.admin.ownerRevokeReason),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['admin-users'] }),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ['admin-users'] });
+      // Dashboard counters track these queues, so they go stale after every action.
+      void queryClient.invalidateQueries({ queryKey: ['admin-dashboard'] });
+    },
   });
   const beginUserAction = (userId: string) => {
     setFeedbackUserId(userId);
@@ -297,13 +349,13 @@ function UsersQueue({ isOwner }: { isOwner: boolean }) {
               ) : (
                 <Button
                   variant="secondary"
-                  onClick={() => {
-                    const reason = window.prompt(ru.miniApp.admin.banReasonPrompt);
-                    if (reason) {
+                  onClick={() =>
+                    ask(ru.miniApp.admin.banReasonPrompt, (reason) => {
+                      if (!reason) return;
                       beginUserAction(user.id);
                       moderate.mutate({ userId: user.id, action: 'permanent_ban', reason });
-                    }
-                  }}
+                    })
+                  }
                 >
                   {ru.miniApp.admin.ban}
                 </Button>
@@ -312,19 +364,23 @@ function UsersQueue({ isOwner }: { isOwner: boolean }) {
                 <>
                   <Button
                     variant="secondary"
-                    onClick={() => {
-                      const value = window.prompt(ru.miniApp.admin.premiumDaysPrompt, '7');
-                      const days = Number(value);
-                      if (Number.isInteger(days) && days > 0) {
-                        beginUserAction(user.id);
-                        premium.mutate({
-                          userId: user.id,
-                          durationDays: days,
-                          reason: ru.miniApp.admin.ownerGrantReason,
-                          idempotencyKey: crypto.randomUUID(),
-                        });
-                      }
-                    }}
+                    onClick={() =>
+                      ask(
+                        ru.miniApp.admin.premiumDaysPrompt,
+                        (value) => {
+                          const days = Number(value);
+                          if (!Number.isInteger(days) || days <= 0) return;
+                          beginUserAction(user.id);
+                          premium.mutate({
+                            userId: user.id,
+                            durationDays: days,
+                            reason: ru.miniApp.admin.ownerGrantReason,
+                            idempotencyKey: crypto.randomUUID(),
+                          });
+                        },
+                        '7',
+                      )
+                    }
                     loading={premium.isPending && premium.variables?.userId === user.id}
                     disabled={premium.isPending}
                   >
@@ -361,31 +417,34 @@ function UsersQueue({ isOwner }: { isOwner: boolean }) {
                 data-testid={`moderation-warn-${user.id}`}
                 loading={moderate.isPending}
                 disabled={moderate.isPending}
-                onClick={() => {
-                  const reason = window.prompt(ru.miniApp.admin.warningReasonPrompt);
-                  if (reason) {
+                onClick={() =>
+                  ask(ru.miniApp.admin.warningReasonPrompt, (reason) => {
+                    if (!reason) return;
                     beginUserAction(user.id);
                     moderate.mutate({ userId: user.id, action: 'warn', reason });
-                  }
-                }}
+                  })
+                }
               >
                 {ru.miniApp.admin.warn}
               </Button>
               {!user.is_banned ? (
                 <Button
                   variant="secondary"
-                  onClick={() => {
-                    const reason = window.prompt(ru.miniApp.admin.temporaryBanReasonPrompt);
-                    if (!reason) return;
-                    beginUserAction(user.id);
-                    const bannedUntil = new Date(Date.now() + 24 * 60 * 60 * 1_000).toISOString();
-                    moderate.mutate({
-                      userId: user.id,
-                      action: 'temporary_ban',
-                      reason,
-                      bannedUntil,
-                    });
-                  }}
+                  onClick={() =>
+                    ask(ru.miniApp.admin.temporaryBanReasonPrompt, (reason) => {
+                      if (!reason) return;
+                      beginUserAction(user.id);
+                      const bannedUntil = new Date(
+                        Date.now() + 24 * 60 * 60 * 1_000,
+                      ).toISOString();
+                      moderate.mutate({
+                        userId: user.id,
+                        action: 'temporary_ban',
+                        reason,
+                        bannedUntil,
+                      });
+                    })
+                  }
                 >
                   {ru.miniApp.admin.temporaryBan}
                 </Button>
@@ -400,12 +459,14 @@ function UsersQueue({ isOwner }: { isOwner: boolean }) {
           </Card>
         ))}
       </div>
+      {dialog}
     </div>
   );
 }
 
 function PublicProfilesQueue({ isOwner }: { isOwner: boolean }) {
   const queryClient = useQueryClient();
+  const { ask, dialog } = useTextPrompt();
   const [search, setSearch] = useState('');
   const [usernameEditorProfileId, setUsernameEditorProfileId] = useState<string | null>(null);
   const [usernameDraft, setUsernameDraft] = useState('');
@@ -416,7 +477,11 @@ function PublicProfilesQueue({ isOwner }: { isOwner: boolean }) {
   const moderate = useMutation({
     mutationFn: (input: { profileUserId: string; status: 'active' | 'blocked'; reason: string }) =>
       api.adminModeratePublicProfile(input.profileUserId, input.status, input.reason),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['admin-public-profiles'] }),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ['admin-public-profiles'] });
+      // Dashboard counters track these queues, so they go stale after every action.
+      void queryClient.invalidateQueries({ queryKey: ['admin-dashboard'] });
+    },
   });
   const replaceUsernames = useMutation({
     mutationFn: ({ userId, usernames }: { userId: string; usernames: string[] }) =>
@@ -490,16 +555,18 @@ function PublicProfilesQueue({ isOwner }: { isOwner: boolean }) {
               <Button
                 variant="danger"
                 loading={moderate.isPending}
-                onClick={() => {
-                  const reason = window.prompt(ru.miniApp.admin.blockPublicProfilePrompt)?.trim();
-                  if (reason && reason.length >= 3) {
-                    moderate.mutate({
-                      profileUserId: profile.id,
-                      status: 'blocked',
-                      reason,
-                    });
-                  }
-                }}
+                onClick={() =>
+                  ask(ru.miniApp.admin.blockPublicProfilePrompt, (raw) => {
+                    const reason = raw.trim();
+                    if (reason.length >= 3) {
+                      moderate.mutate({
+                        profileUserId: profile.id,
+                        status: 'blocked',
+                        reason,
+                      });
+                    }
+                  })
+                }
               >
                 {ru.miniApp.admin.blockPublicProfile}
               </Button>
@@ -573,12 +640,14 @@ function PublicProfilesQueue({ isOwner }: { isOwner: boolean }) {
         states={[moderate, replaceUsernames]}
         success={ru.miniApp.admin.actionCompleted}
       />
+      {dialog}
     </div>
   );
 }
 
 function PostsQueue() {
   const queryClient = useQueryClient();
+  const { ask, dialog } = useTextPrompt();
   const [search, setSearch] = useState('');
   const posts = useQuery({
     queryKey: ['admin-posts', search],
@@ -590,7 +659,11 @@ function PostsQueue() {
       status: 'active' | 'blocked' | 'limited' | 'shadow_banned';
       reason: string;
     }) => api.adminModeratePost(input.postId, input.status, input.reason),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['admin-posts'] }),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ['admin-posts'] });
+      // Dashboard counters track these queues, so they go stale after every action.
+      void queryClient.invalidateQueries({ queryKey: ['admin-dashboard'] });
+    },
   });
   if (posts.isLoading) return <Skeleton className="h-72" />;
   if (posts.isError) return <AdminRequestError error={posts.error} retry={() => posts.refetch()} />;
@@ -676,12 +749,14 @@ function PostsQueue() {
                 <Button
                   variant="danger"
                   loading={moderate.isPending}
-                  onClick={() => {
-                    const reason = window.prompt(ru.miniApp.admin.blockPostPrompt)?.trim();
-                    if (reason && reason.length >= 3) {
-                      moderate.mutate({ postId: post.id, status: 'blocked', reason });
-                    }
-                  }}
+                  onClick={() =>
+                    ask(ru.miniApp.admin.blockPostPrompt, (raw) => {
+                      const reason = raw.trim();
+                      if (reason.length >= 3) {
+                        moderate.mutate({ postId: post.id, status: 'blocked', reason });
+                      }
+                    })
+                  }
                 >
                   {ru.miniApp.admin.blockPost}
                 </Button>
@@ -705,12 +780,14 @@ function PostsQueue() {
         </Card>
       ))}
       <MutationFeedback states={[moderate]} success={ru.miniApp.admin.actionCompleted} />
+      {dialog}
     </div>
   );
 }
 
 function QuestionnairesQueue() {
   const queryClient = useQueryClient();
+  const { ask, dialog } = useTextPrompt();
   const [search, setSearch] = useState('');
   const profiles = useQuery({
     queryKey: ['admin-questionnaires', search],
@@ -722,7 +799,11 @@ function QuestionnairesQueue() {
       status: 'approved' | 'rejected' | 'paused' | 'archived';
       reason: string;
     }) => api.adminModerateQuestionnaire(input.profileId, input.status, input.reason),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['admin-questionnaires'] }),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ['admin-questionnaires'] });
+      // Dashboard counters track these queues, so they go stale after every action.
+      void queryClient.invalidateQueries({ queryKey: ['admin-dashboard'] });
+    },
   });
   if (profiles.isLoading) return <Skeleton className="h-72" />;
   if (profiles.isError)
@@ -783,10 +864,11 @@ function QuestionnairesQueue() {
               variant="secondary"
               loading={moderate.isPending}
               disabled={moderate.isPending}
-              onClick={() => {
-                const reason = window.prompt(ru.miniApp.admin.rejectionReasonPrompt);
-                if (reason) moderate.mutate({ profileId: profile.id, status: 'rejected', reason });
-              }}
+              onClick={() =>
+                ask(ru.miniApp.admin.rejectionReasonPrompt, (reason) => {
+                  if (reason) moderate.mutate({ profileId: profile.id, status: 'rejected', reason });
+                })
+              }
             >
               {ru.miniApp.admin.reject}
             </Button>
@@ -822,6 +904,7 @@ function QuestionnairesQueue() {
         </Card>
       ))}
       <MutationFeedback states={[moderate]} success={ru.miniApp.admin.actionCompleted} />
+      {dialog}
       <MediaQueue />
     </div>
   );
@@ -829,6 +912,7 @@ function QuestionnairesQueue() {
 
 function MediaQueue() {
   const queryClient = useQueryClient();
+  const { ask, dialog } = useTextPrompt();
   const media = useQuery({
     queryKey: ['admin-media'],
     queryFn: () => api.adminMedia('pending'),
@@ -836,7 +920,11 @@ function MediaQueue() {
   const moderate = useMutation({
     mutationFn: (input: { mediaId: string; status: 'approved' | 'rejected'; reason: string }) =>
       api.adminModerateMedia(input.mediaId, input.status, input.reason),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['admin-media'] }),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ['admin-media'] });
+      // Dashboard counters track these queues, so they go stale after every action.
+      void queryClient.invalidateQueries({ queryKey: ['admin-dashboard'] });
+    },
   });
   if (media.isLoading) return <Skeleton className="mt-6 h-72" />;
   if (media.isError) return <AdminRequestError error={media.error} retry={() => media.refetch()} />;
@@ -873,10 +961,11 @@ function MediaQueue() {
                   variant="secondary"
                   loading={moderate.isPending}
                   disabled={moderate.isPending}
-                  onClick={() => {
-                    const reason = window.prompt(ru.miniApp.admin.mediaRejectedReasonPrompt);
-                    if (reason) moderate.mutate({ mediaId: item.id, status: 'rejected', reason });
-                  }}
+                  onClick={() =>
+                    ask(ru.miniApp.admin.mediaRejectedReasonPrompt, (reason) => {
+                      if (reason) moderate.mutate({ mediaId: item.id, status: 'rejected', reason });
+                    })
+                  }
                 >
                   {ru.miniApp.admin.reject}
                 </Button>
@@ -886,6 +975,7 @@ function MediaQueue() {
         ))}
       </div>
       <MutationFeedback states={[moderate]} success={ru.miniApp.admin.actionCompleted} />
+      {dialog}
     </section>
   );
 }
@@ -966,6 +1056,7 @@ function ModerationMediaPreview({
 
 function ReportsQueue({ initialReportId }: { initialReportId: string | null }) {
   const queryClient = useQueryClient();
+  const { ask, dialog } = useTextPrompt();
   const viewerTime = useViewerTime();
   const [expandedReportId, setExpandedReportId] = useState<string | null>(initialReportId);
   const reports = useQuery({
@@ -978,7 +1069,11 @@ function ReportsQueue({ initialReportId }: { initialReportId: string | null }) {
       status: 'reviewing' | 'resolved' | 'dismissed';
       resolution: string;
     }) => api.adminResolveReport(input.reportId, input.status, input.resolution),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['admin-reports'] }),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ['admin-reports'] });
+      // Dashboard counters track these queues, so they go stale after every action.
+      void queryClient.invalidateQueries({ queryKey: ['admin-dashboard'] });
+    },
   });
   const disableProfile = useMutation({
     mutationFn: (userId: string) =>
@@ -1120,15 +1215,12 @@ function ReportsQueue({ initialReportId }: { initialReportId: string | null }) {
             ) : null}
             <Button
               onClick={() =>
-                resolve.mutate({
-                  reportId: report.id,
-                  status: 'resolved',
-                  resolution:
-                    window.prompt(
-                      ru.miniApp.admin.resolutionPrompt,
-                      ru.miniApp.admin.violationConfirmed,
-                    ) ?? '',
-                })
+                ask(
+                  ru.miniApp.admin.resolutionPrompt,
+                  (resolution) =>
+                    resolve.mutate({ reportId: report.id, status: 'resolved', resolution }),
+                  ru.miniApp.admin.violationConfirmed,
+                )
               }
             >
               {ru.miniApp.admin.close}
@@ -1159,6 +1251,7 @@ function ReportsQueue({ initialReportId }: { initialReportId: string | null }) {
         states={[resolve, disableProfile, deleteComment]}
         success={ru.miniApp.admin.actionCompleted}
       />
+      {dialog}
     </div>
   );
 }
@@ -1199,6 +1292,7 @@ function parseReportContext(value: string): Array<{
 
 function Payments() {
   const queryClient = useQueryClient();
+  const { confirm, dialog } = useConfirmPrompt();
   const viewerTime = useViewerTime();
   const [status, setStatus] = useState<
     'all' | 'pending' | 'precheckout_approved' | 'paid' | 'refunded' | 'failed' | 'expired'
@@ -1288,11 +1382,11 @@ function Payments() {
                 className="mt-3"
                 variant="secondary"
                 disabled={refund.isPending}
-                onClick={() => {
-                  if (window.confirm(ru.miniApp.admin.refundConfirmation(payment.amount))) {
-                    refund.mutate(payment.id);
-                  }
-                }}
+                onClick={() =>
+                  confirm(ru.miniApp.admin.refundConfirmation(payment.amount), () =>
+                    refund.mutate(payment.id),
+                  )
+                }
               >
                 {ru.miniApp.admin.refund}
               </Button>
@@ -1302,6 +1396,7 @@ function Payments() {
         {!payments.data?.length ? <Card className="p-4">{ru.miniApp.admin.noData}</Card> : null}
         <MutationFeedback states={[refund]} success={ru.miniApp.admin.refundCompleted} />
       </section>
+      {dialog}
     </div>
   );
 }
@@ -1380,6 +1475,7 @@ function MutationFeedback({
 
 function Referrals() {
   const queryClient = useQueryClient();
+  const { ask, dialog } = useTextPrompt();
   const referrals = useQuery({
     queryKey: ['admin-referrals'],
     queryFn: () => api.adminReferrals(),
@@ -1453,10 +1549,11 @@ function Referrals() {
                 </Button>
                 <Button
                   variant="secondary"
-                  onClick={() => {
-                    const reason = window.prompt(ru.miniApp.admin.referralRejectPrompt);
-                    if (reason) review.mutate({ id: referral.id, action: 'reject', reason });
-                  }}
+                  onClick={() =>
+                    ask(ru.miniApp.admin.referralRejectPrompt, (reason) => {
+                      if (reason) review.mutate({ id: referral.id, action: 'reject', reason });
+                    })
+                  }
                 >
                   {ru.miniApp.admin.rejectReferral}
                 </Button>
@@ -1465,10 +1562,11 @@ function Referrals() {
             {referral.status === 'qualified' ? (
               <Button
                 variant="secondary"
-                onClick={() => {
-                  const reason = window.prompt(ru.miniApp.admin.referralRevokePrompt);
-                  if (reason) review.mutate({ id: referral.id, action: 'revoke', reason });
-                }}
+                onClick={() =>
+                  ask(ru.miniApp.admin.referralRevokePrompt, (reason) => {
+                    if (reason) review.mutate({ id: referral.id, action: 'revoke', reason });
+                  })
+                }
               >
                 {ru.miniApp.admin.revokeReferral}
               </Button>
@@ -1478,16 +1576,20 @@ function Referrals() {
       ))}
       {!referrals.data?.length ? <Card className="p-4">{ru.miniApp.admin.noData}</Card> : null}
       <MutationFeedback states={[review]} success={ru.miniApp.admin.actionCompleted} />
+      {dialog}
     </div>
   );
 }
 
 function Broadcasts() {
   const queryClient = useQueryClient();
+  const { ask, dialog } = useTextPrompt();
   const [title, setTitle] = useState('');
   const [message, setMessage] = useState('');
   const [segment, setSegment] = useState<'all' | 'active' | 'premium' | 'nonpremium'>('all');
   const [rate, setRate] = useState(20);
+  const [buttonText, setButtonText] = useState('');
+  const [buttonUrl, setButtonUrl] = useState('');
   const [confirmations, setConfirmations] = useState<Record<string, string>>({});
   const broadcasts = useQuery({
     queryKey: ['admin-broadcasts'],
@@ -1499,6 +1601,8 @@ function Broadcasts() {
     onSuccess: () => {
       setTitle('');
       setMessage('');
+      setButtonText('');
+      setButtonUrl('');
       void refresh();
     },
   });
@@ -1556,9 +1660,33 @@ function Broadcasts() {
               onChange={(event) => setRate(Number(event.target.value))}
             />
           </label>
+          <input
+            className="input-field"
+            value={buttonText}
+            onChange={(event) => setButtonText(event.target.value)}
+            placeholder={ru.miniApp.admin.broadcastButtonText}
+          />
+          <input
+            className="input-field"
+            value={buttonUrl}
+            inputMode="url"
+            onChange={(event) => setButtonUrl(event.target.value)}
+            placeholder={ru.miniApp.admin.broadcastButtonUrl}
+          />
+          <p className="text-xs text-muted">{ru.miniApp.admin.broadcastButtonHint}</p>
           <Button
             disabled={title.length < 3 || message.length < 3 || create.isPending}
-            onClick={() => create.mutate({ title, message, segment, rateLimitPerSecond: rate })}
+            onClick={() =>
+              create.mutate({
+                title,
+                message,
+                segment,
+                rateLimitPerSecond: rate,
+                ...(buttonText.trim() && buttonUrl.trim()
+                  ? { buttonText: buttonText.trim(), buttonUrl: buttonUrl.trim() }
+                  : {}),
+              })
+            }
           >
             <Send className="h-4 w-4" /> {ru.miniApp.admin.createDraft}
           </Button>
@@ -1586,12 +1714,14 @@ function Broadcasts() {
             ) : null}
             {confirmations[broadcast.id] ? (
               <Button
-                onClick={() => {
-                  const phrase = window.prompt(
+                onClick={() =>
+                  ask(
                     ru.miniApp.admin.confirmationPrompt(confirmations[broadcast.id]!),
-                  );
-                  if (phrase) control.mutate({ id: broadcast.id, action: 'queue', phrase });
-                }}
+                    (phrase) => {
+                      if (phrase) control.mutate({ id: broadcast.id, action: 'queue', phrase });
+                    },
+                  )
+                }
               >
                 {ru.miniApp.admin.queueBroadcast}
               </Button>
@@ -1615,10 +1745,14 @@ function Broadcasts() {
           </div>
         </Card>
       ))}
+      {!broadcasts.data?.length ? (
+        <Card className="p-4 text-sm text-muted">{ru.miniApp.admin.noData}</Card>
+      ) : null}
       <MutationFeedback
         states={[create, dryRun, control]}
         success={ru.miniApp.admin.actionCompleted}
       />
+      {dialog}
     </div>
   );
 }
@@ -1867,6 +2001,7 @@ function ConfigEditor({ item }: { item: AdminConfig }) {
 
 function Promotions() {
   const queryClient = useQueryClient();
+  const { confirm, dialog } = useConfirmPrompt();
   const promotions = useQuery({ queryKey: ['admin-promotions'], queryFn: api.adminPromotions });
   const products = useQuery({ queryKey: ['admin-products'], queryFn: api.adminProducts });
   const emptyForm: AdminPromotionInput = {
@@ -2107,11 +2242,9 @@ function Promotions() {
               <Button
                 variant="secondary"
                 data-testid={`promotion-delete-${promotion.id}`}
-                onClick={() => {
-                  if (window.confirm(ru.miniApp.admin.deletePromoConfirm)) {
-                    remove.mutate(promotion.id);
-                  }
-                }}
+                onClick={() =>
+                  confirm(ru.miniApp.admin.deletePromoConfirm, () => remove.mutate(promotion.id))
+                }
                 loading={remove.isPending}
               >
                 {ru.miniApp.admin.deletePromo}
@@ -2121,12 +2254,14 @@ function Promotions() {
         </Card>
       ))}
       <MutationFeedback states={[remove]} success={ru.miniApp.admin.promoDeleted} />
+      {dialog}
     </div>
   );
 }
 
 function Moderators() {
   const queryClient = useQueryClient();
+  const { confirm, dialog } = useConfirmPrompt();
   const [telegramId, setTelegramId] = useState('');
   const moderators = useQuery({
     queryKey: ['admin-moderators'],
@@ -2145,6 +2280,16 @@ function Moderators() {
   });
   const parsedTelegramId = Number(telegramId);
   const canAssign = Number.isSafeInteger(parsedTelegramId) && parsedTelegramId > 0;
+  // Rights are handed out by raw Telegram id, so show whose account that is
+  // before the button is pressed.
+  const candidates = useQuery({
+    queryKey: ['admin-moderator-candidate', telegramId],
+    queryFn: () => api.adminUsers(telegramId),
+    enabled: canAssign,
+  });
+  const candidate = candidates.data?.find(
+    (user) => user.telegram_user_id === parsedTelegramId,
+  );
   if (moderators.isLoading) return <Skeleton className="h-72" />;
   if (moderators.isError) {
     return <AdminRequestError error={moderators.error} retry={() => moderators.refetch()} />;
@@ -2162,6 +2307,21 @@ function Moderators() {
           placeholder={ru.miniApp.admin.moderatorTelegramId}
           aria-label={ru.miniApp.admin.moderatorTelegramId}
         />
+        {canAssign && !candidates.isLoading ? (
+          <div className="rounded-2xl bg-white/5 p-3 text-sm">
+            {candidate ? (
+              <>
+                <p className="text-muted">{ru.miniApp.admin.moderatorPreviewTitle}</p>
+                <strong>{candidate.telegram_first_name}</strong>{' '}
+                <span className="text-muted">
+                  {candidate.telegram_username ? `@${candidate.telegram_username}` : ''}
+                </span>
+              </>
+            ) : (
+              <p className="text-muted">{ru.miniApp.admin.moderatorPreviewMissing}</p>
+            )}
+          </div>
+        ) : null}
         <Button
           data-testid="moderator-assign"
           disabled={!canAssign}
@@ -2190,15 +2350,12 @@ function Moderators() {
                 data-testid={`moderator-remove-${moderator.telegram_user_id}`}
                 variant="secondary"
                 loading={remove.isPending && remove.variables === moderator.telegram_user_id}
-                onClick={() => {
-                  if (
-                    window.confirm(
-                      ru.miniApp.admin.removeModeratorConfirm(moderator.telegram_user_id),
-                    )
-                  ) {
-                    remove.mutate(moderator.telegram_user_id);
-                  }
-                }}
+                onClick={() =>
+                  confirm(
+                    ru.miniApp.admin.removeModeratorConfirm(moderator.telegram_user_id),
+                    () => remove.mutate(moderator.telegram_user_id),
+                  )
+                }
               >
                 {ru.miniApp.admin.removeModerator}
               </Button>
@@ -2209,6 +2366,7 @@ function Moderators() {
         <Card className="p-4 text-sm text-muted">{ru.miniApp.admin.noModerators}</Card>
       )}
       <MutationFeedback states={[remove]} success={ru.miniApp.admin.moderatorRemoved} />
+      {dialog}
     </div>
   );
 }
@@ -2219,14 +2377,15 @@ function PostingRequirements() {
     queryKey: ['admin-posting-requirements'],
     queryFn: api.adminPostingRequirements,
   });
-  const [form, setForm] = useState<PostingRequirementInput>({
+  const emptyRequirementForm: PostingRequirementInput = {
     type: 'channel',
     title: '',
     targetChatId: '',
     username: '',
     actionUrl: '',
     createInvite: false,
-  });
+  };
+  const [form, setForm] = useState<PostingRequirementInput>(emptyRequirementForm);
   const [integration, setIntegration] = useState<{
     secret?: string;
     callback?: string;
@@ -2238,6 +2397,7 @@ function PostingRequirements() {
         ...(result.integrationSecret ? { secret: result.integrationSecret } : {}),
         ...(result.callbackUrl ? { callback: result.callbackUrl } : {}),
       });
+      setForm(emptyRequirementForm);
       void queryClient.invalidateQueries({ queryKey: ['admin-posting-requirements'] });
     },
   });
@@ -2356,6 +2516,9 @@ function PostingRequirements() {
           </div>
         </Card>
       ))}
+      {!requirements.data?.length ? (
+        <Card className="p-4 text-sm text-muted">{ru.miniApp.admin.noData}</Card>
+      ) : null}
     </div>
   );
 }
@@ -2382,6 +2545,9 @@ function AuditLog() {
           </p>
         </Card>
       ))}
+      {!audit.data?.length ? (
+        <Card className="p-4 text-sm text-muted">{ru.miniApp.admin.noData}</Card>
+      ) : null}
     </div>
   );
 }

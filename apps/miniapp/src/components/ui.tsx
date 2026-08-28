@@ -198,6 +198,41 @@ export function InfoDialog({
 }
 
 /**
+ * A themed replacement for window.confirm, built on ConfirmDialog. Native
+ * confirms look foreign inside a Telegram WebApp and are suppressed by some
+ * mobile clients, which silently turned destructive actions into no-ops.
+ */
+export function useConfirmPrompt(): {
+  confirm: (description: string, onConfirm: () => void) => void;
+  dialog: ReactNode;
+} {
+  const [request, setRequest] = useState<{
+    description: string;
+    onConfirm: () => void;
+  } | null>(null);
+
+  const dialog = (
+    <ConfirmDialog
+      open={request !== null}
+      title={ru.miniApp.admin.confirmTitle}
+      description={request?.description ?? ''}
+      confirmLabel={ru.miniApp.admin.promptConfirm}
+      cancelLabel={ru.miniApp.admin.promptCancel}
+      onConfirm={() => {
+        request?.onConfirm();
+        setRequest(null);
+      }}
+      onCancel={() => setRequest(null)}
+    />
+  );
+
+  return {
+    confirm: (description, onConfirm) => setRequest({ description, onConfirm }),
+    dialog,
+  };
+}
+
+/**
  * A themed replacement for window.prompt. A native prompt inside a Telegram
  * WebApp is unstyled, unreliable on mobile clients, and the moderation panel
  * used it fifteen times over — including before destructive actions.
@@ -206,26 +241,27 @@ export function InfoDialog({
  * moderator backs out, plus the element to render once in the component.
  */
 export function useTextPrompt(): {
-  ask: (title: string, initialValue?: string) => Promise<string | null>;
+  ask: (title: string, onSubmit: (value: string) => void, initialValue?: string) => void;
   dialog: ReactNode;
 } {
   const [request, setRequest] = useState<{
     title: string;
-    resolve: (value: string | null) => void;
+    onSubmit: (value: string) => void;
   } | null>(null);
   const [value, setValue] = useState('');
 
   const close = (result: string | null) => {
-    request?.resolve(result);
+    if (result !== null) request?.onSubmit(result);
     setRequest(null);
     setValue('');
   };
 
-  const ask = (title: string, initialValue = '') =>
-    new Promise<string | null>((resolve) => {
-      setValue(initialValue);
-      setRequest({ title, resolve });
-    });
+  // A callback rather than a promise, so click handlers stay synchronous and do
+  // not hand a floating promise to an event attribute.
+  const ask = (title: string, onSubmit: (value: string) => void, initialValue = '') => {
+    setValue(initialValue);
+    setRequest({ title, onSubmit });
+  };
 
   const dialog = request ? (
     <div

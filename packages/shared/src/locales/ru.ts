@@ -82,7 +82,7 @@ export const ru = {
     questionnaireMediaPending: '✅ Медиафайл добавлен и уже опубликован в выбранной анкете.',
     profilePhotoTooLarge: '⚠️ Файл слишком большой. Для профиля можно отправить файл до 50 МБ.',
     profileMusicTooLarge:
-      '⚠️ Музыка должна быть не больше 20 МБ. Сжать трек и отправь его ещё раз — тогда он будет корректно проигрываться в MiniApp.',
+      '⚠️ Трек больше 20 МБ. Сожми его и отправь ещё раз.',
     profileMusicOnly:
       '🎵 В этом режиме отправь музыкальный аудиофайл. Для фото, GIF или видео выбери «Загрузить медиа».',
     profileVisualOnly:
@@ -170,7 +170,7 @@ export const ru = {
       consentBody:
         'Команды участников в группе скрыты. После выдачи прав администратора презентации RoleMate включены автоматически и отправляются по настроенному владельцем расписанию. Администратор чата может отключить их в любой момент кнопкой ниже.',
       publicOnly:
-        'Автопрезентации доступны только публичным супергруппам с username и правами администратора у бота.',
+        'Автопрезентации доступны только публичным супергруппам. Чтобы включить их: сделай группу публичной, задай username в настройках чата и снова выдай боту права администратора — после этого презентации включатся сами.',
       enable: '✅ Включить презентации',
       decline: 'Не включать',
       disable: '⏸ Отключить презентации',
@@ -217,7 +217,7 @@ export const ru = {
     premiumGiftInvoiceDescription: (description: string) =>
       `RoleMate Premium для собеседника. ${description}`,
     moderationWarning: (reason: string) =>
-      `⚠️ Предупреждение от модерации RoleMate\n\n${reason}\n\nПожалуйста, соблюдай правила сообщества.`,
+      `⚠️ Предупреждение от модерации RoleMate\n\n${reason}\n\nЧто делать дальше: удали или исправь то, из-за чего пришло предупреждение. Повторные нарушения ведут к временной, а затем к постоянной блокировке. Если считаешь предупреждение ошибкой, напиши в поддержку через раздел «Помощь» в приложении.`,
     selectChat: '🕊 Выбери чат. Следующие сообщения будут отправлены в него анонимно:',
     premiumSelect: `⭐ Выбери тариф Premium.\n\n${FULL_FOOTER}`,
     referral: (link: string, rewardDays: number) =>
@@ -294,17 +294,17 @@ export const ru = {
       '✍️ Отправь одним сообщением текст, фото или документ для нового поста. Если первая строка отделена переносом, она автоматически станет заголовком, а остальные строки — текстом поста. Видео, GIF, аудио и любые разрешённые Telegram-ссылки доступны только с Premium.',
     postDraftReady: '✨ Пост готов. Проверь его и нажми «Опубликовать».',
     postSingleMediaOnly: 'Выберите только один файл для поста, пост отклонен',
-    mentionNotification: (place: string) => `Вас упомянули в ${place}`,
+    mentionNotification: (place: string) => `Тебя упомянули в ${place}`,
     mentionPlaces: {
       chat: 'личном чате',
       questionnaire: 'анкете',
       post: 'посте',
       comment: 'комментарии',
     },
-    commentNotification: 'Под вашим постом оставили новый комментарий',
-    followerPostNotification: 'Пользователь, на которого вы подписаны, опубликовал новый пост',
+    commentNotification: 'Под твоим постом оставили новый комментарий',
+    followerPostNotification: 'Пользователь, на которого ты подписан, опубликовал новый пост',
     followerQuestionnaireNotification:
-      'Пользователь, на которого вы подписаны, опубликовал новую анкету',
+      'Пользователь, на которого ты подписан, опубликовал новую анкету',
     openNotification: 'Открыть',
     reportReceived: '🚩 Получена жалоба',
     postMediaEditPrompt:
@@ -389,8 +389,7 @@ export const ru = {
         .filter(Boolean)
         .join('\n'),
     postUnsupportedMedia: 'Для поста отправь текст, фото, документ, видео, GIF или аудио.',
-    postMediaTooLarge:
-      '⚠️ Медиафайл должен быть не больше 20 МБ, иначе Telegram не сможет передать его в MiniApp. Сожми файл и отправь ещё раз.',
+    postMediaTooLarge: '⚠️ Файл больше 20 МБ. Сожми его и отправь ещё раз.',
     linksPremiumOnly: '⭐ Ссылки доступны только с RoleMate Premium.',
     linkUnsupported:
       '🔒 Разрешены только @username и ссылки https://t.me/... или https://telegram.me/... на профиль пользователя либо канал.',
@@ -522,8 +521,7 @@ export const ru = {
     promoCodeExists: 'Промокод с таким кодом уже существует.',
     giftProductNotFound: 'Тариф для подарка не найден.',
     mediaUnavailable: 'Медиафайл временно недоступен. Попробуйте загрузить его ещё раз.',
-    mediaExceedsTelegramDownloadLimit:
-      'Этот файл больше 20 МБ, поэтому Telegram не передаёт его MiniApp. Загрузите сжатую версию до 20 МБ.',
+    mediaExceedsTelegramDownloadLimit: 'Этот файл больше 20 МБ. Загрузите сжатую версию.',
     shortDescription: 'Анонимный поиск со-ролевиков',
     maintenance:
       '🛠 RoleMate временно находится на обслуживании. Основные функции скоро снова будут доступны.',
@@ -1684,6 +1682,7 @@ export const ru = {
     admin: {
       promptConfirm: 'Подтвердить',
       promptCancel: 'Отмена',
+      confirmTitle: 'Подтвердите действие',
       eyebrow: 'доступ владельца',
       title: 'Управление RoleMate',
       protectedTitle: 'Защищённая панель',
@@ -1907,6 +1906,8 @@ export const ru = {
       moderatorTelegramId: 'Telegram ID нового модератора',
       assignModerator: 'Назначить модератора',
       removeModerator: 'Снять модератора',
+      moderatorPreviewTitle: 'Кому выдаём права',
+      moderatorPreviewMissing: 'Пользователь с таким Telegram ID не найден.',
       moderatorAssigned: 'Модератор назначен.',
       moderatorRemoved: 'Полномочия модератора отозваны.',
       noModerators: 'Назначенных модераторов пока нет.',
@@ -1933,6 +1934,10 @@ export const ru = {
         nonpremium: 'Без Premium',
       },
       broadcastRate: 'Сообщений в секунду',
+      broadcastButtonText: 'Текст кнопки (необязательно)',
+      broadcastButtonUrl: 'Ссылка кнопки (https://…)',
+      broadcastButtonHint:
+        'Кнопка появится под сообщением, если заполнены и текст, и ссылка.',
       createDraft: 'Создать черновик',
       preview: 'Предпросмотр',
       dryRun: 'Dry run',

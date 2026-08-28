@@ -10818,7 +10818,7 @@ const handlers: { [K in WorkerOperation]: Handler<K> } = {
   },
   'broadcasts.claimBatch': async (env, input) => {
     const broadcast = await env.DB.prepare(
-      `SELECT b.id, b.message, b.rate_limit_per_second,
+      `SELECT b.id, b.message, b.rate_limit_per_second, b.button_text, b.button_url,
               (SELECT j.id FROM background_jobs j
                WHERE j.type = 'broadcast.dispatch'
                  AND json_extract(j.payload, '$.broadcastId') = b.id
@@ -10831,6 +10831,8 @@ const handlers: { [K in WorkerOperation]: Handler<K> } = {
       id: string;
       message: string;
       rate_limit_per_second: number;
+      button_text: string | null;
+      button_url: string | null;
       job_id: string | null;
     }>();
     if (!broadcast?.job_id) return null;
@@ -10868,6 +10870,8 @@ const handlers: { [K in WorkerOperation]: Handler<K> } = {
       broadcastId: broadcast.id,
       jobId: broadcast.job_id,
       message: broadcast.message,
+      buttonText: broadcast.button_text,
+      buttonUrl: broadcast.button_url,
       deliveries: deliveries.map((delivery) => ({
         deliveryId: delivery.id,
         telegramUserId: delivery.telegram_user_id,
@@ -11720,8 +11724,9 @@ const handlers: { [K in WorkerOperation]: Handler<K> } = {
     await env.DB.batch([
       env.DB.prepare(
         `INSERT INTO broadcasts
-           (id, created_by_user_id, title, message, segment, rate_limit_per_second)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6)`,
+           (id, created_by_user_id, title, message, segment, rate_limit_per_second,
+            button_text, button_url)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)`,
       ).bind(
         id,
         input.adminUserId,
@@ -11729,6 +11734,9 @@ const handlers: { [K in WorkerOperation]: Handler<K> } = {
         input.message,
         input.segment,
         input.rateLimitPerSecond,
+        // A button only makes sense when it has both a label and a destination.
+        input.buttonText && input.buttonUrl ? input.buttonText : null,
+        input.buttonText && input.buttonUrl ? input.buttonUrl : null,
       ),
       env.DB.prepare(
         `INSERT INTO admin_audit_logs

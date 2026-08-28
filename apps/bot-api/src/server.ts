@@ -3814,6 +3814,8 @@ export async function buildServer(
         message: z.string().min(3).max(4_000),
         segment: z.enum(['all', 'active', 'premium', 'nonpremium']),
         rateLimitPerSecond: z.number().int().min(1).max(30),
+        buttonText: z.string().min(1).max(64).optional(),
+        buttonUrl: z.string().url().max(512).optional(),
       })
       .parse(request.body);
     return dataApi.execute('admin.broadcasts.create', {

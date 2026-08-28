@@ -11,14 +11,21 @@ export async function dispatchBroadcastBatch(
       broadcastId: string;
       jobId: string;
       message: string;
+      buttonText: string | null;
+      buttonUrl: string | null;
       deliveries: Array<{ deliveryId: string; telegramUserId: number }>;
     } | null>('broadcasts.claimBatch', { limit: 30 });
     if (!batch) return false;
+    const replyMarkup =
+      batch.buttonText && batch.buttonUrl
+        ? { inline_keyboard: [[{ text: batch.buttonText, url: batch.buttonUrl }]] }
+        : undefined;
     const results = [];
     for (const delivery of batch.deliveries) {
       try {
         await bot.api.sendMessage(delivery.telegramUserId, batch.message, {
           protect_content: true,
+          ...(replyMarkup ? { reply_markup: replyMarkup } : {}),
         });
         results.push({ deliveryId: delivery.deliveryId, status: 'sent' as const });
       } catch (error) {

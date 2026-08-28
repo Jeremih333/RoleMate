@@ -922,6 +922,8 @@ export const api = {
     message: string;
     segment: 'all' | 'active' | 'premium' | 'nonpremium';
     rateLimitPerSecond: number;
+    buttonText?: string;
+    buttonUrl?: string;
   }) =>
     request<{ id: string; status: string }>('/admin/broadcasts', {
       method: 'POST',

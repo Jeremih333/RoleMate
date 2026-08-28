@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState, type CSSProperties } from 'react';
+import { createPortal } from 'react-dom';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import type { QueryClient } from '@tanstack/react-query';
 import {
@@ -462,9 +463,13 @@ export function PublicProfilePage() {
         >
           <Pencil className="h-4 w-4" /> {ru.miniApp.social.editProfile}
         </Button>
-        {editing ? (
-          <div id="public-profile-editor" ref={editorRef} className="public-profile-editor">
-            <header className="public-profile-editor-header">
+        {/* Rendered into the body: the page content sits inside an animated
+            container, which forms its own stacking context, so a z-index here
+            could never lift the editor above the bottom navigation. */}
+        {editing
+          ? createPortal(
+              <div id="public-profile-editor" ref={editorRef} className="public-profile-editor">
+                <header className="public-profile-editor-header">
               <strong>{ru.miniApp.social.editProfile}</strong>
               <button
                 type="button"
@@ -775,8 +780,10 @@ export function PublicProfilePage() {
               ) : null}
               {save.isError ? <div className="error-box mt-3">{save.error.message}</div> : null}
             </div>
-          </div>
-        ) : null}
+              </div>,
+              document.body,
+            )
+          : null}
         <ConfirmDialog
           open={confirmEditorClose}
           title={ru.miniApp.social.unsavedProfileTitle}

@@ -1860,7 +1860,8 @@ select:focus-visible {
 .public-profile-editor-content {
   width: min(100%, 680px);
   margin: 0 auto;
-  padding: 22px 18px calc(40px + var(--safe-bottom));
+  /* Clears the floating bottom navigation, which the last fields hid under. */
+  padding: 22px 18px calc(110px + var(--safe-bottom));
 }
 
 .verification-badge {
@@ -4238,17 +4239,26 @@ audio {
 }
 .admin-section-nav {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(46px, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(148px, 1fr));
   gap: 8px;
 }
 .admin-section-nav .button {
   width: 100%;
-  min-width: 46px;
-  padding-inline: 10px;
+  justify-content: flex-start;
+  gap: 8px;
+  padding-inline: 12px;
+  font-size: 14px;
+  text-align: left;
+}
+.admin-section-nav .button span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .admin-section-nav .button svg {
-  width: 19px;
-  height: 19px;
+  flex: none;
+  width: 17px;
+  height: 17px;
 }
 .admin-stat {
   display: grid;

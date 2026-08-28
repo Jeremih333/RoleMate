@@ -20,11 +20,35 @@ const domainIdempotentOperations = new Set([
   'telegramUpdates.release',
 ]);
 
+/**
+ * Suffixes that unambiguously denote a read. Replaying a read returns the same
+ * data and changes nothing, so it needs no nonce — and nonce rows were the single
+ * largest consumer of the D1 write budget, one row per internal call including
+ * the session check that runs on every request.
+ *
+ * The list is deliberately conservative: misjudging a read as a mutation only
+ * costs a write, while the reverse would drop replay protection.
+ */
+const readOnlyOperationSuffixes = [
+  '.list',
+  '.get',
+  '.getOwn',
+  '.search',
+  '.availability',
+  '.preview',
+  '.previewOwn',
+  '.status',
+  '.dashboard',
+];
+
 export function requiresApiNonce(operation: string): boolean {
-  return !domainIdempotentOperations.has(operation);
+  if (domainIdempotentOperations.has(operation)) return false;
+  return !readOnlyOperationSuffixes.some((suffix) => operation.endsWith(suffix));
 }
 
 export function shouldCleanupExpiredApiNonces(nonceHash: string): boolean {
+  // Sampled cleanup: with far fewer nonce rows written, sweeping on 1/256 of
+  // calls still keeps the table small.
   return nonceHash.startsWith('00');
 }
 

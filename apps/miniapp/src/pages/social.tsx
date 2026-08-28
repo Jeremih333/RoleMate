@@ -1220,7 +1220,9 @@ export function PublicProfileViewerPage() {
         {!blockedMe && !blockedByMe && !contentAccess ? (
           <div className="error-box mt-4">{ru.miniApp.social.privateProfile}</div>
         ) : null}
-        <div className="mt-5 flex flex-wrap gap-2">
+        {/* The two labelled actions share the row and the owner's icon-only bless
+            button sits beside them, instead of wrapping onto a line of its own. */}
+        <div className="profile-actions-row">
           <Button
             disabled={!contentAccess || profile.data.can_direct_message === 0}
             loading={directChat.isPending}

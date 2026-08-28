@@ -3549,9 +3549,13 @@ const handlers: { [K in WorkerOperation]: Handler<K> } = {
            title = excluded.title, emoji_count = excluded.emoji_count,
            monochrome_count = excluded.monochrome_count, updated_at = CURRENT_TIMESTAMP`,
       ).bind(packId, input.setName, input.title, input.emoji.length, monochrome, input.userId),
-      // An emoji can move to another pack only if Telegram itself moved it, and a
-      // re-import must not leave rows behind that the set no longer contains.
-      env.DB.prepare('DELETE FROM custom_emoji WHERE pack_id = ?1').bind(packId),
+      // A re-import must not leave behind rows the set no longer contains — but it
+      // must keep the ones it still does, because deleting an emoji would take
+      // its cached bytes with it and the pack would have to be downloaded again.
+      env.DB.prepare(
+        `DELETE FROM custom_emoji
+         WHERE pack_id = ?1 AND custom_emoji_id NOT IN (SELECT value FROM json_each(?2))`,
+      ).bind(packId, json(input.emoji.map((item) => item.customEmojiId))),
       ...input.emoji.map((item, position) =>
         env.DB.prepare(
           `INSERT INTO custom_emoji

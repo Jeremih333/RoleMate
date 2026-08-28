@@ -681,6 +681,34 @@ describe('D1 domain operations', () => {
     await expect(
       executeOperation(env, 'customEmoji.resolve', { customEmojiId: '404' }, crypto.randomUUID()),
     ).rejects.toMatchObject({ code: 'CUSTOM_EMOJI_NOT_FOUND' });
+    // An emoji the set still contains keeps its cached bytes across a re-import;
+    // downloading a pack again because its title changed would be wasteful.
+    await executeOperation(
+      env,
+      'customEmoji.assets.store',
+      {
+        customEmojiId: '5100',
+        kind: 'thumbnail',
+        contentType: 'image/webp',
+        dataBase64: 'QUJD',
+        byteSize: 3,
+      },
+      crypto.randomUUID(),
+    );
+    await executeOperation(
+      env,
+      'customEmoji.import',
+      { userId: otherId, setName: 'TopicIcons', title: 'Topic Icons v3', emoji: emoji(2, 100) },
+      crypto.randomUUID(),
+    );
+    await expect(
+      executeOperation(
+        env,
+        'customEmoji.assets.get',
+        { customEmojiId: '5100', kind: 'thumbnail' },
+        crypto.randomUUID(),
+      ),
+    ).resolves.toEqual({ content_type: 'image/webp', data_base64: 'QUJD' });
   });
 
   it('shows the custom badge instead of the moderator check when both apply', async () => {

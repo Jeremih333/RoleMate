@@ -87,7 +87,6 @@ export function PublicProfilePage() {
     queryFn: api.publicProfile,
     refetchOnMount: 'always',
     refetchOnWindowFocus: 'always',
-    refetchInterval: 30_000,
   });
   const media = useQuery({ queryKey: ['profile-media'], queryFn: api.profileMedia });
   const ownPosts = useQuery({ queryKey: ['own-posts'], queryFn: api.ownPosts });
@@ -918,7 +917,6 @@ export function PublicProfileViewerPage() {
     enabled: Boolean(userId || username),
     refetchOnMount: 'always',
     refetchOnWindowFocus: 'always',
-    refetchInterval: 30_000,
   });
   const resolvedUserId = profile.data?.id;
   const profilePeople = useQuery({

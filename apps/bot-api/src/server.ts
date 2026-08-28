@@ -1965,13 +1965,17 @@ export async function buildServer(
     const { conversationId } = z
       .object({ conversationId: z.string().uuid() })
       .parse(request.params);
-    const { messageIds } = z
-      .object({ messageIds: z.array(z.string().uuid()).min(1).max(100) })
+    const { messageIds, forEveryone } = z
+      .object({
+        messageIds: z.array(z.string().uuid()).min(1).max(100),
+        forEveryone: z.boolean().default(false),
+      })
       .parse(request.body);
     return dataApi.execute('conversations.messages.deleteSelected', {
       userId: session.userId,
       conversationId,
       messageIds,
+      forEveryone,
     });
   });
   app.post('/api/conversations/:conversationId/messages/forward', async (request) => {

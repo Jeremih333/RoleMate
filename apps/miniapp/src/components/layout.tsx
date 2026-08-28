@@ -42,7 +42,9 @@ export function Layout({ children }: { children: ReactNode }) {
   const notifications = useQuery({
     queryKey: ['notifications'],
     queryFn: api.notifications,
-    refetchInterval: 30_000,
+    // Mounted on every screen, so this poll runs for the whole session.
+    refetchInterval: 60_000,
+    refetchIntervalInBackground: false,
   });
   const settings = useQuery({
     queryKey: ['settings'],

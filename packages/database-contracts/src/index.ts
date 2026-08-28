@@ -767,6 +767,8 @@ export const workerOperations = {
     userId: z.string().uuid(),
     conversationId: z.string().uuid(),
     messageIds: z.array(z.string().uuid()).min(1).max(100),
+    // Unchecked means "hide from my copy"; checked removes it for both sides.
+    forEveryone: z.boolean().default(false),
   }),
   'conversations.messages.forward': z.object({
     userId: z.string().uuid(),

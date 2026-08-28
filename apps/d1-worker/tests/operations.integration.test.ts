@@ -2396,18 +2396,25 @@ describe('D1 domain operations', () => {
         crypto.randomUUID(),
       ),
     ).resolves.toEqual({ deleted: 1 });
-    await expect(
-      executeOperation(
-        env,
-        'conversations.messages.deleteSelected',
-        {
-          userId: first,
-          conversationId: conversation.conversationId,
-          messageIds: [text.messageId],
-        },
-        crypto.randomUUID(),
-      ),
-    ).resolves.toEqual({ deleted: 0 });
+    // Hiding is per participant now, so the other side hiding the same message is
+    // its own record rather than a no-op against an already-deleted row.
+    await executeOperation(
+      env,
+      'conversations.messages.deleteSelected',
+      {
+        userId: first,
+        conversationId: conversation.conversationId,
+        messageIds: [text.messageId],
+      },
+      crypto.randomUUID(),
+    );
+    expect(
+      (
+        sqlite
+          .prepare('SELECT COUNT(*) AS total FROM conversation_message_hides WHERE message_id = ?')
+          .get(text.messageId) as { total: number }
+      ).total,
+    ).toBe(2);
 
     await executeOperation(
       env,
@@ -5742,6 +5749,96 @@ describe('D1 domain operations', () => {
       crypto.randomUUID(),
     )) as Array<{ id: string; unread_count: number }>;
     expect(afterReading.find((row) => row.id === conversationId)?.unread_count).toBe(0);
+  });
+
+  it('deletes a message for one side or for both, and guards the session write', async () => {
+    const author = await onboard(2_710);
+    const reader = await onboard(2_711);
+    const [firstId, secondId] = [author, reader].sort();
+    const matchId = crypto.randomUUID();
+    const conversationId = crypto.randomUUID();
+    sqlite
+      .prepare('INSERT INTO matches (id, user_a_id, user_b_id) VALUES (?, ?, ?)')
+      .run(matchId, firstId, secondId);
+    sqlite
+      .prepare('INSERT INTO conversations (id, match_id) VALUES (?, ?)')
+      .run(conversationId, matchId);
+    const insertParticipant = sqlite.prepare(
+      `INSERT INTO conversation_participants (conversation_id, user_id, anonymous_alias)
+       VALUES (?, ?, ?)`,
+    );
+    insertParticipant.run(conversationId, author, 'Автор');
+    insertParticipant.run(conversationId, reader, 'Читатель');
+    const insertMessage = sqlite.prepare(
+      `INSERT INTO conversation_messages
+         (id, conversation_id, sender_user_id, message_type, encrypted_content, delivered_at,
+          created_at)
+       VALUES (?, ?, ?, 'text', 'x', CURRENT_TIMESTAMP, ?)`,
+    );
+    const hidden = crypto.randomUUID();
+    const stale = crypto.randomUUID();
+    insertMessage.run(hidden, conversationId, author, '2026-01-01 10:00:00');
+    // Older than the 48 hour window, and not the reader's own message.
+    insertMessage.run(stale, conversationId, author, '2020-01-01 10:00:00');
+
+    // Unchecked box: the message only disappears from the reader's copy.
+    await executeOperation(
+      env,
+      'conversations.messages.deleteSelected',
+      { userId: reader, conversationId, messageIds: [hidden], forEveryone: false },
+      crypto.randomUUID(),
+    );
+    expect(
+      (
+        sqlite.prepare('SELECT deleted_at FROM conversation_messages WHERE id = ?').get(hidden) as {
+          deleted_at: string | null;
+        }
+      ).deleted_at,
+    ).toBeNull();
+    const readerView = (await executeOperation(
+      env,
+      'conversations.messages.list',
+      { userId: reader, conversationId, limit: 50 },
+      crypto.randomUUID(),
+    )) as Array<{ id: string }>;
+    expect(readerView.map((row) => row.id)).not.toContain(hidden);
+    const authorView = (await executeOperation(
+      env,
+      'conversations.messages.list',
+      { userId: author, conversationId, limit: 50 },
+      crypto.randomUUID(),
+    )) as Array<{ id: string }>;
+    expect(authorView.map((row) => row.id)).toContain(hidden);
+
+    // Someone else's message older than the window cannot be removed for both.
+    await executeOperation(
+      env,
+      'conversations.messages.deleteSelected',
+      { userId: reader, conversationId, messageIds: [stale], forEveryone: true },
+      crypto.randomUUID(),
+    );
+    expect(
+      (
+        sqlite.prepare('SELECT deleted_at FROM conversation_messages WHERE id = ?').get(stale) as {
+          deleted_at: string | null;
+        }
+      ).deleted_at,
+    ).toBeNull();
+
+    // The author may always remove their own message for both sides.
+    await executeOperation(
+      env,
+      'conversations.messages.deleteSelected',
+      { userId: author, conversationId, messageIds: [stale], forEveryone: true },
+      crypto.randomUUID(),
+    );
+    expect(
+      (
+        sqlite.prepare('SELECT deleted_at FROM conversation_messages WHERE id = ?').get(stale) as {
+          deleted_at: string | null;
+        }
+      ).deleted_at,
+    ).not.toBeNull();
   });
 
   it('does not rewrite already-read messages when the chat list is polled', async () => {

@@ -3500,7 +3500,8 @@ const handlers: { [K in WorkerOperation]: Handler<K> } = {
       `UPDATE user_notifications
        SET read_at = COALESCE(read_at, CURRENT_TIMESTAMP),
            dismissed_at = COALESCE(dismissed_at, CURRENT_TIMESTAMP)
-       WHERE user_id = ?1 AND entity_id = ?2 AND context = 'questionnaire'`,
+       WHERE user_id = ?1 AND entity_id = ?2 AND context = 'questionnaire'
+         AND dismissed_at IS NULL`,
     )
       .bind(input.userId, input.questionnaireId)
       .run();
@@ -7068,6 +7069,10 @@ const handlers: { [K in WorkerOperation]: Handler<K> } = {
        LEFT JOIN users forwarded_user
          ON forwarded_user.id = message.forwarded_author_user_id
        WHERE message.conversation_id = ?1 AND message.deleted_at IS NULL
+         AND NOT EXISTS (
+           SELECT 1 FROM conversation_message_hides hidden
+           WHERE hidden.message_id = message.id AND hidden.user_id = ?2
+         )
        ORDER BY message.created_at DESC, message.sort_order DESC, message.id DESC
        LIMIT ?3`,
     )
@@ -7151,7 +7156,11 @@ const handlers: { [K in WorkerOperation]: Handler<K> } = {
        LEFT JOIN users forwarded_user
          ON forwarded_user.id = message.forwarded_author_user_id
        WHERE message.conversation_id = ?1 AND message.id = ?3
-         AND message.deleted_at IS NULL AND participant.left_at IS NULL`,
+         AND message.deleted_at IS NULL AND participant.left_at IS NULL
+         AND NOT EXISTS (
+           SELECT 1 FROM conversation_message_hides hidden
+           WHERE hidden.message_id = message.id AND hidden.user_id = ?2
+         )`,
     )
       .bind(input.conversationId, input.userId, input.messageId)
       .first();
@@ -7401,13 +7410,34 @@ const handlers: { [K in WorkerOperation]: Handler<K> } = {
       .first();
     if (!participant) throw new ApiError(404, 'CONVERSATION_NOT_FOUND', 'Conversation not found');
     const placeholders = input.messageIds.map((_, index) => `?${index + 3}`).join(', ');
+    if (!input.forEveryone) {
+      // "Delete for me": the message stays for the other participant, so it is
+      // recorded as hidden rather than marked deleted.
+      const hidden = await env.DB.batch(
+        input.messageIds.map((messageId) =>
+          env.DB.prepare(
+            `INSERT OR IGNORE INTO conversation_message_hides (message_id, user_id)
+             SELECT ?1, ?2 FROM conversation_messages
+             WHERE id = ?1 AND conversation_id = ?3 AND deleted_at IS NULL`,
+          ).bind(messageId, input.userId, input.conversationId),
+        ),
+      );
+      return { deleted: hidden.reduce((total, row) => total + Number(row.meta.changes), 0) };
+    }
+    // "Delete for everyone": always allowed for your own messages, and for the
+    // other person's only inside the configured window, the way Telegram does it.
+    const windowHours = await configInt(env, 'delete_for_everyone_hours', 48, 1, 720);
     const result = await env.DB.prepare(
       `UPDATE conversation_messages
        SET deleted_at = CURRENT_TIMESTAMP
        WHERE conversation_id = ?1
-         AND deleted_at IS NULL AND id IN (${placeholders})`,
+         AND deleted_at IS NULL AND id IN (${placeholders})
+         AND (
+           sender_user_id = ?2
+           OR created_at >= datetime('now', printf('-%d hour', ?${input.messageIds.length + 3}))
+         )`,
     )
-      .bind(input.conversationId, input.userId, ...input.messageIds)
+      .bind(input.conversationId, input.userId, ...input.messageIds, windowHours)
       .run();
     await env.DB.prepare(
       `DELETE FROM conversation_message_pins
@@ -9564,7 +9594,8 @@ const handlers: { [K in WorkerOperation]: Handler<K> } = {
       `UPDATE user_notifications
        SET read_at = COALESCE(read_at, CURRENT_TIMESTAMP),
            dismissed_at = COALESCE(dismissed_at, CURRENT_TIMESTAMP)
-       WHERE user_id = ?1 AND entity_id = ?2 AND context = 'post'`,
+       WHERE user_id = ?1 AND entity_id = ?2 AND context = 'post'
+         AND dismissed_at IS NULL`,
     )
       .bind(input.userId, input.postId)
       .run();
@@ -10636,8 +10667,13 @@ const handlers: { [K in WorkerOperation]: Handler<K> } = {
       .bind(input.sessionHash)
       .first();
     if (!session) throw new ApiError(401, 'SESSION_INVALID', 'Session expired');
+    // This runs on every authenticated request, so an unguarded write cost one D1
+    // row per HTTP call. The value is only ever read with a multi-minute window,
+    // so refreshing it twice a minute is indistinguishable.
     await env.DB.prepare(
-      'UPDATE web_sessions SET last_seen_at = CURRENT_TIMESTAMP WHERE id_hash = ?1',
+      `UPDATE web_sessions SET last_seen_at = CURRENT_TIMESTAMP
+       WHERE id_hash = ?1
+         AND (last_seen_at IS NULL OR last_seen_at <= datetime('now', '-30 second'))`,
     )
       .bind(input.sessionHash)
       .run();

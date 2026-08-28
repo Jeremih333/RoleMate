@@ -572,10 +572,10 @@ export const api = {
       method: 'PUT',
       body: JSON.stringify({ activity }),
     }),
-  deleteConversationMessages: (conversationId: string, messageIds: string[]) =>
+  deleteConversationMessages: (conversationId: string, messageIds: string[], forEveryone = false) =>
     request<{ deleted: number }>(`/conversations/${conversationId}/messages`, {
       method: 'DELETE',
-      body: JSON.stringify({ messageIds }),
+      body: JSON.stringify({ messageIds, forEveryone }),
     }),
   forwardConversationMessages: (
     conversationId: string,

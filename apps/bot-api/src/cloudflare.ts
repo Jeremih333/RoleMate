@@ -140,6 +140,15 @@ export function shouldDispatchSparseReminderCampaigns(scheduledTime: number): bo
   return new Date(scheduledTime).getUTCMinutes() === 0;
 }
 
+/**
+ * The cron fires every minute. Expiring pending payments is a housekeeping sweep
+ * whose only cost of running late is a few minutes of a stale order, so it does
+ * not need to scan the table sixty times an hour.
+ */
+export function shouldExpirePendingPayments(scheduledTime: number): boolean {
+  return new Date(scheduledTime).getUTCMinutes() % 10 === 0;
+}
+
 async function dispatchScheduledTasks(env: WorkerEnv, scheduledTime: number): Promise<void> {
   const runtime = appEnv(env);
   const dataApi = new DataApiClient({
@@ -148,12 +157,14 @@ async function dispatchScheduledTasks(env: WorkerEnv, scheduledTime: number): Pr
     secret: runtime.INTERNAL_API_SECRET,
     fetchImpl: bindingFetch(env.DATA_API),
   });
-  await dataApi.execute('payments.expirePending', {}).catch((error) => {
-    console.error({
-      event: 'scheduled_payment_expiry_failed',
-      error: error instanceof Error ? error.message : 'unknown',
+  if (shouldExpirePendingPayments(scheduledTime)) {
+    await dataApi.execute('payments.expirePending', {}).catch((error) => {
+      console.error({
+        event: 'scheduled_payment_expiry_failed',
+        error: error instanceof Error ? error.message : 'unknown',
+      });
     });
-  });
+  }
   const bot = createBot(runtime, dataApi, fetch, false);
   await bot.init();
   if (synchronizedTelegramConfigurationVersion !== runtime.COMMIT_SHA) {

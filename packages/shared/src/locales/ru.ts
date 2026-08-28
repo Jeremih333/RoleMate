@@ -1435,6 +1435,9 @@ export const ru = {
       cancelSelection: 'Отменить выбор',
       deleteSelected: 'Удалить выбранное',
       deleteMessagesTitle: 'Удалить сообщения?',
+      deleteForEveryone: 'Удалить у обоих',
+      deleteForEveryoneHint:
+        'Без галочки сообщение исчезнет только у тебя. Чужие сообщения можно удалить у обоих в течение 48 часов.',
       deleteMessagesDescription: (count: number) =>
         `${count} выбранных сообщений и медиа исчезнут из истории для обоих собеседников.`,
       deleteChat: 'Удалить чат',

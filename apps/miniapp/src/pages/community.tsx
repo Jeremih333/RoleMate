@@ -223,7 +223,10 @@ export function ChatsPage() {
     queryFn: () => api.conversations(),
     refetchOnMount: 'always',
     refetchOnWindowFocus: 'always',
-    refetchInterval: 20_000,
+    // Every local mutation already invalidates this list, so the poll is only a
+    // safety net for the other side's activity.
+    refetchInterval: 45_000,
+    refetchIntervalInBackground: false,
   });
   const settings = useQuery({ queryKey: ['settings'], queryFn: api.settings });
   const archivedChats = useQuery({
@@ -1169,7 +1172,10 @@ function ConversationView({
   const messages = useQuery({
     queryKey: ['conversation-messages', chat.id],
     queryFn: () => api.conversationMessages(chat.id),
-    refetchInterval: 4_000,
+    // A hidden tab kept polling the heaviest query in the app; foregrounded, six
+    // seconds is indistinguishable from four in a text chat.
+    refetchInterval: 6_000,
+    refetchIntervalInBackground: false,
   });
   const pinnedMessages = useQuery({
     queryKey: ['conversation-message-pins', chat.id],
@@ -1226,12 +1232,14 @@ function ConversationView({
     mutationFn: ({ id, value }: { id: string; value: -1 | 1 }) => api.rateConversation(id, value),
     onSuccess: () => void queryClient.invalidateQueries({ queryKey: ['conversations'] }),
   });
+  const [deleteForEveryone, setDeleteForEveryone] = useState(false);
   const deleteMessages = useMutation({
-    mutationFn: () => api.deleteConversationMessages(chat.id, selectedMessages),
+    mutationFn: () => api.deleteConversationMessages(chat.id, selectedMessages, deleteForEveryone),
     onSuccess: () => {
       setSelectedMessages([]);
       setSelectionMode(false);
       setConfirmation(null);
+      setDeleteForEveryone(false);
       void queryClient.invalidateQueries({ queryKey: ['conversation-messages', chat.id] });
       // Deleting the newest message leaves a stale preview in the chat list.
       void queryClient.invalidateQueries({ queryKey: ['conversations'] });
@@ -1914,16 +1922,36 @@ function ConversationView({
         onClose={() => setForwardOpen(false)}
         onSend={(conversationIds) => forwardMessages.mutate(conversationIds)}
       />
-      <ConfirmDialog
-        open={confirmation === 'messages'}
-        title={ru.miniApp.community.deleteMessagesTitle}
-        description={ru.miniApp.community.deleteMessagesDescription(selectedMessages.length)}
-        confirmLabel={ru.miniApp.community.deleteAction}
-        cancelLabel={ru.miniApp.community.cancelAction}
-        loading={deleteMessages.isPending}
-        onConfirm={() => deleteMessages.mutate()}
-        onCancel={() => setConfirmation(null)}
-      />
+      {confirmation === 'messages' ? (
+        <div className="confirm-dialog-backdrop" role="presentation">
+          <Card className="confirm-dialog" role="dialog" aria-modal="true">
+            <h2>{ru.miniApp.community.deleteMessagesTitle}</h2>
+            <p>{ru.miniApp.community.deleteMessagesDescription(selectedMessages.length)}</p>
+            {/* Telegram asks once and lets you widen the deletion to both sides. */}
+            <label className="confirm-dialog-check">
+              <input
+                type="checkbox"
+                checked={deleteForEveryone}
+                onChange={(event) => setDeleteForEveryone(event.target.checked)}
+              />
+              <span>{ru.miniApp.community.deleteForEveryone}</span>
+            </label>
+            <small>{ru.miniApp.community.deleteForEveryoneHint}</small>
+            <div className="confirm-dialog-actions">
+              <Button
+                variant="danger"
+                loading={deleteMessages.isPending}
+                onClick={() => deleteMessages.mutate()}
+              >
+                {ru.miniApp.community.deleteAction}
+              </Button>
+              <Button variant="secondary" onClick={() => setConfirmation(null)}>
+                {ru.miniApp.community.cancelAction}
+              </Button>
+            </div>
+          </Card>
+        </div>
+      ) : null}
     </div>
   );
 }

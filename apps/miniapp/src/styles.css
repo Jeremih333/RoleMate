@@ -5600,7 +5600,9 @@ audio {
   position: sticky;
   z-index: 18;
   bottom: 0;
-  padding: 7px;
+  /* The tab bar is hidden while a chat is open, so the composer is what sits
+     above the home indicator and has to clear it itself. */
+  padding: 7px 7px calc(7px + var(--safe-bottom));
   background: #111d2a;
   flex: 0 0 auto;
 }
@@ -6255,10 +6257,19 @@ body:has(.telegram-conversation) {
    padding, and the tab bar steps aside the way it does in Telegram. The
    selectors look for the conversation anywhere below the page because the view
    is wrapped in an animated container. */
+/* With a chat open the shell becomes the column that owns the viewport: the
+   header keeps its own height, the chat takes whatever is left, and nothing is
+   computed from a pixel guess about how tall the header happens to be. Guessing
+   is what pushed the composer off the bottom of the screen. */
 .app-shell:has(.telegram-conversation) {
+  display: flex;
+  flex-direction: column;
   height: var(--app-vh, 100dvh);
   min-height: 0;
   overflow: hidden;
+}
+.app-shell:has(.telegram-conversation) > .topbar {
+  flex: 0 0 auto;
 }
 body:has(.telegram-conversation) {
   overflow: hidden;
@@ -6271,7 +6282,8 @@ body:has(.telegram-conversation) .feed-top-action {
   display: flex;
   width: 100%;
   max-width: 100%;
-  height: calc(var(--app-vh, 100dvh) - 64px - var(--safe-top));
+  flex: 1 1 auto;
+  height: auto;
   min-height: 0;
   overflow: hidden;
   padding: 0;
@@ -6289,12 +6301,14 @@ body:has(.telegram-conversation) .feed-top-action {
 body:has(.global-music-player) .app-shell {
   padding-top: 60px;
 }
+body:has(.global-music-player) .app-shell:has(.telegram-conversation) {
+  height: calc(var(--app-vh, 100dvh) - 60px);
+}
 body:has(.global-music-player) .topbar {
   top: 60px;
 }
-body:has(.global-music-player) .page:has(.telegram-conversation) {
-  height: calc(var(--app-vh, 100dvh) - 64px - 60px - var(--safe-top));
-}
+/* The player is a fixed strip above the shell, and the shell already accounts
+   for it with padding, so the chat needs no arithmetic of its own here. */
 .global-music-player {
   position: fixed;
   z-index: 90;

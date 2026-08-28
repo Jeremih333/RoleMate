@@ -3588,6 +3588,39 @@ const handlers: { [K in WorkerOperation]: Handler<K> } = {
       reimported: Boolean(existing),
     };
   },
+  /**
+   * Sets an operator asked for by name in app_config (custom_emoji_seed_sets) and
+   * that are not in the library yet. The scheduled task imports them with the
+   * owner's bot token, which is the only way to bring in a pack without somebody
+   * pasting its link into a chat. Already imported sets simply stop appearing,
+   * so the list needs no clearing.
+   */
+  'customEmoji.seed.pending': async (env) => {
+    const config = await env.DB.prepare(
+      "SELECT value FROM app_config WHERE key = 'custom_emoji_seed_sets'",
+    ).first<{ value: string }>();
+    const owner = await env.DB.prepare(
+      "SELECT id FROM users WHERE role = 'admin' AND telegram_user_id = 1040929628 LIMIT 1",
+    ).first<{ id: string }>();
+    if (!config?.value || !owner) return { setNames: [], ownerUserId: null };
+    const requested = config.value
+      .split(',')
+      .map((name) => name.trim())
+      .filter((name) => /^[A-Za-z0-9_]{1,64}$/.test(name))
+      .slice(0, 10);
+    if (!requested.length) return { setNames: [], ownerUserId: owner.id };
+    const known = new Set(
+      (
+        await env.DB.prepare('SELECT set_name FROM custom_emoji_packs').all<{ set_name: string }>()
+      ).results.map((row) => row.set_name),
+    );
+    // At most a few per run: this shares a minute with everything else the cron
+    // has to do, and each set is a Telegram round trip.
+    return {
+      setNames: requested.filter((name) => !known.has(name)).slice(0, 2),
+      ownerUserId: owner.id,
+    };
+  },
   'customEmoji.packs.list': async (env, input) => {
     const packs = (
       await env.DB.prepare(

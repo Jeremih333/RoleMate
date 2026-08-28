@@ -1,5 +1,6 @@
 import { createBot, miniAppChatMenuButton, synchronizeBotCommands } from './bot.js';
 import { dispatchBroadcastBatch } from './broadcast.js';
+import { collectCustomEmoji } from './custom-emoji.js';
 import { dispatchEngagementReminderBatch } from './engagement-reminders.js';
 import { dispatchTelegramNotificationBatch } from './telegram-notifications.js';
 import { dispatchGroupCampaignBatch } from './group-campaigns.js';
@@ -203,6 +204,32 @@ async function dispatchScheduledTasks(env: WorkerEnv, scheduledTime: number): Pr
           error: error instanceof Error ? error.message : 'unknown',
         });
       });
+  }
+  // Custom emoji packs an operator listed in app_config. Importing needs the bot
+  // token, which only lives here, so the scheduled task is what brings them in.
+  try {
+    const seed = await dataApi.execute<{ setNames: string[]; ownerUserId: string | null }>(
+      'customEmoji.seed.pending',
+      {},
+    );
+    const seedOwnerUserId = seed.ownerUserId ?? '';
+    for (const setName of seedOwnerUserId ? seed.setNames : []) {
+      const set = await bot.api.getStickerSet(setName);
+      if (set.sticker_type !== 'custom_emoji') continue;
+      const emoji = collectCustomEmoji(set.stickers);
+      if (!emoji.length) continue;
+      await dataApi.execute('customEmoji.import', {
+        userId: seedOwnerUserId,
+        setName,
+        title: set.title.slice(0, 120),
+        emoji,
+      });
+    }
+  } catch (error) {
+    console.error({
+      event: 'scheduled_custom_emoji_seed_failed',
+      error: error instanceof Error ? error.message : 'unknown',
+    });
   }
   await dispatchBroadcastBatch(bot, dataApi, (error) => {
     console.error({

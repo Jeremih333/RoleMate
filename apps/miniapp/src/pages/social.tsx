@@ -27,6 +27,7 @@ import {
   Star,
   ThumbsDown,
   Trash2,
+  Sparkles,
   UserMinus,
   UserPlus,
   Users,
@@ -50,6 +51,7 @@ import {
 } from '../components/profile-avatar-gallery.js';
 import { SwipePlaylist, type PlaylistTrack } from '../components/music-player.js';
 import { CompactAudio } from '../components/compact-audio.js';
+import { CustomEmojiPickerDialog } from '../components/custom-emoji-picker.js';
 import {
   blobBase64,
   CommentVoiceRecorder,
@@ -109,6 +111,7 @@ export function PublicProfilePage() {
   const [accentColor, setAccentColor] = useState<number | null>(null);
   const [headerEmoji, setHeaderEmoji] = useState<string | null>(null);
   const [headerCustomEmojiId, setHeaderCustomEmojiId] = useState<string | null>(null);
+  const [customEmojiPickerOpen, setCustomEmojiPickerOpen] = useState(false);
   const premiumStatus = useQuery({ queryKey: ['premium-status'], queryFn: api.premiumStatus });
   const customEmoji = useQuery({
     queryKey: ['custom-emoji-packs'],
@@ -618,6 +621,40 @@ export function PublicProfilePage() {
                         </div>
                         {/* Only repaintable emoji reach this list: a full-colour
                             glyph cannot be tinted and would fight the header. */}
+                        <div className="appearance-emoji-row mt-3">
+                          <Button
+                            variant="secondary"
+                            onClick={() => setCustomEmojiPickerOpen(true)}
+                          >
+                            <Sparkles className="h-4 w-4" />{' '}
+                            {ru.miniApp.social.appearanceCustomEmojiOpen}
+                          </Button>
+                          {headerCustomEmojiId ? (
+                            <span className="appearance-emoji is-selected" aria-hidden>
+                              <i
+                                className="profile-hero-emoji-glyph"
+                                style={
+                                  {
+                                    '--hero-emoji-src': `url('/api/custom-emoji/${headerCustomEmojiId}?thumbnail=1')`,
+                                  } as CSSProperties
+                                }
+                              />
+                            </span>
+                          ) : null}
+                        </div>
+                        {customEmojiPickerOpen ? (
+                          <CustomEmojiPickerDialog
+                            library={customEmoji.data}
+                            loading={customEmoji.isLoading}
+                            selectedId={headerCustomEmojiId}
+                            onPick={(value) => {
+                              setHeaderEmoji(null);
+                              setHeaderCustomEmojiId(value);
+                              setCustomEmojiPickerOpen(false);
+                            }}
+                            onClose={() => setCustomEmojiPickerOpen(false)}
+                          />
+                        ) : null}
                         {monochromeCustomEmoji.length ? (
                           <>
                             <p className="mt-3 text-xs text-muted">

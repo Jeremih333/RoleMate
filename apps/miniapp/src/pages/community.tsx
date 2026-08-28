@@ -2726,7 +2726,9 @@ function ChatReactionMenu({
     queryFn: api.customEmojiPacks,
     staleTime: 5 * 60_000,
   });
-  const customEmoji = library.data?.emoji ?? [];
+  // The library can hold hundreds of glyphs — the two test packs alone are 360 —
+  // so the inline row stays a short shelf rather than a mile-long scroller.
+  const customEmoji = (library.data?.emoji ?? []).slice(0, 40);
   return (
     <>
       {onClose ? (

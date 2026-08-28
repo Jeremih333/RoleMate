@@ -9814,3 +9814,82 @@ body {
   display: grid;
   place-items: center;
 }
+
+/* Sheet for choosing an emoji out of the imported packs. */
+.custom-emoji-sheet-backdrop {
+  position: fixed;
+  z-index: 220;
+  inset: 0;
+  display: grid;
+  align-items: end;
+  justify-items: center;
+  background: rgb(6 8 14 / 62%);
+  backdrop-filter: blur(3px);
+}
+.custom-emoji-sheet {
+  display: flex;
+  width: min(100%, 520px);
+  max-height: min(72vh, 620px);
+  flex-direction: column;
+  gap: 12px;
+  border: 1px solid var(--border);
+  border-radius: 22px 22px 0 0;
+  padding: 16px 16px calc(16px + var(--safe-bottom));
+  background: var(--surface-elevated, #171326);
+}
+.custom-emoji-sheet-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+.custom-emoji-sheet-header button {
+  display: grid;
+  width: 32px;
+  height: 32px;
+  place-items: center;
+  border: 0;
+  border-radius: 50%;
+  color: var(--muted);
+  background: rgba(255, 255, 255, 0.05);
+}
+.custom-emoji-sheet-body {
+  display: flex;
+  min-height: 0;
+  flex-direction: column;
+  gap: 14px;
+  overflow-y: auto;
+}
+.custom-emoji-sheet-note {
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.5;
+}
+.custom-emoji-pack-title {
+  margin-bottom: 8px;
+  color: var(--muted);
+  font-size: 12px;
+}
+.custom-emoji-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(46px, 1fr));
+  gap: 8px;
+}
+.custom-emoji-cell {
+  display: grid;
+  aspect-ratio: 1;
+  place-items: center;
+  border: 1px solid transparent;
+  border-radius: 12px;
+  padding: 6px;
+  background: rgba(255, 255, 255, 0.04);
+}
+.custom-emoji-cell.is-selected {
+  border-color: var(--accent-strong);
+  background: var(--accent-soft);
+}
+.custom-emoji-cell img {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+}

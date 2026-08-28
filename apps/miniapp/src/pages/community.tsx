@@ -30,6 +30,7 @@ import {
   MoreVertical,
   Reply,
   Search,
+  Sparkles,
   Trash2,
   X,
 } from 'lucide-react';
@@ -76,6 +77,7 @@ import { useViewerTime } from '../components/viewer-time.js';
 import { parseMessageReactions } from '../components/chat-reactions.js';
 import { CustomEmojiGlyph } from '../components/custom-emoji-glyph.js';
 import { CustomEmojiInsertButton } from '../components/custom-emoji-insert.js';
+import { CustomEmojiPickerDialog } from '../components/custom-emoji-picker.js';
 
 export function MatchesPage() {
   const queryClient = useQueryClient();
@@ -2711,6 +2713,9 @@ function ChatReactionMenu({
   // The library can hold hundreds of glyphs — the two test packs alone are 360 —
   // so the inline row stays a short shelf rather than a mile-long scroller.
   const customEmoji = (library.data?.emoji ?? []).slice(0, 40);
+  // The shelf is a shelf; the whole library — every pack, and the way to remove
+  // one — lives behind this.
+  const [libraryOpen, setLibraryOpen] = useState(false);
   return (
     <>
       {onClose ? (
@@ -2735,6 +2740,16 @@ function ChatReactionMenu({
               {reactionEmoji(value, label)}
             </button>
           ))}
+          {customEmoji.length ? (
+            <button
+              type="button"
+              aria-label={ru.miniApp.social.customEmojiPickerTitle}
+              title={ru.miniApp.social.customEmojiPickerTitle}
+              onClick={() => setLibraryOpen(true)}
+            >
+              <Sparkles aria-hidden />
+            </button>
+          ) : null}
           {customEmoji.map((item) => (
             <button
               key={item.custom_emoji_id}
@@ -2754,6 +2769,15 @@ function ChatReactionMenu({
           ))}
         </div>
       </div>
+      {libraryOpen ? (
+        <CustomEmojiPickerDialog
+          onPick={(customEmojiId) => {
+            setLibraryOpen(false);
+            if (customEmojiId) onReact(`${CUSTOM_EMOJI_PREFIX}${customEmojiId}`);
+          }}
+          onClose={() => setLibraryOpen(false)}
+        />
+      ) : null}
     </>
   );
 }

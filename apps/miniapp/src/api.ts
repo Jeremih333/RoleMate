@@ -448,10 +448,24 @@ export const api = {
     request<{ deleted: true }>(`/posts/${postId}`, { method: 'DELETE' }),
   postComments: (postId: string, sort: 'interesting' | 'new' = 'interesting') =>
     request<PostComment[]>(`/posts/${postId}/comments?sort=${encodeURIComponent(sort)}`),
-  addPostComment: (postId: string, body: string, parentCommentId?: string) =>
+  addPostComment: (
+    postId: string,
+    body: string,
+    parentCommentId?: string,
+    voice?: {
+      dataBase64: string;
+      mimeType: string;
+      fileName: string;
+      durationSeconds?: number;
+    },
+  ) =>
     request<{ id: string; created: true }>(`/posts/${postId}/comments`, {
       method: 'POST',
-      body: JSON.stringify({ body, ...(parentCommentId ? { parentCommentId } : {}) }),
+      body: JSON.stringify({
+        body,
+        ...(parentCommentId ? { parentCommentId } : {}),
+        ...(voice ? { voice } : {}),
+      }),
     }),
   updatePostComment: (commentId: string, body: string) =>
     request<{ updated: true; postId: string }>(`/comments/${commentId}`, {
@@ -1227,6 +1241,8 @@ export interface PostComment {
   own_rating: -1 | 1 | null;
   owner_liked?: number;
   thread_reply_count: number;
+  has_voice?: number;
+  voice_duration_seconds?: number | null;
 }
 
 export interface SearchAvailability {

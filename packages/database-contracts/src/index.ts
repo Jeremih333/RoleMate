@@ -973,6 +973,17 @@ export const workerOperations = {
     postId: z.string().uuid(),
     body: z.string().trim().min(1).max(1_000),
     parentCommentId: z.string().uuid().optional(),
+    voice: z
+      .object({
+        telegramFileId: z.string().min(1).max(512),
+        durationSeconds: z.number().int().min(0).max(600).optional(),
+        fileSizeBytes: z.number().int().min(0).optional(),
+      })
+      .optional(),
+  }),
+  'posts.comments.voice.resolve': z.object({
+    userId: z.string().uuid(),
+    commentId: z.string().uuid(),
   }),
   'posts.comments.updateOwn': z.object({
     userId: z.string().uuid(),

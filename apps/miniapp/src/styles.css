@@ -9658,3 +9658,65 @@ body {
     animation: none;
   }
 }
+
+/* Voice replies under a post: the recorder sits with the composer's actions and
+   the finished note is played inline where the comment text would be. */
+.comment-voice-controls,
+.comment-voice-preview {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 8px;
+}
+.comment-voice-preview {
+  flex: 1 1 180px;
+}
+.comment-voice-button {
+  display: grid;
+  width: 38px;
+  height: 38px;
+  flex: none;
+  place-items: center;
+  border: 1px solid var(--border);
+  border-radius: 50%;
+  color: var(--text);
+  background: rgba(255, 255, 255, 0.04);
+}
+.comment-voice-button svg {
+  width: 17px;
+  height: 17px;
+}
+.comment-voice-button.is-recording {
+  border-color: #e2617a;
+  color: #ff9ca8;
+  background: rgba(203, 82, 99, 0.16);
+}
+.comment-voice-notice {
+  min-width: 0;
+  color: var(--muted);
+  font-size: 11px;
+}
+.comment-voice-player {
+  margin-top: 6px;
+}
+
+/* Comments appear and leave with a short movement so a new reply is noticed and
+   a removed one does not blink out of the list. */
+.comment-thread-item {
+  animation: comment-enter 0.18s cubic-bezier(0.22, 0.9, 0.28, 1);
+}
+@keyframes comment-enter {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .comment-thread-item {
+    animation: none;
+  }
+}

@@ -9323,10 +9323,13 @@ const handlers: { [K in WorkerOperation]: Handler<K> } = {
       .first();
     if (!visible) throw new ApiError(404, 'POST_NOT_FOUND', 'Post not found');
     await env.DB.prepare(
+      // Without the last condition this rewrote every matching notification row
+      // on each open of the comments, whether or not anything changed.
       `UPDATE user_notifications
        SET read_at = COALESCE(read_at, CURRENT_TIMESTAMP),
            dismissed_at = COALESCE(dismissed_at, CURRENT_TIMESTAMP)
-       WHERE user_id = ?1 AND entity_id = ?2 AND context IN ('post', 'comment')`,
+       WHERE user_id = ?1 AND entity_id = ?2 AND context IN ('post', 'comment')
+         AND (read_at IS NULL OR dismissed_at IS NULL)`,
     )
       .bind(input.userId, input.postId)
       .run();
@@ -9334,6 +9337,8 @@ const handlers: { [K in WorkerOperation]: Handler<K> } = {
       await env.DB.prepare(
         `SELECT pc.id, pc.post_id, pc.author_user_id, pc.parent_comment_id,
                 pc.body, pc.created_at,
+                pcm.telegram_file_id IS NOT NULL AS has_voice,
+                pcm.duration_seconds AS voice_duration_seconds,
                 up.display_name, up.avatar_media_id,
                 CASE WHEN up.avatar_render_mode = 'animation' AND NOT EXISTS (
                   SELECT 1 FROM premium_entitlements avatar_pe
@@ -9390,6 +9395,7 @@ const handlers: { [K in WorkerOperation]: Handler<K> } = {
          FROM post_comments pc
          JOIN user_profiles up ON up.user_id = pc.author_user_id
          JOIN users u ON u.id = pc.author_user_id
+         LEFT JOIN post_comment_media pcm ON pcm.comment_id = pc.id
          WHERE pc.post_id = ?1 AND pc.status = 'active'
            AND up.moderation_status = 'active'
            AND NOT EXISTS (
@@ -9440,18 +9446,56 @@ const handlers: { [K in WorkerOperation]: Handler<K> } = {
       throw new ApiError(404, 'PARENT_COMMENT_NOT_FOUND', 'Parent comment not found');
     }
     const id = crypto.randomUUID();
-    await env.DB.prepare(
-      `INSERT INTO post_comments (id, post_id, author_user_id, body, parent_comment_id)
-       VALUES (?1, ?2, ?3, ?4, ?5)`,
-    )
-      .bind(id, input.postId, input.userId, input.body, parent?.root_id ?? null)
-      .run();
+    const statements = [
+      env.DB.prepare(
+        `INSERT INTO post_comments (id, post_id, author_user_id, body, parent_comment_id)
+         VALUES (?1, ?2, ?3, ?4, ?5)`,
+      ).bind(id, input.postId, input.userId, input.body, parent?.root_id ?? null),
+    ];
+    if (input.voice) {
+      statements.push(
+        env.DB.prepare(
+          `INSERT INTO post_comment_media
+             (comment_id, telegram_file_id, duration_seconds, file_size_bytes)
+           VALUES (?1, ?2, ?3, ?4)`,
+        ).bind(
+          id,
+          input.voice.telegramFileId,
+          input.voice.durationSeconds ?? null,
+          input.voice.fileSizeBytes ?? null,
+        ),
+      );
+    }
+    await env.DB.batch(statements);
     return {
       id,
       created: true,
       authorUserId: post.author_user_id,
       replyTargetUserId: parent?.author_user_id ?? null,
     };
+  },
+  /**
+   * Resolves the Telegram file behind a voice comment for anyone who is allowed
+   * to read the post it belongs to.
+   */
+  'posts.comments.voice.resolve': async (env, input) => {
+    const media = await env.DB.prepare(
+      `SELECT pcm.telegram_file_id, pcm.file_size_bytes
+       FROM post_comment_media pcm
+       JOIN post_comments pc ON pc.id = pcm.comment_id AND pc.status = 'active'
+       JOIN telegram_posts tp ON tp.id = pc.post_id
+       WHERE pcm.comment_id = ?1
+         AND (tp.status = 'active' OR tp.author_user_id = ?2)
+         AND NOT EXISTS (
+           SELECT 1 FROM blocks b
+           WHERE (b.blocker_user_id = ?2 AND b.blocked_user_id = pc.author_user_id)
+              OR (b.blocker_user_id = pc.author_user_id AND b.blocked_user_id = ?2)
+         )`,
+    )
+      .bind(input.commentId, input.userId)
+      .first<{ telegram_file_id: string; file_size_bytes: number | null }>();
+    if (!media) throw new ApiError(404, 'COMMENT_VOICE_NOT_FOUND', 'Voice comment not found');
+    return media;
   },
   'posts.comments.updateOwn': async (env, input) => {
     const comment = await env.DB.prepare(

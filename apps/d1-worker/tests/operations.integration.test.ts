@@ -163,6 +163,83 @@ async function onboard(id: number): Promise<string> {
 }
 
 describe('D1 domain operations', () => {
+  it('stores a voice comment and serves it to a reader of the post', async () => {
+    const authorId = await onboard(2_310);
+    const readerId = await onboard(2_311);
+    const strangerId = await onboard(2_312);
+    const postId = crypto.randomUUID();
+    sqlite
+      .prepare(
+        `INSERT INTO telegram_posts
+           (id, author_user_id, content_type, text_preview, status, published_at)
+         VALUES (?, ?, 'text', 'Post with voice replies', 'active', CURRENT_TIMESTAMP)`,
+      )
+      .run(postId, authorId);
+
+    const created = (await executeOperation(
+      env,
+      'posts.comments.create',
+      {
+        userId: readerId,
+        postId,
+        body: 'Voice reply',
+        voice: { telegramFileId: 'voice-file-1', durationSeconds: 7, fileSizeBytes: 4_096 },
+      },
+      crypto.randomUUID(),
+    )) as { id: string };
+
+    const comments = (await executeOperation(
+      env,
+      'posts.comments.list',
+      { userId: authorId, postId, sort: 'new', limit: 20 },
+      crypto.randomUUID(),
+    )) as Array<{ id: string; has_voice: number; voice_duration_seconds: number | null }>;
+    expect(comments).toEqual([
+      expect.objectContaining({ id: created.id, has_voice: 1, voice_duration_seconds: 7 }),
+    ]);
+
+    await expect(
+      executeOperation(
+        env,
+        'posts.comments.voice.resolve',
+        { userId: authorId, commentId: created.id },
+        crypto.randomUUID(),
+      ),
+    ).resolves.toMatchObject({ telegram_file_id: 'voice-file-1' });
+
+    // A text comment has no recording to resolve.
+    const textComment = (await executeOperation(
+      env,
+      'posts.comments.create',
+      { userId: strangerId, postId, body: 'Plain reply' },
+      crypto.randomUUID(),
+    )) as { id: string };
+    await expect(
+      executeOperation(
+        env,
+        'posts.comments.voice.resolve',
+        { userId: authorId, commentId: textComment.id },
+        crypto.randomUUID(),
+      ),
+    ).rejects.toMatchObject({ code: 'COMMENT_VOICE_NOT_FOUND' });
+
+    // Someone the commenter has blocked cannot pull the audio either.
+    await executeOperation(
+      env,
+      'blocks.create',
+      { blockerUserId: readerId, blockedUserId: strangerId, reason: 'voice comment test' },
+      crypto.randomUUID(),
+    );
+    await expect(
+      executeOperation(
+        env,
+        'posts.comments.voice.resolve',
+        { userId: strangerId, commentId: created.id },
+        crypto.randomUUID(),
+      ),
+    ).rejects.toMatchObject({ code: 'COMMENT_VOICE_NOT_FOUND' });
+  });
+
   it('shows the public identity in mutual matches and lets one be dismissed', async () => {
     const viewerId = await onboard(2_205);
     const partnerId = await onboard(2_206);

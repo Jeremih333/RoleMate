@@ -49,6 +49,12 @@ import {
   ProfileAvatarGallery,
 } from '../components/profile-avatar-gallery.js';
 import { SwipePlaylist, type PlaylistTrack } from '../components/music-player.js';
+import { CompactAudio } from '../components/compact-audio.js';
+import {
+  blobBase64,
+  CommentVoiceRecorder,
+  type RecordedVoice,
+} from '../components/comment-voice-recorder.js';
 import { ProfileMarkdown } from '../components/markdown.js';
 import { ExpandableText } from '../components/expandable-text.js';
 import { VerificationBadge } from '../components/verification-badge.js';
@@ -1738,6 +1744,7 @@ export function PostCard({
   // The main box stays a single line until it is used, the way YouTube shows it;
   // the reply box is opened underneath the comment it answers.
   const [composerOpen, setComposerOpen] = useState(false);
+  const [voiceDraft, setVoiceDraft] = useState<RecordedVoice | null>(null);
   const [editingCommentId, setEditingCommentId] = useState<string | null>(null);
   const [editingCommentBody, setEditingCommentBody] = useState('');
   const [commentSort, setCommentSort] = useState<'interesting' | 'new'>('interesting');
@@ -1854,8 +1861,28 @@ export function PostCard({
     },
   });
   const comment = useMutation({
-    mutationFn: ({ text, parentCommentId }: { text: string; parentCommentId?: string }) =>
-      api.addPostComment(post.id, text, parentCommentId),
+    mutationFn: async ({
+      text,
+      parentCommentId,
+      voice,
+    }: {
+      text: string;
+      parentCommentId?: string;
+      voice?: RecordedVoice;
+    }) =>
+      api.addPostComment(
+        post.id,
+        text,
+        parentCommentId,
+        voice
+          ? {
+              dataBase64: await blobBase64(voice.blob),
+              mimeType: voice.mimeType,
+              fileName: `voice-comment.${voice.mimeType.includes('mp4') ? 'm4a' : voice.mimeType.includes('ogg') ? 'ogg' : 'webm'}`,
+              durationSeconds: voice.durationSeconds,
+            }
+          : undefined,
+      ),
     onSuccess: (_result, submitted) => {
       if (submitted.parentCommentId) {
         setReplyTo(null);
@@ -1866,6 +1893,7 @@ export function PostCard({
         setBody('');
         setComposerOpen(false);
       }
+      setVoiceDraft(null);
       void queryClient.invalidateQueries({ queryKey: ['post-comments', post.id] });
       invalidatePostLists(queryClient);
     },
@@ -2812,20 +2840,31 @@ export function PostCard({
             {composerOpen || body ? (
               <div className="comment-composer-footer">
                 <span>{body.length}/1000</span>
-                <div className="flex flex-wrap gap-2">
+                <div className="flex flex-wrap items-center gap-2">
+                  <CommentVoiceRecorder
+                    value={voiceDraft}
+                    onChange={setVoiceDraft}
+                    disabled={comment.isPending}
+                  />
                   <Button
                     variant="secondary"
                     onClick={() => {
                       setBody('');
+                      setVoiceDraft(null);
                       setComposerOpen(false);
                     }}
                   >
                     {ru.miniApp.social.cancelReply}
                   </Button>
                   <Button
-                    disabled={!body.trim()}
+                    disabled={!body.trim() && !voiceDraft}
                     loading={comment.isPending && !comment.variables?.parentCommentId}
-                    onClick={() => comment.mutate({ text: body.trim() })}
+                    onClick={() =>
+                      comment.mutate({
+                        text: body.trim() || ru.miniApp.social.voiceComment,
+                        ...(voiceDraft ? { voice: voiceDraft } : {}),
+                      })
+                    }
                   >
                     {ru.miniApp.social.sendComment}
                   </Button>
@@ -2923,12 +2962,24 @@ export function PostCard({
                         ) : null}
                       </div>
                     ) : (
-                      <ProfileMarkdown
-                        className="whitespace-pre-wrap break-words text-sm text-soft"
-                        allowLinks
-                      >
-                        {item.body}
-                      </ProfileMarkdown>
+                      <>
+                        {item.has_voice ? (
+                          <div className="comment-voice-player">
+                            <CompactAudio
+                              src={`/api/post-comments/${item.id}/voice`}
+                              label={ru.miniApp.social.voiceComment}
+                              seekLabel={ru.miniApp.social.voiceCommentSeek}
+                            />
+                          </div>
+                        ) : (
+                          <ProfileMarkdown
+                            className="whitespace-pre-wrap break-words text-sm text-soft"
+                            allowLinks
+                          >
+                            {item.body}
+                          </ProfileMarkdown>
+                        )}
+                      </>
                     )}
                     {item.owner_liked ? (
                       <p className="owner-blessing owner-blessing-comment">
@@ -2953,11 +3004,16 @@ export function PostCard({
                         aria-label={ru.miniApp.social.replyToComment}
                         title={ru.miniApp.social.replyToComment}
                         onClick={() => {
+                          // Replies are stored one level deep, so answering a
+                          // reply attaches to the same thread. The addressee is
+                          // kept by naming them at the start of the text, the
+                          // way YouTube does, instead of being lost.
                           const target = item.parent_comment_id ?? item.id;
+                          const opening = item.parent_comment_id ? `${item.display_name}, ` : '';
                           setReplyTo((current) =>
                             current?.id === target ? null : { id: target, name: item.display_name },
                           );
-                          setReplyBody('');
+                          setReplyBody((current) => (current ? current : opening));
                         }}
                       >
                         <MessageCircle className="h-3.5 w-3.5" aria-hidden />

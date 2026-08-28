@@ -2972,6 +2972,25 @@ export async function buildServer(
       limit: 100,
     });
   });
+  app.get('/api/post-comments/:commentId/voice', async (request, reply) => {
+    const session = await authenticate(request);
+    const { commentId } = z.object({ commentId: z.string().uuid() }).parse(request.params);
+    const media = await dataApi.execute<{
+      telegram_file_id: string;
+      file_size_bytes: number | null;
+    }>('posts.comments.voice.resolve', { userId: session.userId, commentId });
+    const file = await bot.api.getFile(media.telegram_file_id);
+    if (!file.file_path) throw new DataApiError('MEDIA_UNAVAILABLE', ru.api.mediaUnavailable, 404);
+    const response = await fetch(
+      `https://api.telegram.org/file/bot${env.TELEGRAM_BOT_TOKEN}/${file.file_path}`,
+      telegramFileRequestInit(request),
+    );
+    if (!response.ok) throw new DataApiError('MEDIA_UNAVAILABLE', ru.api.mediaUnavailable, 502);
+    reply.header('Content-Type', response.headers.get('content-type') ?? 'audio/ogg');
+    reply.header('Cache-Control', 'private, max-age=600');
+    applySeekableMediaHeaders(reply, response);
+    return reply.send(response.body);
+  });
   app.get('/api/posts/:postId/media', async (request, reply) => {
     const session = await authenticate(request);
     const { postId } = z.object({ postId: z.string().uuid() }).parse(request.params);
@@ -3063,12 +3082,51 @@ export async function buildServer(
   app.post('/api/posts/:postId/comments', async (request) => {
     const session = await mutateSafe(request);
     const { postId } = z.object({ postId: z.string().uuid() }).parse(request.params);
-    const { body, parentCommentId } = z
+    const { body, parentCommentId, voice } = z
       .object({
         body: z.string().trim().min(1).max(1_000),
         parentCommentId: z.string().uuid().optional(),
+        voice: z
+          .object({
+            dataBase64: z.string().min(1),
+            mimeType: z.string().min(1).max(120),
+            fileName: z.string().min(1).max(160),
+            durationSeconds: z.number().int().min(0).max(600).optional(),
+          })
+          .optional(),
       })
       .parse(request.body);
+    // The audio has to become a Telegram file before it can be stored, the same
+    // as every other media file here. It is delivered to the author's own chat
+    // with the bot, quietly, so the recording is never lost.
+    let storedVoice: { telegramFileId: string; fileSizeBytes: number } | null = null;
+    if (voice) {
+      const allowedVoiceTypes = ['audio/mpeg', 'audio/mp4', 'audio/ogg', 'audio/webm'];
+      if (!allowedVoiceTypes.includes(voice.mimeType.toLowerCase())) {
+        throw new DataApiError('UNSUPPORTED_CHAT_MEDIA', ru.api.unsupportedChatMedia, 400);
+      }
+      const bytes = Uint8Array.from(atob(voice.dataBase64), (character) => character.charCodeAt(0));
+      if (!bytes.byteLength || bytes.byteLength > 20 * 1024 * 1024) {
+        throw new DataApiError('CHAT_MEDIA_TOO_LARGE', ru.api.chatMediaTooLarge, 413);
+      }
+      const file = new InputFile(bytes, voice.fileName);
+      const delivered =
+        voice.mimeType.toLowerCase() === 'audio/webm'
+          ? await bot.api.sendDocument(session.telegramUserId, file, {
+              protect_content: true,
+              disable_notification: true,
+            })
+          : await bot.api.sendVoice(session.telegramUserId, file, {
+              protect_content: true,
+              disable_notification: true,
+            });
+      const telegramFileId =
+        telegramMediaFileId(delivered, 'voice') ?? telegramMediaFileId(delivered, 'audio');
+      if (!telegramFileId) {
+        throw new DataApiError('CHAT_MEDIA_UNAVAILABLE', ru.api.requestFailed, 502);
+      }
+      storedVoice = { telegramFileId, fileSizeBytes: bytes.byteLength };
+    }
     const created = await dataApi.execute<{
       id: string;
       created: true;
@@ -3079,6 +3137,17 @@ export async function buildServer(
       postId,
       body,
       ...(parentCommentId ? { parentCommentId } : {}),
+      ...(storedVoice
+        ? {
+            voice: {
+              telegramFileId: storedVoice.telegramFileId,
+              fileSizeBytes: storedVoice.fileSizeBytes,
+              ...(voice?.durationSeconds !== undefined
+                ? { durationSeconds: voice.durationSeconds }
+                : {}),
+            },
+          }
+        : {}),
     });
     const activity = await dataApi.execute<{
       target_user_id: string;

@@ -1896,6 +1896,10 @@ const handlers: { [K in WorkerOperation]: Handler<K> } = {
                 ) THEN 'moderator'
                 WHEN EXISTS (
                   SELECT 1 FROM profile_badges pb
+                  WHERE pb.user_id = up.user_id AND pb.badge = 'special'
+                ) THEN 'special'
+                WHEN EXISTS (
+                  SELECT 1 FROM profile_badges pb
                   WHERE pb.user_id = up.user_id AND pb.badge = 'tester'
                 ) THEN 'tester'
                 ELSE NULL
@@ -2053,6 +2057,10 @@ const handlers: { [K in WorkerOperation]: Handler<K> } = {
                 ) THEN 'moderator'
                 WHEN EXISTS (
                   SELECT 1 FROM profile_badges pb
+                  WHERE pb.user_id = up.user_id AND pb.badge = 'special'
+                ) THEN 'special'
+                WHEN EXISTS (
+                  SELECT 1 FROM profile_badges pb
                   WHERE pb.user_id = up.user_id AND pb.badge = 'tester'
                 ) THEN 'tester'
                 ELSE NULL
@@ -2205,6 +2213,10 @@ const handlers: { [K in WorkerOperation]: Handler<K> } = {
                     SELECT 1 FROM moderator_assignments ma
                     WHERE ma.user_id = up.user_id AND ma.is_active = 1
                   ) THEN 'moderator'
+                  WHEN EXISTS (
+                    SELECT 1 FROM profile_badges pb
+                    WHERE pb.user_id = up.user_id AND pb.badge = 'special'
+                  ) THEN 'special'
                   WHEN EXISTS (
                   SELECT 1 FROM profile_badges pb
                   WHERE pb.user_id = up.user_id AND pb.badge = 'tester'
@@ -2365,6 +2377,10 @@ const handlers: { [K in WorkerOperation]: Handler<K> } = {
                 CASE WHEN u.telegram_user_id = 1040929628 THEN 'owner'
                      WHEN EXISTS (SELECT 1 FROM moderator_assignments ma WHERE ma.user_id = u.id AND ma.is_active = 1) THEN 'moderator'
                      WHEN EXISTS (
+                       SELECT 1 FROM profile_badges pb
+                       WHERE pb.user_id = u.id AND pb.badge = 'special'
+                     ) THEN 'special'
+                     WHEN EXISTS (
                   SELECT 1 FROM profile_badges pb
                   WHERE pb.user_id = u.id AND pb.badge = 'tester'
                 ) THEN 'tester'
@@ -2410,6 +2426,10 @@ const handlers: { [K in WorkerOperation]: Handler<K> } = {
                 ) THEN 'still' ELSE up.avatar_render_mode END AS avatar_render_mode,
                 CASE WHEN u.telegram_user_id = 1040929628 THEN 'owner'
                      WHEN EXISTS (SELECT 1 FROM moderator_assignments ma WHERE ma.user_id = u.id AND ma.is_active = 1) THEN 'moderator'
+                     WHEN EXISTS (
+                       SELECT 1 FROM profile_badges pb
+                       WHERE pb.user_id = u.id AND pb.badge = 'special'
+                     ) THEN 'special'
                      WHEN EXISTS (
                   SELECT 1 FROM profile_badges pb
                   WHERE pb.user_id = u.id AND pb.badge = 'tester'
@@ -2781,6 +2801,10 @@ const handlers: { [K in WorkerOperation]: Handler<K> } = {
                     WHERE ma.user_id = q.user_id AND ma.is_active = 1
                   ) THEN 'moderator'
                   WHEN EXISTS (
+                    SELECT 1 FROM profile_badges pb
+                    WHERE pb.user_id = q.user_id AND pb.badge = 'special'
+                  ) THEN 'special'
+                  WHEN EXISTS (
                   SELECT 1 FROM profile_badges pb
                   WHERE pb.user_id = q.user_id AND pb.badge = 'tester'
                 ) THEN 'tester'
@@ -2938,6 +2962,10 @@ const handlers: { [K in WorkerOperation]: Handler<K> } = {
                   SELECT 1 FROM moderator_assignments ma
                   WHERE ma.user_id = q.user_id AND ma.is_active = 1
                 ) THEN 'moderator'
+                WHEN EXISTS (
+                  SELECT 1 FROM profile_badges pb
+                  WHERE pb.user_id = q.user_id AND pb.badge = 'special'
+                ) THEN 'special'
                 WHEN EXISTS (
                   SELECT 1 FROM profile_badges pb
                   WHERE pb.user_id = q.user_id AND pb.badge = 'tester'
@@ -4030,6 +4058,10 @@ const handlers: { [K in WorkerOperation]: Handler<K> } = {
                 ) THEN 'moderator'
                 WHEN EXISTS (
                   SELECT 1 FROM profile_badges pb
+                  WHERE pb.user_id = p.user_id AND pb.badge = 'special'
+                ) THEN 'special'
+                WHEN EXISTS (
+                  SELECT 1 FROM profile_badges pb
                   WHERE pb.user_id = p.user_id AND pb.badge = 'tester'
                 ) THEN 'tester'
                 ELSE NULL
@@ -4595,6 +4627,10 @@ const handlers: { [K in WorkerOperation]: Handler<K> } = {
                     SELECT 1 FROM moderator_assignments ma
                     WHERE ma.user_id = up.user_id AND ma.is_active = 1
                   ) THEN 'moderator'
+                  WHEN EXISTS (
+                    SELECT 1 FROM profile_badges pb
+                    WHERE pb.user_id = up.user_id AND pb.badge = 'special'
+                  ) THEN 'special'
                   WHEN EXISTS (
                   SELECT 1 FROM profile_badges pb
                   WHERE pb.user_id = up.user_id AND pb.badge = 'tester'
@@ -5937,6 +5973,10 @@ const handlers: { [K in WorkerOperation]: Handler<K> } = {
                 ) THEN 'moderator'
                 WHEN EXISTS (
                   SELECT 1 FROM profile_badges pb
+                  WHERE pb.user_id = other.id AND pb.badge = 'special'
+                ) THEN 'special'
+                WHEN EXISTS (
+                  SELECT 1 FROM profile_badges pb
                   WHERE pb.user_id = other.id AND pb.badge = 'tester'
                 ) THEN 'tester'
                 ELSE NULL
@@ -6196,6 +6236,10 @@ const handlers: { [K in WorkerOperation]: Handler<K> } = {
                   SELECT 1 FROM moderator_assignments moderator
                   WHERE moderator.user_id = other.id AND moderator.is_active = 1
                 ) THEN 'moderator'
+                WHEN EXISTS (
+                  SELECT 1 FROM profile_badges pb
+                  WHERE pb.user_id = other.id AND pb.badge = 'special'
+                ) THEN 'special'
                 WHEN EXISTS (
                   SELECT 1 FROM profile_badges pb
                   WHERE pb.user_id = other.id AND pb.badge = 'tester'
@@ -8299,6 +8343,10 @@ const handlers: { [K in WorkerOperation]: Handler<K> } = {
                 ) THEN 'moderator'
                 WHEN EXISTS (
                   SELECT 1 FROM profile_badges pb
+                  WHERE pb.user_id = tp.author_user_id AND pb.badge = 'special'
+                ) THEN 'special'
+                WHEN EXISTS (
+                  SELECT 1 FROM profile_badges pb
                   WHERE pb.user_id = tp.author_user_id AND pb.badge = 'tester'
                 ) THEN 'tester'
                 ELSE NULL
@@ -8418,6 +8466,10 @@ const handlers: { [K in WorkerOperation]: Handler<K> } = {
                   SELECT 1 FROM moderator_assignments ma
                   WHERE ma.user_id = tp.author_user_id AND ma.is_active = 1
                 ) THEN 'moderator'
+                WHEN EXISTS (
+                  SELECT 1 FROM profile_badges pb
+                  WHERE pb.user_id = tp.author_user_id AND pb.badge = 'special'
+                ) THEN 'special'
                 WHEN EXISTS (
                   SELECT 1 FROM profile_badges pb
                   WHERE pb.user_id = tp.author_user_id AND pb.badge = 'tester'
@@ -8623,6 +8675,10 @@ const handlers: { [K in WorkerOperation]: Handler<K> } = {
                     WHERE ma.user_id = tp.author_user_id AND ma.is_active = 1
                   ) THEN 'moderator'
                   WHEN EXISTS (
+                    SELECT 1 FROM profile_badges pb
+                    WHERE pb.user_id = tp.author_user_id AND pb.badge = 'special'
+                  ) THEN 'special'
+                  WHEN EXISTS (
                   SELECT 1 FROM profile_badges pb
                   WHERE pb.user_id = tp.author_user_id AND pb.badge = 'tester'
                 ) THEN 'tester'
@@ -8767,6 +8823,10 @@ const handlers: { [K in WorkerOperation]: Handler<K> } = {
                     SELECT 1 FROM moderator_assignments ma
                     WHERE ma.user_id = tp.author_user_id AND ma.is_active = 1
                   ) THEN 'moderator'
+                  WHEN EXISTS (
+                    SELECT 1 FROM profile_badges pb
+                    WHERE pb.user_id = tp.author_user_id AND pb.badge = 'special'
+                  ) THEN 'special'
                   WHEN EXISTS (
                   SELECT 1 FROM profile_badges pb
                   WHERE pb.user_id = tp.author_user_id AND pb.badge = 'tester'
@@ -8948,6 +9008,10 @@ const handlers: { [K in WorkerOperation]: Handler<K> } = {
                     WHERE ma.user_id = tp.author_user_id AND ma.is_active = 1
                   ) THEN 'moderator'
                   WHEN EXISTS (
+                    SELECT 1 FROM profile_badges pb
+                    WHERE pb.user_id = tp.author_user_id AND pb.badge = 'special'
+                  ) THEN 'special'
+                  WHEN EXISTS (
                   SELECT 1 FROM profile_badges pb
                   WHERE pb.user_id = tp.author_user_id AND pb.badge = 'tester'
                 ) THEN 'tester'
@@ -9098,6 +9162,10 @@ const handlers: { [K in WorkerOperation]: Handler<K> } = {
                     WHERE ma.user_id = tp.author_user_id AND ma.is_active = 1
                   ) THEN 'moderator'
                   WHEN EXISTS (
+                    SELECT 1 FROM profile_badges pb
+                    WHERE pb.user_id = tp.author_user_id AND pb.badge = 'special'
+                  ) THEN 'special'
+                  WHEN EXISTS (
                   SELECT 1 FROM profile_badges pb
                   WHERE pb.user_id = tp.author_user_id AND pb.badge = 'tester'
                 ) THEN 'tester'
@@ -9245,6 +9313,10 @@ const handlers: { [K in WorkerOperation]: Handler<K> } = {
                     SELECT 1 FROM moderator_assignments ma
                     WHERE ma.user_id = pc.author_user_id AND ma.is_active = 1
                   ) THEN 'moderator'
+                  WHEN EXISTS (
+                    SELECT 1 FROM profile_badges pb
+                    WHERE pb.user_id = pc.author_user_id AND pb.badge = 'special'
+                  ) THEN 'special'
                   WHEN EXISTS (
                   SELECT 1 FROM profile_badges pb
                   WHERE pb.user_id = pc.author_user_id AND pb.badge = 'tester'
@@ -9533,6 +9605,10 @@ const handlers: { [K in WorkerOperation]: Handler<K> } = {
                   ) THEN 'moderator'
                   WHEN EXISTS (
                     SELECT 1 FROM profile_badges pb
+                    WHERE pb.user_id = profile.user_id AND pb.badge = 'special'
+                  ) THEN 'special'
+                  WHEN EXISTS (
+                    SELECT 1 FROM profile_badges pb
                     WHERE pb.user_id = profile.user_id AND pb.badge = 'tester'
                   ) THEN 'tester'
                   ELSE NULL
@@ -9712,6 +9788,10 @@ const handlers: { [K in WorkerOperation]: Handler<K> } = {
                   SELECT 1 FROM moderator_assignments assignment
                   WHERE assignment.user_id = blocked.id AND assignment.is_active = 1
                 ) THEN 'moderator'
+                WHEN EXISTS (
+                  SELECT 1 FROM profile_badges pb
+                  WHERE pb.user_id = blocked.id AND pb.badge = 'special'
+                ) THEN 'special'
                 WHEN EXISTS (
                   SELECT 1 FROM profile_badges pb
                   WHERE pb.user_id = blocked.id AND pb.badge = 'tester'
@@ -10957,6 +11037,10 @@ const handlers: { [K in WorkerOperation]: Handler<K> } = {
                     WHERE ma.user_id = up.user_id AND ma.is_active = 1
                   ) THEN 'moderator'
                   WHEN EXISTS (
+                    SELECT 1 FROM profile_badges pb
+                    WHERE pb.user_id = up.user_id AND pb.badge = 'special'
+                  ) THEN 'special'
+                  WHEN EXISTS (
                   SELECT 1 FROM profile_badges pb
                   WHERE pb.user_id = up.user_id AND pb.badge = 'tester'
                 ) THEN 'tester'
@@ -11389,6 +11473,10 @@ const handlers: { [K in WorkerOperation]: Handler<K> } = {
                                  SELECT 1 FROM moderator_assignments ma
                                  WHERE ma.user_id = thread.author_user_id AND ma.is_active = 1
                                ) THEN 'moderator'
+                               WHEN EXISTS (
+                                 SELECT 1 FROM profile_badges pb
+                                 WHERE pb.user_id = thread.author_user_id AND pb.badge = 'special'
+                               ) THEN 'special'
                                WHEN EXISTS (
                   SELECT 1 FROM profile_badges pb
                   WHERE pb.user_id = thread.author_user_id AND pb.badge = 'tester'

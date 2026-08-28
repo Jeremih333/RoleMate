@@ -100,6 +100,7 @@ describe('D1 migrations', () => {
       '0070_drop_unused_update_lease_index.sql',
       '0071_profile_appearance.sql',
       '0072_broadcast_button.sql',
+      '0073_special_badge.sql',
     ]);
     expect(() => applyMigrations()).not.toThrow();
     const postColumns = database.prepare('PRAGMA table_info(telegram_posts)').all() as Array<{

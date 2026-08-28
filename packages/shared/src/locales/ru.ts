@@ -589,6 +589,7 @@ export const ru = {
       ownerVerification: 'Владелец RoleMate',
       moderatorVerification: 'Модератор RoleMate',
       testerVerification: 'Тестировщик RoleMate',
+      specialVerification: 'Особый знак RoleMate',
       premiumBadge: 'Пользователь RoleMate Premium',
       usernameTitle: 'Юзернейм RoleMate',
       usernameDescription:

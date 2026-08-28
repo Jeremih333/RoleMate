@@ -1904,6 +1904,15 @@ select:focus-visible {
   mask: url('/assets/tester-badge.png') center / contain no-repeat;
 }
 
+.special-badge-glyph {
+  display: inline-block;
+  width: 1.15em;
+  height: 1.15em;
+  flex: 0 0 auto;
+  object-fit: contain;
+  vertical-align: middle;
+}
+
 .verification-badge-owner {
   color: #f6c453;
 }
@@ -5082,17 +5091,19 @@ audio {
   color: var(--accent-strong);
   font-weight: 600;
 }
+/* The open conversation is a surface, not a card: no frame, no rounded corners,
+   and it fills whatever the shell leaves it — the same as Telegram. */
 .telegram-conversation {
   position: relative;
   display: flex;
   min-width: 0;
-  height: calc(var(--app-vh, 100dvh) - 150px);
-  min-height: 460px;
-  max-height: calc(var(--app-vh, 100dvh) - 150px);
+  width: 100%;
+  height: 100%;
+  min-height: 0;
   flex-direction: column;
   overflow: hidden;
-  border: 1px solid var(--border);
-  border-radius: 24px;
+  border: 0;
+  border-radius: 0;
   background: #0e1724;
 }
 .telegram-conversation-header {
@@ -5110,12 +5121,6 @@ audio {
   background: rgba(20, 32, 47, 0.97);
   backdrop-filter: blur(16px);
   flex: 0 0 auto;
-}
-body:has(.global-music-player) .telegram-conversation {
-  height: calc(var(--app-vh, 100dvh) - 210px);
-  min-height: 400px;
-  max-height: calc(var(--app-vh, 100dvh) - 210px);
-  margin-top: 60px;
 }
 .chat-icon-button,
 .telegram-send-button {
@@ -6107,14 +6112,6 @@ body:has(.global-music-player) .telegram-conversation {
   background: rgba(22, 25, 40, 0.98);
 }
 
-@media (max-width: 520px) {
-  .telegram-conversation {
-    height: calc(var(--app-vh, 100dvh) - 132px);
-    min-height: 420px;
-    max-height: calc(var(--app-vh, 100dvh) - 132px);
-    border-radius: 16px;
-  }
-}
 .telegram-composer textarea {
   width: 100%;
   min-width: 0;
@@ -6168,20 +6165,14 @@ body:has(.global-music-player) .telegram-conversation {
   box-shadow: 0 12px 30px rgba(0, 0, 0, 0.32);
 }
 @media (max-width: 430px) {
-  .telegram-conversation {
-    min-height: calc(var(--app-vh, 100dvh) - 130px);
-    margin-inline: -8px;
-    border-radius: 18px;
-  }
   .telegram-message-bubble {
     max-width: 88%;
   }
 }
 
-body:has(.page > .telegram-conversation) {
+body:has(.telegram-conversation) {
   height: var(--app-vh, 100dvh);
   min-height: var(--app-vh, 100dvh);
-  overflow: hidden;
 }
 .chat-media-upload-progress {
   position: fixed;
@@ -6230,45 +6221,49 @@ body:has(.page > .telegram-conversation) {
   background: rgb(255 255 255 / 96%);
   box-shadow: 0 14px 38px rgb(55 35 80 / 18%);
 }
-.app-shell:has(.page > .telegram-conversation) {
+/* An open chat takes the whole shell: the page stops scrolling, loses its
+   padding, and the tab bar steps aside the way it does in Telegram. The
+   selectors look for the conversation anywhere below the page because the view
+   is wrapped in an animated container. */
+.app-shell:has(.telegram-conversation) {
   height: var(--app-vh, 100dvh);
   min-height: 0;
   overflow: hidden;
 }
-.page:has(> .telegram-conversation) {
+body:has(.telegram-conversation) {
+  overflow: hidden;
+}
+body:has(.telegram-conversation) .bottom-nav,
+body:has(.telegram-conversation) .feed-top-action {
+  display: none;
+}
+.page:has(.telegram-conversation) {
   display: flex;
   width: 100%;
+  max-width: 100%;
   height: calc(var(--app-vh, 100dvh) - 64px - var(--safe-top));
   min-height: 0;
-  align-items: center;
-  justify-content: center;
   overflow: hidden;
-  padding: 8px max(8px, env(safe-area-inset-right)) calc(82px + var(--safe-bottom))
-    max(8px, env(safe-area-inset-left));
+  padding: 0;
 }
-.page:has(> .telegram-conversation) > .telegram-conversation {
-  position: relative;
-  width: min(100%, 760px);
-  height: 100%;
+.page:has(.telegram-conversation) > * {
+  display: flex;
+  width: 100%;
+  min-width: 0;
   min-height: 0;
-  max-height: 100%;
-  margin: 0 auto;
+  flex: 1 1 auto;
 }
-body:has(.global-music-player) .page:has(> .telegram-conversation) > .telegram-conversation {
-  height: 100%;
-  min-height: 0;
-  max-height: 100%;
-  margin-top: 0;
+/* The player is fixed to the top of the viewport, so the shell steps down by
+   its height instead of letting it cover the header — and the chat, which sizes
+   itself from the viewport, accounts for the same offset. */
+body:has(.global-music-player) .app-shell {
+  padding-top: 60px;
 }
-@media (max-width: 520px) {
-  .page:has(> .telegram-conversation) {
-    padding-bottom: calc(83px + var(--safe-bottom));
-  }
+body:has(.global-music-player) .topbar {
+  top: 60px;
 }
-@media (min-width: 521px) {
-  .page:has(> .telegram-conversation) {
-    padding-bottom: calc(85px + var(--safe-bottom));
-  }
+body:has(.global-music-player) .page:has(.telegram-conversation) {
+  height: calc(var(--app-vh, 100dvh) - 64px - 60px - var(--safe-top));
 }
 .global-music-player {
   position: fixed;

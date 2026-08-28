@@ -1012,7 +1012,7 @@ export const api = {
     }),
 };
 
-export type VerificationKind = 'owner' | 'moderator' | 'tester';
+export type VerificationKind = 'owner' | 'moderator' | 'tester' | 'special';
 
 export interface SearchProfile {
   id: string;

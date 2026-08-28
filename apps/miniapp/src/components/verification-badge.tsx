@@ -6,6 +6,7 @@ const BADGE_LABELS: Record<VerificationKind, string> = {
   owner: ru.miniApp.social.ownerVerification,
   moderator: ru.miniApp.social.moderatorVerification,
   tester: ru.miniApp.social.testerVerification,
+  special: ru.miniApp.social.specialVerification,
 };
 
 export function VerificationBadge({
@@ -30,6 +31,10 @@ export function VerificationBadge({
               badge colour and stays visible on both the light and dark themes. */}
           {kind === 'tester' ? (
             <i className="tester-badge-glyph" role="img" aria-label={label} />
+          ) : kind === 'special' ? (
+            // Custom artwork with its own colours, so it is drawn as an image
+            // rather than a mask tinted by the badge colour.
+            <img className="special-badge-glyph" src="/assets/special-badge.png" alt={label} />
           ) : (
             <BadgeCheck aria-label={label} />
           )}

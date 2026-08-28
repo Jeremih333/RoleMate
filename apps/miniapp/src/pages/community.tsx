@@ -1027,7 +1027,9 @@ function SwipeToDismiss({
   const start = useRef<{ x: number; y: number } | null>(null);
   const REVEAL = 72;
   return (
-    <div className="swipe-dismiss">
+    // The rows are translucent, so the action behind them showed through as a red
+    // band on every row; it is only painted once the row is actually pulled aside.
+    <div className={`swipe-dismiss ${offset > 0 ? 'is-revealed' : ''}`}>
       <button
         type="button"
         className="swipe-dismiss-action"
@@ -1040,6 +1042,20 @@ function SwipeToDismiss({
         }}
       >
         <Trash2 aria-hidden />
+      </button>
+      {/* Nothing swipes with a mouse, so pointer devices get the same action as
+          a button on the row itself. */}
+      <button
+        type="button"
+        className="swipe-dismiss-pointer-action"
+        aria-label={label}
+        title={label}
+        onClick={() => {
+          setOffset(0);
+          onDismiss();
+        }}
+      >
+        <X aria-hidden />
       </button>
       <div
         className="swipe-dismiss-content"

@@ -9444,6 +9444,41 @@ body {
   background: #c2415c;
   color: #fff;
   cursor: pointer;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 140ms var(--ease-out, ease);
+}
+.swipe-dismiss.is-revealed .swipe-dismiss-action {
+  opacity: 1;
+  pointer-events: auto;
+}
+.swipe-dismiss-pointer-action {
+  position: absolute;
+  z-index: 3;
+  top: 6px;
+  right: 6px;
+  display: none;
+  width: 26px;
+  height: 26px;
+  place-items: center;
+  border: 1px solid var(--border);
+  border-radius: 50%;
+  color: var(--muted);
+  background: color-mix(in srgb, var(--surface) 88%, transparent);
+  cursor: pointer;
+}
+.swipe-dismiss-pointer-action svg {
+  width: 14px;
+  height: 14px;
+}
+.swipe-dismiss-pointer-action:hover {
+  color: #ff9ca8;
+  border-color: #c2415c;
+}
+@media (hover: hover) and (pointer: fine) {
+  .swipe-dismiss-pointer-action {
+    display: grid;
+  }
 }
 .swipe-dismiss-action svg {
   width: 19px;

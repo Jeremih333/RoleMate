@@ -144,8 +144,11 @@ function harness(options: {
 describe('caching a custom emoji', () => {
   const emoji = { file_id: 'file-1', thumbnail_file_id: 'thumb-1' };
 
-  it('stores the still thumbnail as an image', async () => {
-    const { bot, dataApi, stored, fetchMock } = harness({ filePath: 'stickers/one.webp' });
+  it('stores the still thumbnail as an image even though Telegram calls it a byte stream', async () => {
+    const { bot, dataApi, stored, fetchMock } = harness({
+      filePath: 'stickers/one.webp',
+      contentType: 'application/octet-stream',
+    });
     vi.stubGlobal('fetch', fetchMock);
     const result = await cacheCustomEmojiAsset({
       bot,
@@ -157,7 +160,12 @@ describe('caching a custom emoji', () => {
     });
     expect(result?.contentType).toBe('image/webp');
     expect(stored).toEqual([
-      expect.objectContaining({ customEmojiId: '5301', kind: 'thumbnail', byteSize: 3 }),
+      expect.objectContaining({
+        customEmojiId: '5301',
+        kind: 'thumbnail',
+        contentType: 'image/webp',
+        byteSize: 3,
+      }),
     ]);
     vi.unstubAllGlobals();
   });
@@ -211,6 +219,25 @@ describe('caching a custom emoji', () => {
       }),
     ).resolves.toBeNull();
     expect(throttled.stored).toEqual([]);
+    vi.unstubAllGlobals();
+  });
+
+  it('labels a video emoji as a video', async () => {
+    const { bot, dataApi, stored, fetchMock } = harness({
+      filePath: 'stickers/one.webm',
+      contentType: 'application/octet-stream',
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    const result = await cacheCustomEmojiAsset({
+      bot,
+      dataApi,
+      token: 'test-token',
+      customEmojiId: '5306',
+      kind: 'animation',
+      emoji,
+    });
+    expect(result?.contentType).toBe('video/webm');
+    expect(stored[0]?.contentType).toBe('video/webm');
     vi.unstubAllGlobals();
   });
 

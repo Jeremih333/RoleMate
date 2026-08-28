@@ -102,14 +102,26 @@ export async function cacheCustomEmojiAsset(input: {
     if (!response.ok) return null;
     const extension = file.file_path.split('.').pop()?.toLowerCase();
     let bytes = new Uint8Array(await response.arrayBuffer());
+    // Telegram serves every file as application/octet-stream, so the type has to
+    // come from the extension. A picture labelled as a byte stream is refused by
+    // a CSS mask, which is exactly how the profile header draws these.
+    const byExtension: Record<string, string> = {
+      webp: 'image/webp',
+      png: 'image/png',
+      jpg: 'image/jpeg',
+      jpeg: 'image/jpeg',
+      gif: 'image/gif',
+      webm: 'video/webm',
+      mp4: 'video/mp4',
+      tgs: 'application/json',
+      json: 'application/json',
+    };
+    const headerType = response.headers.get('content-type');
     let contentType =
-      extension === 'webm'
-        ? 'video/webm'
-        : extension === 'png'
-          ? 'image/png'
-          : extension === 'tgs'
-            ? 'application/json'
-            : (response.headers.get('content-type') ?? 'image/webp');
+      (extension ? byExtension[extension] : undefined) ??
+      (headerType && !headerType.startsWith('application/octet-stream')
+        ? headerType
+        : 'image/webp');
     if (extension === 'tgs') {
       const unpacked = new Response(
         new Blob([bytes]).stream().pipeThrough(new DecompressionStream('gzip')),

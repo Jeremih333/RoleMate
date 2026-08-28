@@ -2816,51 +2816,6 @@ describe('D1 domain operations', () => {
     ).toBe(3);
   });
 
-  it('does not change owner or moderator ratings from chat feedback', async () => {
-    const userId = await onboard(2_030);
-    const ownerId = await onboard(1_040_929_628);
-    sqlite.prepare("UPDATE users SET role = 'admin' WHERE id = ?").run(ownerId);
-    const ownerConversation = (await executeOperation(
-      env,
-      'conversations.startDirect',
-      { userId, targetUserId: ownerId },
-      crypto.randomUUID(),
-    )) as { conversationId: string };
-    await expect(
-      executeOperation(
-        env,
-        'ratings.create',
-        { userId, conversationId: ownerConversation.conversationId, value: 1 },
-        crypto.randomUUID(),
-      ),
-    ).resolves.toMatchObject({ saved: false, protected: true });
-
-    const moderatorId = await onboard(2_031);
-    sqlite
-      .prepare(
-        `INSERT INTO moderator_assignments (user_id, assigned_by_user_id)
-         VALUES (?, ?)`,
-      )
-      .run(moderatorId, ownerId);
-    const moderatorConversation = (await executeOperation(
-      env,
-      'conversations.startDirect',
-      { userId, targetUserId: moderatorId },
-      crypto.randomUUID(),
-    )) as { conversationId: string };
-    await expect(
-      executeOperation(
-        env,
-        'ratings.create',
-        { userId, conversationId: moderatorConversation.conversationId, value: -1 },
-        crypto.randomUUID(),
-      ),
-    ).resolves.toMatchObject({ saved: false, protected: true });
-    expect(sqlite.prepare('SELECT COUNT(*) AS total FROM conversation_ratings').get()).toEqual({
-      total: 0,
-    });
-  });
-
   it('requires Premium for calls and removes transient signaling after the call', async () => {
     const first = await onboard(2013);
     const second = await onboard(2014);
@@ -6909,7 +6864,7 @@ describe('D1 domain operations', () => {
     ).toEqual({ total: 1 });
   });
 
-  it('publishes bot posts and applies conversation ratings to their authors', async () => {
+  it('publishes bot posts and counts only post ratings towards their score', async () => {
     const authorId = await onboard(6101);
     const viewerId = await onboard(6102);
     const [userA, userB] = [authorId, viewerId].sort();
@@ -6928,12 +6883,6 @@ describe('D1 domain operations', () => {
     insertParticipant.run(conversationId, authorId, 'Автор');
     insertParticipant.run(conversationId, viewerId, 'Читатель');
 
-    await executeOperation(
-      env,
-      'ratings.create',
-      { userId: viewerId, conversationId, value: 1 },
-      crypto.randomUUID(),
-    );
     const draft = (await executeOperation(
       env,
       'posts.draft.start',
@@ -6964,7 +6913,7 @@ describe('D1 domain operations', () => {
       { userId: viewerId },
       crypto.randomUUID(),
     )) as { id: string; likes: number; dislikes: number };
-    expect(feed).toMatchObject({ id: draft.postId, likes: 1, dislikes: 0 });
+    expect(feed).toMatchObject({ id: draft.postId, likes: 0, dislikes: 0 });
     const direct = (await executeOperation(
       env,
       'posts.get',
@@ -7765,7 +7714,7 @@ describe('D1 domain operations', () => {
     ).rejects.toMatchObject({ code: 'FORBIDDEN' });
   });
 
-  it('shows public profile content, starts independent profile ratings and finds every alias', async () => {
+  it('shows public profile content, keeps the owner blessing and finds every alias', async () => {
     const requesterId = await onboard(2091);
     const ownerId = await onboard(1_040_929_628);
     sqlite.prepare("UPDATE users SET role = 'admin' WHERE id = ?").run(ownerId);
@@ -7860,17 +7809,7 @@ describe('D1 domain operations', () => {
       crypto.randomUUID(),
     )) as {
       featured_audio_items: string;
-      rating_likes: number;
-      rating_dislikes: number;
-      rating_score: number;
-      own_rating: number;
     };
-    expect(visibleProfile).toMatchObject({
-      rating_likes: 0,
-      rating_dislikes: 1,
-      rating_score: -1,
-      own_rating: -1,
-    });
     const removedRating = (await executeOperation(
       env,
       'publicProfiles.rate',
@@ -7878,23 +7817,6 @@ describe('D1 domain operations', () => {
       crypto.randomUUID(),
     )) as { saved: boolean; removed: boolean };
     expect(removedRating).toEqual({ saved: true, removed: true });
-    const profileWithoutRating = (await executeOperation(
-      env,
-      'publicProfiles.get',
-      { requesterUserId: requesterId, profileUserId: ownerId },
-      crypto.randomUUID(),
-    )) as {
-      rating_likes: number;
-      rating_dislikes: number;
-      rating_score: number;
-      own_rating: number | null;
-    };
-    expect(profileWithoutRating).toMatchObject({
-      rating_likes: 0,
-      rating_dislikes: 0,
-      rating_score: 0,
-      own_rating: null,
-    });
     expect(JSON.parse(visibleProfile.featured_audio_items)).toEqual([
       expect.objectContaining({
         id: profileAudio.id,
@@ -8049,14 +7971,6 @@ describe('D1 domain operations', () => {
       },
       crypto.randomUUID(),
     );
-    expect(
-      sqlite
-        .prepare(
-          'SELECT value FROM questionnaire_ratings WHERE questionnaire_id = ? AND user_id = ?',
-        )
-        .pluck()
-        .get(relevantQuestionnaireId, viewerId),
-    ).toBe(-1);
     await executeOperation(
       env,
       'swipes.create',
@@ -8070,14 +7984,6 @@ describe('D1 domain operations', () => {
       },
       crypto.randomUUID(),
     );
-    expect(
-      sqlite
-        .prepare(
-          'SELECT value FROM questionnaire_ratings WHERE questionnaire_id = ? AND user_id = ?',
-        )
-        .pluck()
-        .get(relevantQuestionnaireId, viewerId),
-    ).toBe(1);
 
     const relevantPostId = crypto.randomUUID();
     const ordinaryPostId = crypto.randomUUID();

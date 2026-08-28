@@ -1202,20 +1202,6 @@ export async function buildServer(
       mediaIds,
     });
   });
-  app.put('/api/questionnaires/:questionnaireId/rating', async (request) => {
-    const session = await mutateSafe(request);
-    const { questionnaireId } = z
-      .object({ questionnaireId: z.string().uuid() })
-      .parse(request.params);
-    const { value } = z
-      .object({ value: z.union([z.literal(-1), z.literal(1)]) })
-      .parse(request.body);
-    return dataApi.execute('questionnaires.rate', {
-      userId: session.userId,
-      questionnaireId,
-      value,
-    });
-  });
   app.get('/api/profile/preview', async (request) => {
     const session = await authenticate(request);
     return dataApi.execute('profiles.previewOwn', { userId: session.userId });
@@ -2890,20 +2876,6 @@ export async function buildServer(
       userId: session.userId,
       conversationId: params.conversationId,
       action: body.action,
-    });
-  });
-  app.post('/api/conversations/:conversationId/rating', async (request) => {
-    const session = await mutateSafe(request);
-    const { conversationId } = z
-      .object({ conversationId: z.string().uuid() })
-      .parse(request.params);
-    const { value } = z
-      .object({ value: z.union([z.literal(-1), z.literal(1)]) })
-      .parse(request.body);
-    return dataApi.execute('ratings.create', {
-      userId: session.userId,
-      conversationId,
-      value,
     });
   });
   app.get('/api/posts', async (request) => {

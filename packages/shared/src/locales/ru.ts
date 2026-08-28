@@ -56,8 +56,6 @@ export const ru = {
       morePost: '••• Ещё',
       contactPostAuthor: '💬 Общаться',
       nextPost: '➡️ Следующий',
-      ratePositive: '👍 Хороший собеседник',
-      rateNegative: '👎 Не подошёл',
       news: '📰 Новости',
       subscribe: '🔗 Подписаться',
       subscriptionDone: '✅ Я подписался',
@@ -81,8 +79,7 @@ export const ru = {
     profileMusicPending: '✅ Музыка добавлена и уже опубликована в профиле.',
     questionnaireMediaPending: '✅ Медиафайл добавлен и уже опубликован в выбранной анкете.',
     profilePhotoTooLarge: '⚠️ Файл слишком большой. Для профиля можно отправить файл до 50 МБ.',
-    profileMusicTooLarge:
-      '⚠️ Трек больше 20 МБ. Сожми его и отправь ещё раз.',
+    profileMusicTooLarge: '⚠️ Трек больше 20 МБ. Сожми его и отправь ещё раз.',
     profileMusicOnly:
       '🎵 В этом режиме отправь музыкальный аудиофайл. Для фото, GIF или видео выбери «Загрузить медиа».',
     profileVisualOnly:
@@ -429,7 +426,6 @@ export const ru = {
       `🎟 Промокод принят. Скидка ${stars} Stars применится к подходящему тарифу.`,
     premiumDiscountPrice: (price: number, originalPrice: number) =>
       `${price} ⭐ (вместо ${originalPrice})`,
-    ratingSaved: 'Спасибо. Оценка собеседника сохранена.',
     ratingUnavailable: 'Оценить можно только участника своего диалога.',
     reportReason: 'Выбери причину жалобы:',
     reportCategories: {
@@ -1472,7 +1468,6 @@ export const ru = {
       deleteAction: 'Удалить',
       cancelAction: 'Отмена',
       noMessages: 'Здесь пока нет сообщений. Напиши первым.',
-      protectedRating: 'Рейтинг владельца и модераторов не изменяется оценками из чатов.',
       sharedProfileMessage: 'Профиль',
       sharedTelegramProfileMessage: 'Telegram-профиль раскрыт',
       openTelegramProfile: 'Открыть профиль в Telegram',
@@ -1499,9 +1494,6 @@ export const ru = {
       resumeChat: 'Продолжить',
       closeChat: 'Завершить общение',
       ratePartner: 'Оценить собеседника',
-      ratePositive: '👍 Понравилось',
-      rateNegative: '👎 Не подошло',
-      ratingSaved: 'Оценка сохранена',
       closeChatConfirm:
         'Завершить этот анонимный чат? После этого отправлять новые сообщения будет нельзя.',
       attach: 'Прикрепить',
@@ -1939,8 +1931,7 @@ export const ru = {
       broadcastRate: 'Сообщений в секунду',
       broadcastButtonText: 'Текст кнопки (необязательно)',
       broadcastButtonUrl: 'Ссылка кнопки (https://…)',
-      broadcastButtonHint:
-        'Кнопка появится под сообщением, если заполнены и текст, и ссылка.',
+      broadcastButtonHint: 'Кнопка появится под сообщением, если заполнены и текст, и ссылка.',
       createDraft: 'Создать черновик',
       preview: 'Предпросмотр',
       dryRun: 'Dry run',

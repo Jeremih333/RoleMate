@@ -943,7 +943,7 @@ export function ProfileHeroEmoji({ emoji }: { emoji?: string | null | undefined 
   // A quiet repeated wash behind the portrait, not a single large glyph.
   return (
     <span className="profile-hero-emoji" aria-hidden>
-      {Array.from({ length: 24 }, (_, index) => (
+      {Array.from({ length: 36 }, (_, index) => (
         <span key={index}>{emoji}</span>
       ))}
     </span>
@@ -1006,6 +1006,7 @@ function ProfilePeopleList({
 }
 
 export function PublicProfileViewerPage() {
+  const { ask, dialog: reportPromptDialog } = useTextPrompt();
   const queryClient = useQueryClient();
   const [, navigate] = useLocation();
   const [idMatch, idParams] = useRoute('/profiles/:userId');
@@ -1216,10 +1217,10 @@ export function PublicProfileViewerPage() {
                   disabled={blockedMe || reportProfile.isPending}
                   onClick={() => {
                     setProfileActionsOpen(false);
-                    const description = window
-                      .prompt(ru.miniApp.social.reportProfilePrompt)
-                      ?.trim();
-                    if (description) reportProfile.mutate(description);
+                    ask(ru.miniApp.social.reportProfilePrompt, (value) => {
+                      const description = value.trim();
+                      if (description) reportProfile.mutate(description);
+                    });
                   }}
                 >
                   <Flag aria-hidden /> {ru.miniApp.social.reportProfile}
@@ -1356,7 +1357,7 @@ export function PublicProfileViewerPage() {
           </Button>
           {viewerIsOwner ? (
             <Button
-              variant={profile.data.own_rating === 1 ? 'primary' : 'secondary'}
+              variant={profile.data.owner_liked ? 'primary' : 'secondary'}
               loading={rate.isPending}
               aria-label={ru.miniApp.social.ownerBlessAction}
               title={ru.miniApp.social.ownerBlessAction}
@@ -1445,6 +1446,7 @@ export function PublicProfileViewerPage() {
         onCancel={() => setBlockConfirmOpen(false)}
         onConfirm={() => block.mutate()}
       />
+      {reportPromptDialog}
     </div>
   );
 }
@@ -1605,9 +1607,6 @@ export function QuestionnairesPage() {
               >
                 <Trash2 className="h-4 w-4" />
               </Button>
-              <span className="text-xs text-muted">
-                👍 {questionnaire.rating_likes} · 👎 {questionnaire.rating_dislikes}
-              </span>
             </div>
           </Card>
         ))}

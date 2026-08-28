@@ -1444,20 +1444,8 @@ export function createBot(
         .text(ru.bot.buttons.closeChat, `chatclose:${conversationId}`)
         .row()
         .text(ru.bot.buttons.blockChat, `chatblock:${conversationId}`)
-        .text(ru.bot.buttons.reportChat, `chatreport:${conversationId}`)
-        .row()
-        .text(ru.bot.buttons.ratePositive, `chatrate:1:${conversationId}`)
-        .text(ru.bot.buttons.rateNegative, `chatrate:-1:${conversationId}`),
+        .text(ru.bot.buttons.reportChat, `chatreport:${conversationId}`),
     });
-  });
-  bot.callbackQuery(/^chatrate:(1|-1):([0-9a-f-]{36})$/, async (context) => {
-    const user = await upsertUser(context, dataApi);
-    await dataApi.execute('ratings.create', {
-      userId: user.userId,
-      conversationId: context.match?.[2] ?? '',
-      value: context.match?.[1] === '1' ? 1 : -1,
-    });
-    await context.answerCallbackQuery(ru.bot.ratingSaved);
   });
   bot.callbackQuery(/^chatctl:(mute|unmute|pause|resume):([0-9a-f-]{36})$/, async (context) => {
     const user = await upsertUser(context, dataApi);

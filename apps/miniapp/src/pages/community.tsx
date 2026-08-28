@@ -30,8 +30,6 @@ import {
   MoreVertical,
   Reply,
   Search,
-  ThumbsDown,
-  ThumbsUp,
   Trash2,
   X,
 } from 'lucide-react';
@@ -1272,10 +1270,6 @@ function ConversationView({
     }) => api.controlConversation(input.conversationId, input.action),
     onSuccess: () => void queryClient.invalidateQueries({ queryKey: ['conversations'] }),
   });
-  const rate = useMutation({
-    mutationFn: ({ id, value }: { id: string; value: -1 | 1 }) => api.rateConversation(id, value),
-    onSuccess: () => void queryClient.invalidateQueries({ queryKey: ['conversations'] }),
-  });
   const [deleteForEveryone, setDeleteForEveryone] = useState(false);
   const deleteMessages = useMutation({
     mutationFn: () => api.deleteConversationMessages(chat.id, selectedMessages, deleteForEveryone),
@@ -1384,8 +1378,6 @@ function ConversationView({
     };
   }, [scrollToMessage]);
 
-  const ratingProtected =
-    chat.verification_kind === 'owner' || chat.verification_kind === 'moderator';
   const invalidateMessages = () =>
     void queryClient.invalidateQueries({ queryKey: ['conversation-messages', chat.id] });
   const messageGroups = groupConversationMessages(messages.data ?? []);
@@ -1612,34 +1604,7 @@ function ConversationView({
             <X />
           </button>
         </div>
-      ) : (
-        <div className="chat-rating-bar">
-          {ratingProtected ? (
-            <span>{ru.miniApp.community.protectedRating}</span>
-          ) : (
-            <>
-              <button
-                type="button"
-                className={chat.own_rating === 1 ? 'is-active' : ''}
-                aria-label={ru.miniApp.community.ratePositive}
-                title={ru.miniApp.community.ratePositive}
-                onClick={() => rate.mutate({ id: chat.id, value: 1 })}
-              >
-                <ThumbsUp />
-              </button>
-              <button
-                type="button"
-                className={chat.own_rating === -1 ? 'is-active is-negative' : ''}
-                aria-label={ru.miniApp.community.rateNegative}
-                title={ru.miniApp.community.rateNegative}
-                onClick={() => rate.mutate({ id: chat.id, value: -1 })}
-              >
-                <ThumbsDown />
-              </button>
-            </>
-          )}
-        </div>
-      )}
+      ) : null}
 
       {pinnedMessages.data?.length ? (
         <ChatPinnedBar

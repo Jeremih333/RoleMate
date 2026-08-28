@@ -400,11 +400,6 @@ export const workerOperations = {
     questionnaireId: z.string().uuid(),
     mediaIds: z.array(z.string().uuid()).min(1).max(8),
   }),
-  'questionnaires.rate': z.object({
-    userId: z.string().uuid(),
-    questionnaireId: z.string().uuid(),
-    value: z.union([z.literal(-1), z.literal(1)]),
-  }),
   'questionnaires.recordView': z.object({
     userId: z.string().uuid(),
     questionnaireId: z.string().uuid(),
@@ -885,11 +880,6 @@ export const workerOperations = {
     callId: z.string().uuid(),
   }),
   'calls.expire': z.object({}),
-  'ratings.create': z.object({
-    userId: z.string().uuid(),
-    conversationId: z.string().uuid(),
-    value: z.union([z.literal(-1), z.literal(1)]),
-  }),
   'posts.draft.start': z.object({ userId: z.string().uuid() }),
   'posts.draft.get': z.object({ userId: z.string().uuid() }),
   'posts.draft.attach': z.object({

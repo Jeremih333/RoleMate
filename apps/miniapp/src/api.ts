@@ -742,11 +742,6 @@ export const api = {
       method: 'POST',
       body: JSON.stringify({ action }),
     }),
-  rateConversation: (conversationId: string, value: -1 | 1) =>
-    request<{ saved: true }>(`/conversations/${conversationId}/rating`, {
-      method: 'POST',
-      body: JSON.stringify({ value }),
-    }),
   settings: () => request<UserSettings>('/settings'),
   saveSettings: (settings: SettingsInput) =>
     request<{ updated: true }>('/settings', {
@@ -1053,10 +1048,6 @@ export interface SearchProfile {
   media_items?: string;
   avatar_media_id?: string | null;
   avatar_render_mode?: 'photo' | 'animation' | 'still' | null;
-  rating_likes: number;
-  rating_dislikes: number;
-  rating_score: number;
-  own_rating?: -1 | 1 | null;
   view_count: number;
   username?: string | null;
   verification_kind?: VerificationKind | null;
@@ -1095,10 +1086,6 @@ export interface PublicUserProfile {
   featured_audio_items: string;
   questionnaire_count: number;
   post_count: number;
-  rating_likes: number;
-  rating_dislikes: number;
-  rating_score: number;
-  own_rating: -1 | 1 | null;
   owner_liked?: number;
   visibility_mode: 'public' | 'following_only';
   followers_count: number;
@@ -1155,9 +1142,6 @@ export interface QuestionnaireSummary extends UserProfileSummary {
   short_headline: string;
   is_primary: number;
   media_count: number;
-  rating_likes: number;
-  rating_dislikes: number;
-  rating_score: number;
 }
 
 export interface QuestionnaireCollection {
@@ -1351,7 +1335,6 @@ export interface Conversation {
   avatar_render_mode?: 'photo' | 'animation' | 'still' | null;
   verification_kind?: VerificationKind | null;
   has_premium?: number;
-  own_rating?: -1 | 1 | null;
   contact_reveal_status: string;
   is_muted: number;
   archived_at?: string | null;

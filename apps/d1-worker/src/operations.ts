@@ -1364,12 +1364,6 @@ const handlers: { [K in WorkerOperation]: Handler<K> } = {
                   AND badge_pe.ends_at > CURRENT_TIMESTAMP
                   AND badge_settings.show_premium_badge = 1
               ) THEN 1 ELSE 0 END AS is_premium,
-              (SELECT COUNT(*) FROM conversation_ratings cr
-               WHERE cr.rated_user_id = p.user_id AND cr.value = 1) AS rating_likes,
-              (SELECT COUNT(*) FROM conversation_ratings cr
-               WHERE cr.rated_user_id = p.user_id AND cr.value = -1) AS rating_dislikes,
-              COALESCE((SELECT SUM(cr.value) FROM conversation_ratings cr
-               WHERE cr.rated_user_id = p.user_id), 0) AS rating_score,
               100 AS compatibility
        FROM profiles p
        WHERE p.user_id = ?1`,
@@ -1952,12 +1946,6 @@ const handlers: { [K in WorkerOperation]: Handler<K> } = {
               (SELECT COUNT(*) FROM questionnaires q WHERE q.user_id = up.user_id) AS questionnaire_count,
               (SELECT COUNT(*) FROM telegram_posts tp
                WHERE tp.author_user_id = up.user_id AND tp.status = 'active') AS post_count,
-              (SELECT COUNT(*) FROM public_profile_ratings ppr
-               WHERE ppr.profile_user_id = up.user_id AND ppr.value = 1) AS rating_likes,
-              (SELECT COUNT(*) FROM public_profile_ratings ppr
-               WHERE ppr.profile_user_id = up.user_id AND ppr.value = -1) AS rating_dislikes,
-              COALESCE((SELECT SUM(ppr.value) FROM public_profile_ratings ppr
-               WHERE ppr.profile_user_id = up.user_id), 0) AS rating_score,
               EXISTS (
                 SELECT 1 FROM public_profile_ratings owner_rating
                 JOIN users owner_user ON owner_user.id = owner_rating.rater_user_id
@@ -2117,12 +2105,6 @@ const handlers: { [K in WorkerOperation]: Handler<K> } = {
                  AND q.moderation_status = 'approved') AS questionnaire_count,
               (SELECT COUNT(*) FROM telegram_posts tp
                WHERE tp.author_user_id = up.user_id AND tp.status = 'active') AS post_count,
-              (SELECT COUNT(*) FROM public_profile_ratings ppr
-               WHERE ppr.profile_user_id = up.user_id AND ppr.value = 1) AS rating_likes,
-              (SELECT COUNT(*) FROM public_profile_ratings ppr
-               WHERE ppr.profile_user_id = up.user_id AND ppr.value = -1) AS rating_dislikes,
-              COALESCE((SELECT SUM(ppr.value) FROM public_profile_ratings ppr
-               WHERE ppr.profile_user_id = up.user_id), 0) AS rating_score,
               EXISTS (
                 SELECT 1 FROM public_profile_ratings owner_rating
                 JOIN users owner_user ON owner_user.id = owner_rating.rater_user_id
@@ -2740,12 +2722,6 @@ const handlers: { [K in WorkerOperation]: Handler<K> } = {
       `SELECT q.*,
               (SELECT COUNT(*) FROM questionnaire_media qm
                WHERE qm.questionnaire_id = q.id) AS media_count,
-              (SELECT COUNT(*) FROM questionnaire_ratings qr
-               WHERE qr.questionnaire_id = q.id AND qr.value = 1) AS rating_likes,
-              (SELECT COUNT(*) FROM questionnaire_ratings qr
-               WHERE qr.questionnaire_id = q.id AND qr.value = -1) AS rating_dislikes,
-              COALESCE((SELECT SUM(qr.value) FROM questionnaire_ratings qr
-               WHERE qr.questionnaire_id = q.id), 0) AS rating_score,
               (SELECT COUNT(*) FROM questionnaire_views qv
                WHERE qv.questionnaire_id = q.id) AS view_count
        FROM questionnaires q WHERE q.user_id = ?1
@@ -2859,12 +2835,6 @@ const handlers: { [K in WorkerOperation]: Handler<K> } = {
                     ORDER BY qm.sort_order, qm.created_at LIMIT 8
                   ) visible
                 ), '[]') AS media_items,
-                (SELECT COUNT(*) FROM questionnaire_ratings qr
-                 WHERE qr.questionnaire_id = q.id AND qr.value = 1) AS rating_likes,
-                (SELECT COUNT(*) FROM questionnaire_ratings qr
-                 WHERE qr.questionnaire_id = q.id AND qr.value = -1) AS rating_dislikes,
-                COALESCE((SELECT SUM(qr.value) FROM questionnaire_ratings qr
-                 WHERE qr.questionnaire_id = q.id), 0) AS rating_score,
                 (SELECT COUNT(*) FROM questionnaire_views qv
                  WHERE qv.questionnaire_id = q.id) AS view_count,
                 0 AS compatibility
@@ -3023,12 +2993,6 @@ const handlers: { [K in WorkerOperation]: Handler<K> } = {
                   ORDER BY qm.sort_order, qm.created_at LIMIT 8
                 ) visible
               ), '[]') AS media_items,
-              (SELECT COUNT(*) FROM questionnaire_ratings qr
-               WHERE qr.questionnaire_id = q.id AND qr.value = 1) AS rating_likes,
-              (SELECT COUNT(*) FROM questionnaire_ratings qr
-               WHERE qr.questionnaire_id = q.id AND qr.value = -1) AS rating_dislikes,
-              COALESCE((SELECT SUM(qr.value) FROM questionnaire_ratings qr
-               WHERE qr.questionnaire_id = q.id), 0) AS rating_score,
               (SELECT COUNT(*) FROM questionnaire_views qv
                WHERE qv.questionnaire_id = q.id) AS view_count,
               100 AS compatibility
@@ -3450,25 +3414,6 @@ const handlers: { [K in WorkerOperation]: Handler<K> } = {
       ),
     );
     return { reordered: true, mediaIds: input.mediaIds };
-  },
-  'questionnaires.rate': async (env, input) => {
-    const target = await env.DB.prepare(
-      'SELECT user_id FROM questionnaires WHERE id = ?1 AND moderation_status = ?2',
-    )
-      .bind(input.questionnaireId, 'approved')
-      .first<{ user_id: string }>();
-    if (!target) throw new ApiError(404, 'QUESTIONNAIRE_NOT_FOUND', 'Questionnaire not found');
-    if (target.user_id === input.userId)
-      throw new ApiError(400, 'SELF_RATING', 'Self rating is not allowed');
-    await env.DB.prepare(
-      `INSERT INTO questionnaire_ratings (questionnaire_id, user_id, value)
-       VALUES (?1, ?2, ?3)
-       ON CONFLICT(questionnaire_id, user_id) DO UPDATE SET
-         value = excluded.value, updated_at = CURRENT_TIMESTAMP`,
-    )
-      .bind(input.questionnaireId, input.userId, input.value)
-      .run();
-    return { saved: true };
   },
   'questionnaires.recordView': async (env, input) => {
     const result = await env.DB.prepare(
@@ -4176,12 +4121,6 @@ const handlers: { [K in WorkerOperation]: Handler<K> } = {
                 WHERE pe.user_id = p.user_id AND pe.status = 'active'
                   AND pe.ends_at > CURRENT_TIMESTAMP AND settings.show_premium_badge = 1
               ) THEN 1 ELSE 0 END AS is_premium,
-              (SELECT COUNT(*) FROM questionnaire_ratings qr
-               WHERE qr.questionnaire_id = p.id AND qr.value = 1) AS rating_likes,
-              (SELECT COUNT(*) FROM questionnaire_ratings qr
-               WHERE qr.questionnaire_id = p.id AND qr.value = -1) AS rating_dislikes,
-              COALESCE((SELECT SUM(qr.value) FROM questionnaire_ratings qr
-               WHERE qr.questionnaire_id = p.id), 0) AS rating_score,
               (SELECT COUNT(*) FROM questionnaire_views qv
                WHERE qv.questionnaire_id = p.id) AS view_count,
               (
@@ -4287,7 +4226,7 @@ const handlers: { [K in WorkerOperation]: Handler<K> } = {
                     ), 1)
                   )
                 ) THEN 1 ELSE 0 END DESC,
-                rating_score DESC, is_premium DESC,
+                is_premium DESC,
                 substr(
                   replace(p.id, '-', ''),
                   (CAST(strftime('%j', 'now') AS INTEGER) % 32) + 1,
@@ -4554,16 +4493,6 @@ const handlers: { [K in WorkerOperation]: Handler<K> } = {
         alreadySent: true,
         notificationQueued: false,
       };
-    }
-    if (input.questionnaireId) {
-      await env.DB.prepare(
-        `INSERT INTO questionnaire_ratings (questionnaire_id, user_id, value)
-         VALUES (?1, ?2, ?3)
-         ON CONFLICT(questionnaire_id, user_id) DO UPDATE SET
-           value = excluded.value, updated_at = CURRENT_TIMESTAMP`,
-      )
-        .bind(input.questionnaireId, input.userId, input.action === 'skip' ? -1 : 1)
-        .run();
     }
     if (!['like', 'super_like'].includes(input.action)) {
       return {
@@ -6272,12 +6201,7 @@ const handlers: { [K in WorkerOperation]: Handler<K> } = {
                   WHERE pb.user_id = other.id AND pb.badge = 'tester'
                 ) THEN 'tester'
                 ELSE NULL
-              END AS verification_kind,
-              (
-                SELECT rating.value FROM conversation_ratings rating
-                WHERE rating.conversation_id = c.id AND rating.rater_user_id = ?1
-                LIMIT 1
-              ) AS own_rating
+              END AS verification_kind
        FROM conversations c
        JOIN conversation_participants own_cp
          ON own_cp.conversation_id = c.id AND own_cp.user_id = ?1
@@ -7915,45 +7839,6 @@ const handlers: { [K in WorkerOperation]: Handler<K> } = {
     ).run();
     return { deletedSignals: Number(result.meta.changes) };
   },
-  'ratings.create': async (env, input) => {
-    const participant = await env.DB.prepare(
-      `SELECT other.user_id AS rated_user_id,
-              CASE
-                WHEN rated.telegram_user_id = 1040929628 OR rated.role = 'admin' THEN 1
-                WHEN EXISTS (
-                  SELECT 1 FROM moderator_assignments moderator
-                  WHERE moderator.user_id = rated.id AND moderator.is_active = 1
-                ) THEN 1
-                ELSE 0
-              END AS rating_protected
-       FROM conversation_participants own
-       JOIN conversation_participants other
-         ON other.conversation_id = own.conversation_id AND other.user_id <> own.user_id
-       JOIN users rated ON rated.id = other.user_id
-       WHERE own.conversation_id = ?1 AND own.user_id = ?2
-       LIMIT 1`,
-    )
-      .bind(input.conversationId, input.userId)
-      .first<{ rated_user_id: string; rating_protected: number }>();
-    if (!participant) {
-      throw new ApiError(404, 'RATING_UNAVAILABLE', 'Conversation participant not found');
-    }
-    if (participant.rating_protected) {
-      return { saved: false, protected: true, ratedUserId: participant.rated_user_id };
-    }
-    const id = crypto.randomUUID();
-    await env.DB.prepare(
-      `INSERT INTO conversation_ratings (
-         id, conversation_id, rater_user_id, rated_user_id, value
-       ) VALUES (?1, ?2, ?3, ?4, ?5)
-       ON CONFLICT(conversation_id, rater_user_id) DO UPDATE SET
-         value = excluded.value, rated_user_id = excluded.rated_user_id,
-         updated_at = CURRENT_TIMESTAMP`,
-    )
-      .bind(id, input.conversationId, input.userId, participant.rated_user_id, input.value)
-      .run();
-    return { saved: true, ratedUserId: participant.rated_user_id };
-  },
   'posts.draft.start': async (env, input) => {
     // Posting is tied to the public profile, not to a questionnaire: the two were
     // split apart, and requiring an approved questionnaire left users who had not
@@ -8437,18 +8322,10 @@ const handlers: { [K in WorkerOperation]: Handler<K> } = {
                   AND hidden_pe.ends_at > CURRENT_TIMESTAMP
                   AND hidden_settings.hide_demographics = 1
               ) THEN NULL ELSE p.gender END AS gender,
-              (
-                (SELECT COUNT(*) FROM post_ratings pr
-                 WHERE pr.post_id = tp.id AND pr.value = 1)
-                + (SELECT COUNT(*) FROM conversation_ratings cr
-                   WHERE cr.rated_user_id = tp.author_user_id AND cr.value = 1)
-              ) AS likes,
-              (
-                (SELECT COUNT(*) FROM post_ratings pr
-                 WHERE pr.post_id = tp.id AND pr.value = -1)
-                + (SELECT COUNT(*) FROM conversation_ratings cr
-                   WHERE cr.rated_user_id = tp.author_user_id AND cr.value = -1)
-              ) AS dislikes,
+              (SELECT COUNT(*) FROM post_ratings pr
+               WHERE pr.post_id = tp.id AND pr.value = 1) AS likes,
+              (SELECT COUNT(*) FROM post_ratings pr
+               WHERE pr.post_id = tp.id AND pr.value = -1) AS dislikes,
               (SELECT COUNT(*) FROM post_comments pc
                WHERE pc.post_id = tp.id AND pc.status = 'active') AS comment_count,
               (

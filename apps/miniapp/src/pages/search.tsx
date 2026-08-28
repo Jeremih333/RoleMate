@@ -1100,7 +1100,6 @@ export function SearchPage() {
               <Button
                 className="like-button"
                 aria-label={ru.miniApp.search.like}
-                aria-pressed={profile.own_rating === 1}
                 disabled={swipe.isPending}
                 onClick={() => swipe.mutate({ action: 'like', profile })}
               >

@@ -4131,7 +4131,6 @@ audio {
 }
 
 :root[data-theme='light'] .telegram-conversation-header,
-:root[data-theme='light'] .chat-rating-bar,
 :root[data-theme='light'] .telegram-composer-wrap {
   color: #182333;
   background: rgba(255, 255, 255, 0.97);
@@ -4189,7 +4188,7 @@ audio {
   color: #647487;
 }
 
-:root[data-theme='light'] :where(.chat-icon-button, .chat-rating-bar button) {
+:root[data-theme='light'] .chat-icon-button {
   color: #304156;
 }
 
@@ -5224,7 +5223,6 @@ body:has(.global-music-player) .telegram-conversation {
   height: 20px;
   flex: 0 0 auto;
 }
-.chat-rating-bar,
 .chat-selection-toolbar {
   z-index: 10;
   display: flex;
@@ -5235,41 +5233,6 @@ body:has(.global-music-player) .telegram-conversation {
   padding: 8px 10px;
   background: rgba(17, 28, 42, 0.94);
   flex: 0 0 auto;
-}
-.chat-rating-bar button {
-  display: grid;
-  width: 40px;
-  height: 36px;
-  align-items: center;
-  justify-content: center;
-  border: 1px solid rgba(118, 144, 173, 0.25);
-  border-radius: 12px;
-  padding: 0;
-  color: #b8c9dc;
-  background: rgba(255, 255, 255, 0.025);
-  font-size: 12px;
-}
-.chat-rating-bar:not(:has(> span)) {
-  justify-content: flex-end;
-}
-.chat-rating-bar button.is-active {
-  border-color: #7bd8b1;
-  color: #8de6c1;
-  background: rgba(74, 178, 135, 0.13);
-}
-.chat-rating-bar button.is-negative {
-  border-color: #ef9aa3;
-  color: #ffadb5;
-  background: rgba(203, 82, 99, 0.12);
-}
-.chat-rating-bar svg {
-  width: 16px;
-  height: 16px;
-}
-.chat-rating-bar > span {
-  color: var(--muted);
-  font-size: 11px;
-  line-height: 1.4;
 }
 .chat-selection-toolbar > span {
   display: grid;
@@ -6212,9 +6175,6 @@ body:has(.global-music-player) .telegram-conversation {
   }
   .telegram-message-bubble {
     max-width: 88%;
-  }
-  .chat-rating-bar button {
-    font-size: 11px;
   }
 }
 
@@ -9269,8 +9229,8 @@ body {
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: 8px;
-  padding: 26px 18px 20px;
+  gap: 10px;
+  padding: 24px 18px 18px;
   text-align: center;
   background:
     radial-gradient(
@@ -9311,8 +9271,8 @@ body {
 .profile-info-row {
   display: flex;
   flex-direction: column;
-  gap: 2px;
-  padding: 12px 18px;
+  gap: 3px;
+  padding: 13px 18px;
   text-align: left;
 }
 
@@ -9524,15 +9484,21 @@ body {
 .profile-actions-row {
   display: flex;
   align-items: stretch;
+  flex-wrap: wrap;
   gap: 8px;
-  margin: 18px 18px 0;
+  padding: 16px 18px 0;
+  margin: 0;
 }
+/* The labels are what the row is for: give each button room for its text and
+   let the row wrap instead of cutting a word in half on a narrow screen. */
 .profile-actions-row > .button {
-  flex: 1 1 0;
-  min-width: 0;
+  flex: 1 1 128px;
+  min-width: 128px;
+  padding-inline: 12px;
 }
 .profile-actions-row > .button:has(> svg:only-child) {
   flex: 0 0 44px;
+  min-width: 44px;
   padding: 0;
 }
 
@@ -9547,25 +9513,34 @@ body {
   --profile-accent-4: #2aa5a5;
   --profile-accent-5: #3b7dd8;
   --profile-accent-6: #cf4d8a;
-  --profile-accent-7: #6b7280;
+  --profile-accent-7: #4d6182;
 }
 .profile-hero[data-accent] {
   background:
     radial-gradient(120% 90% at 50% -20%, var(--hero-tint), transparent 72%),
     color-mix(in srgb, var(--hero-tint) 26%, var(--surface-elevated));
 }
+/* Emoji arrive in their own colours, and a bright one used to fight the header
+   tint. Grayscale plus a soft-light blend turns any of them into the same flat
+   watermark, and the mask keeps the tiles from being cut off at the edges. */
 .profile-hero-emoji {
   position: absolute;
   inset: 0;
   display: grid;
   grid-template-columns: repeat(auto-fill, 46px);
   gap: 10px;
+  align-content: start;
+  justify-content: center;
   overflow: hidden;
-  opacity: 0.14;
+  opacity: 0.16;
+  filter: grayscale(1) contrast(0.65);
+  mix-blend-mode: soft-light;
   font-size: 26px;
   line-height: 1;
   pointer-events: none;
   user-select: none;
+  -webkit-mask-image: radial-gradient(120% 100% at 50% 0%, #000 45%, transparent 88%);
+  mask-image: radial-gradient(120% 100% at 50% 0%, #000 45%, transparent 88%);
 }
 .appearance-swatches {
   display: grid;

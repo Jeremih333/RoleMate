@@ -5613,7 +5613,7 @@ audio {
   position: relative;
   display: grid;
   min-width: 0;
-  grid-template-columns: auto minmax(0, 1fr) auto auto;
+  grid-template-columns: auto minmax(0, 1fr) auto auto auto;
   align-items: end;
   gap: 5px;
   border: 1px solid rgba(124, 146, 177, 0.22);

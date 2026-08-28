@@ -75,6 +75,7 @@ import { DoubleHeartIcon } from '../components/double-heart-icon.js';
 import { useViewerTime } from '../components/viewer-time.js';
 import { parseMessageReactions } from '../components/chat-reactions.js';
 import { CustomEmojiGlyph } from '../components/custom-emoji-glyph.js';
+import { CustomEmojiInsertButton } from '../components/custom-emoji-insert.js';
 
 export function MatchesPage() {
   const queryClient = useQueryClient();
@@ -3455,6 +3456,12 @@ function ChatComposer({
             if (value.trim()) startTyping();
             else stopTyping();
           }}
+        />
+        {/* Imported emoji can be written into a message; tapping one in the
+            conversation opens the pack it came from. */}
+        <CustomEmojiInsertButton
+          className="telegram-composer-emoji"
+          onInsert={(token) => setText((current) => `${current}${token}`)}
         />
         <VoiceRecorderButton
           conversationId={conversationId}

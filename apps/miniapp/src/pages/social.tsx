@@ -52,6 +52,7 @@ import {
 import { SwipePlaylist, type PlaylistTrack } from '../components/music-player.js';
 import { CompactAudio } from '../components/compact-audio.js';
 import { CustomEmojiPickerDialog } from '../components/custom-emoji-picker.js';
+import { CustomEmojiInsertButton } from '../components/custom-emoji-insert.js';
 import {
   blobBase64,
   CommentVoiceRecorder,
@@ -2975,6 +2976,9 @@ export function PostCard({
                     onChange={setVoiceDraft}
                     disabled={comment.isPending}
                   />
+                  <CustomEmojiInsertButton
+                    onInsert={(token) => setBody((current) => `${current}${token}`)}
+                  />
                   <Button
                     variant="secondary"
                     onClick={() => {
@@ -3200,6 +3204,9 @@ export function PostCard({
                         <div className="comment-composer-footer">
                           <span>{replyBody.length}/1000</span>
                           <div className="flex flex-wrap gap-2">
+                            <CustomEmojiInsertButton
+                              onInsert={(token) => setReplyBody((current) => `${current}${token}`)}
+                            />
                             <Button
                               variant="secondary"
                               onClick={() => {

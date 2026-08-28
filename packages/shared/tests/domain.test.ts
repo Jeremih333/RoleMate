@@ -156,6 +156,21 @@ describe('domain rules', () => {
       allowed: false,
       reason: 'premium_required',
     });
+
+    // A custom emoji token is a long run of digits, which the contact filter
+    // would otherwise read as a phone number and refuse.
+    expect(checkContentLinkPolicy('Привет [ce:5227545444524287851]', false)).toEqual({
+      allowed: true,
+      references: [],
+    });
+    expect(checkContentLinkPolicy('[ce:1][ce:5227545444524287851] и текст', false)).toMatchObject({
+      allowed: true,
+    });
+    // A real phone number is still refused, token or not.
+    expect(checkContentLinkPolicy('[ce:5227545444524287851] +7 999 123 45 67', false)).toEqual({
+      allowed: false,
+      reason: 'unsupported_link',
+    });
     expect(checkContentLinkPolicy('Канал https://t.me/story_channel', true)).toMatchObject({
       allowed: true,
     });

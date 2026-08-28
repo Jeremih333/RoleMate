@@ -166,12 +166,21 @@ export function telegramReferences(value: string): TelegramReference[] {
   return references;
 }
 
+/**
+ * Custom emoji are written into text as `[ce:<id>]`, and a Telegram custom emoji
+ * id is a run of about twenty digits — which the contact filter below reads as a
+ * phone number. The tokens are ours, not user contact details, so they are taken
+ * out before the text is judged.
+ */
+const customEmojiTokenPattern = /\[ce:[0-9]{1,32}\]/g;
+
 export function checkContentLinkPolicy(
-  value: string,
+  input: string,
   premium: boolean,
 ):
   | { allowed: true; references: TelegramReference[] }
   | { allowed: false; reason: ContentPolicyFailure } {
+  const value = input.replace(customEmojiTokenPattern, ' ');
   const references = telegramReferences(value);
   const webLinks = value.match(webLinkPattern) ?? [];
   const mentions = value.match(looseMentionPattern) ?? [];

@@ -1873,6 +1873,9 @@ export async function buildServer(
     const { conversationId } = z
       .object({ conversationId: z.string().uuid() })
       .parse(request.params);
+    // The chat list peeks with ?peek=1 so looking at a conversation does not
+    // clear its unread state.
+    const { peek } = z.object({ peek: z.enum(['0', '1']).optional() }).parse(request.query ?? {});
     const messages = await dataApi.execute<
       Array<
         Record<string, unknown> & {
@@ -1884,6 +1887,7 @@ export async function buildServer(
       userId: session.userId,
       conversationId,
       limit: 100,
+      markRead: peek !== '1',
     });
     return Promise.all(
       messages.map(

@@ -14,7 +14,7 @@ import {
   Trash2,
 } from 'lucide-react';
 import { Link, useLocation } from 'wouter';
-import { motion } from 'framer-motion';
+import { motion, useReducedMotion } from 'framer-motion';
 import { createPortal } from 'react-dom';
 import { ru } from '@rolemate/shared';
 import { useUserStore } from '../store.js';
@@ -35,6 +35,7 @@ const navigation = [
 export function Layout({ children }: { children: ReactNode }) {
   const isAdmin = useUserStore((state) => state.user?.isAdmin);
   const [location, navigate] = useLocation();
+  const reduceMotion = useReducedMotion();
   const sectionSwipe = useRef<{ x: number; y: number; enabled: boolean } | null>(null);
   const [feedTopActionVisible, setFeedTopActionVisible] = useState(false);
   const [notificationsOpen, setNotificationsOpen] = useState(false);
@@ -181,11 +182,15 @@ export function Layout({ children }: { children: ReactNode }) {
             )
           : null}
       </header>
+      {/* Keyed by route: Layout survives navigation, so without a key the element
+          was never recreated and the entrance played once per session. Honours
+          the system reduced-motion setting, which framer-motion ignores. */}
       <motion.main
+        key={location}
         className="page"
-        initial={{ opacity: 0, y: 8 }}
+        initial={reduceMotion ? false : { opacity: 0, y: 8 }}
         animate={{ opacity: 1, y: 0 }}
-        transition={{ duration: 0.25 }}
+        transition={{ duration: reduceMotion ? 0 : 0.22, ease: [0.22, 0.9, 0.28, 1] }}
         onTouchStart={(event) => {
           const target = event.target as HTMLElement;
           sectionSwipe.current = {

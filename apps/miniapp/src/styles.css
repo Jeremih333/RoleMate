@@ -9386,7 +9386,12 @@ body {
 .profile-sheet > .swipe-playlist {
   margin-top: 14px;
 }
+/* The card is a plain block and .button is inline-flex, so symmetric margins left
+   the action shrunk to its label and hugging the left edge instead of centred.
+   Stretching it is deterministic; margins on an inline element are not. */
 .profile-sheet > .button {
+  display: flex;
+  width: calc(100% - 36px);
   margin-top: 14px;
   margin-bottom: 18px;
 }
@@ -9492,4 +9497,14 @@ body {
   color: var(--muted);
   font-size: 12px;
   line-height: 1.45;
+}
+
+.questionnaire-card-name {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 5px;
+  font-size: 17px;
+  font-weight: 650;
+  line-height: 1.3;
 }

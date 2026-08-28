@@ -305,7 +305,9 @@ export function ProfileCard({
                   className="questionnaire-card-name-link"
                   href={`/profiles/${profile.user_id}`}
                 >
-                  <h2 className="flex min-w-0 items-center gap-1 font-display text-3xl font-semibold">
+                  {/* A 30px serif for a card heading crowded everything under it;
+                      the name reads as a name at interface scale. */}
+                  <h2 className="questionnaire-card-name">
                     <span className="truncate">{profile.display_name}</span>
                     <VerificationBadge
                       kind={profile.verification_kind}

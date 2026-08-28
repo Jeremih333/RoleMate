@@ -730,6 +730,8 @@ export const workerOperations = {
     .object({
       userId: z.string().uuid(),
       conversationId: z.string().uuid(),
+      // False lets the chat list peek at a conversation without clearing unread.
+      markRead: z.boolean().default(true),
     })
     .merge(paginationSchema),
   'conversations.messages.get': z.object({

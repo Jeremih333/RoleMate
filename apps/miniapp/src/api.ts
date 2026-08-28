@@ -537,8 +537,10 @@ export const api = {
       method: 'PUT',
       body: JSON.stringify({ conversationIds }),
     }),
-  conversationMessages: (conversationId: string) =>
-    request<ConversationMessage[]>(`/conversations/${conversationId}/messages`),
+  conversationMessages: (conversationId: string, markRead = true) =>
+    request<ConversationMessage[]>(
+      `/conversations/${conversationId}/messages${markRead ? '' : '?peek=1'}`,
+    ),
   conversationMessage: (conversationId: string, messageId: string) =>
     request<ConversationMessage>(`/conversations/${conversationId}/messages/${messageId}`),
   conversationDraft: (conversationId: string) =>

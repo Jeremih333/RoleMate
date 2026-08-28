@@ -1,3 +1,5 @@
+import { useEffect } from 'react';
+
 interface TelegramWebApp {
   initData: string;
   colorScheme: 'light' | 'dark';
@@ -100,4 +102,21 @@ export function trackViewportHeight(): () => void {
     window.removeEventListener('resize', apply);
     window.removeEventListener('orientationchange', apply);
   };
+}
+
+/**
+ * Telegram's own back arrow in the header. Declared in the API surface but never
+ * wired, so the native control did nothing inside a conversation.
+ */
+export function useTelegramBackButton(onBack: () => void, active = true): void {
+  useEffect(() => {
+    const button = getTelegram()?.BackButton;
+    if (!button || !active) return;
+    button.onClick(onBack);
+    button.show();
+    return () => {
+      button.offClick(onBack);
+      button.hide();
+    };
+  }, [active, onBack]);
 }

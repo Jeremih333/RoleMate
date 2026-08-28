@@ -544,7 +544,8 @@ function ChatListRow({
   }, [actionsOpen]);
   const previewMessages = useQuery({
     queryKey: ['conversation-preview', chat.id],
-    queryFn: () => api.conversationMessages(chat.id),
+    // Peeking must not clear the conversation's unread state.
+    queryFn: () => api.conversationMessages(chat.id, false),
     enabled: actionsOpen,
     staleTime: 15_000,
   });

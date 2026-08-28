@@ -5732,6 +5732,21 @@ describe('D1 domain operations', () => {
     )) as Array<{ id: string; unread_count: number }>;
     expect(list.find((row) => row.id === conversationId)?.unread_count).toBe(2);
 
+    // Peeking from the chat list must leave the unread state alone.
+    await executeOperation(
+      env,
+      'conversations.messages.list',
+      { userId: reader, conversationId, limit: 50, markRead: false },
+      crypto.randomUUID(),
+    );
+    const stillUnread = (await executeOperation(
+      env,
+      'conversations.list',
+      { userId: reader, limit: 20, archived: false },
+      crypto.randomUUID(),
+    )) as Array<{ id: string; unread_count: number }>;
+    expect(stillUnread.find((row) => row.id === conversationId)?.unread_count).toBe(2);
+
     const messages = (await executeOperation(
       env,
       'conversations.messages.list',

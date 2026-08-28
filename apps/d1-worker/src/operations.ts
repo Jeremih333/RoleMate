@@ -6974,33 +6974,37 @@ const handlers: { [K in WorkerOperation]: Handler<K> } = {
     )
       .bind(input.conversationId, input.userId)
       .first<{ id: string }>();
-    await env.DB.batch([
-      env.DB.prepare(
-        // Refreshed at most twice a minute instead of on every poll: presence is
-        // read with a five-minute window, so a per-poll write bought nothing.
-        `UPDATE conversation_participants SET active_in_chat_at = CURRENT_TIMESTAMP
-         WHERE conversation_id = ?1 AND user_id = ?2
-           AND (
-             active_in_chat_at IS NULL
-             OR active_in_chat_at <= datetime('now', '-30 second')
-           )`,
-      ).bind(input.conversationId, input.userId),
-      env.DB.prepare(
-        // Without "read_at IS NULL" this rewrote every message in the chat on
-        // every poll — the message list refetches every few seconds, so a long
-        // conversation burned thousands of D1 row writes per minute.
-        `UPDATE conversation_messages SET read_at = CURRENT_TIMESTAMP
-         WHERE conversation_id = ?1 AND sender_user_id <> ?2
-           AND delivered_at IS NOT NULL AND deleted_at IS NULL
-           AND read_at IS NULL`,
-      ).bind(input.conversationId, input.userId),
-      env.DB.prepare(
-        `UPDATE user_notifications SET dismissed_at = COALESCE(dismissed_at, CURRENT_TIMESTAMP),
-             read_at = COALESCE(read_at, CURRENT_TIMESTAMP)
-         WHERE user_id = ?2 AND context = 'chat' AND entity_id = ?1
-           AND dismissed_at IS NULL`,
-      ).bind(input.conversationId, input.userId),
-    ]);
+    // Peeking at a chat from the list must not clear its unread state, so the
+    // read-marking batch is skipped when the caller only wants to look.
+    if (input.markRead !== false) {
+      await env.DB.batch([
+        env.DB.prepare(
+          // Refreshed at most twice a minute instead of on every poll: presence is
+          // read with a five-minute window, so a per-poll write bought nothing.
+          `UPDATE conversation_participants SET active_in_chat_at = CURRENT_TIMESTAMP
+           WHERE conversation_id = ?1 AND user_id = ?2
+             AND (
+               active_in_chat_at IS NULL
+               OR active_in_chat_at <= datetime('now', '-30 second')
+             )`,
+        ).bind(input.conversationId, input.userId),
+        env.DB.prepare(
+          // Without "read_at IS NULL" this rewrote every message in the chat on
+          // every poll — the message list refetches every few seconds, so a long
+          // conversation burned thousands of D1 row writes per minute.
+          `UPDATE conversation_messages SET read_at = CURRENT_TIMESTAMP
+           WHERE conversation_id = ?1 AND sender_user_id <> ?2
+             AND delivered_at IS NOT NULL AND deleted_at IS NULL
+             AND read_at IS NULL`,
+        ).bind(input.conversationId, input.userId),
+        env.DB.prepare(
+          `UPDATE user_notifications SET dismissed_at = COALESCE(dismissed_at, CURRENT_TIMESTAMP),
+               read_at = COALESCE(read_at, CURRENT_TIMESTAMP)
+           WHERE user_id = ?2 AND context = 'chat' AND entity_id = ?1
+             AND dismissed_at IS NULL`,
+        ).bind(input.conversationId, input.userId),
+      ]);
+    }
     const rows = await env.DB.prepare(
       `SELECT message.id, message.sender_user_id, message.message_type, message.encrypted_content,
               message.mime_type, message.file_name, message.created_at, message.media_group_id,

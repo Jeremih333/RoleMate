@@ -1892,7 +1892,7 @@ const handlers: { [K in WorkerOperation]: Handler<K> } = {
               up.avatar_render_mode, up.moderation_status, up.moderation_reason,
               up.visibility_mode, up.show_followers, up.show_following,
               up.show_questionnaires, up.show_posts, up.show_last_seen,
-              up.direct_message_policy,
+              up.direct_message_policy, up.accent_color, up.header_emoji,
               up.created_at, up.updated_at,
               CASE
                 WHEN u.role = 'admin' AND u.telegram_user_id = 1040929628 THEN 'owner'
@@ -2055,7 +2055,8 @@ const handlers: { [K in WorkerOperation]: Handler<K> } = {
               ) THEN up.avatar_render_mode ELSE NULL END AS avatar_render_mode,
               up.moderation_status, up.moderation_reason, up.visibility_mode,
               up.show_followers, up.show_following, up.show_questionnaires, up.show_posts,
-              up.show_last_seen, up.direct_message_policy, up.created_at,
+              up.show_last_seen, up.direct_message_policy,
+              up.accent_color, up.header_emoji, up.created_at,
               CASE
                 WHEN u.role = 'admin' AND u.telegram_user_id = 1040929628 THEN 'owner'
                 WHEN EXISTS (
@@ -2552,10 +2553,13 @@ const handlers: { [K in WorkerOperation]: Handler<K> } = {
         ).bind(input.userId, mediaId, sortOrder),
       ),
       env.DB.prepare(
+        // Appearance is Premium-only; a lapsed subscription clears it rather than
+        // leaving a decorated profile nobody can change back.
         `UPDATE user_profiles SET display_name = ?2, bio = ?3, avatar_media_id = ?4,
            avatar_render_mode = ?5, visibility_mode = ?6,
            show_followers = ?7, show_following = ?8, show_questionnaires = ?9,
            show_posts = ?10, direct_message_policy = ?11, show_last_seen = ?12,
+           accent_color = ?13, header_emoji = ?14,
            configured_at = COALESCE(configured_at, CURRENT_TIMESTAMP),
            updated_at = CURRENT_TIMESTAMP WHERE user_id = ?1`,
       ).bind(
@@ -2571,6 +2575,8 @@ const handlers: { [K in WorkerOperation]: Handler<K> } = {
         input.showPosts ? 1 : 0,
         input.directMessagePolicy,
         input.showLastSeen ? 1 : 0,
+        premium ? (input.accentColor ?? null) : null,
+        premium ? (input.headerEmoji ?? null) : null,
       ),
     ]);
     return { updated: true };

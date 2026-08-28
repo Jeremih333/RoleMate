@@ -98,6 +98,7 @@ describe('D1 migrations', () => {
       '0068_ready_to_chat_and_dead_matches.sql',
       '0069_message_hides.sql',
       '0070_drop_unused_update_lease_index.sql',
+      '0071_profile_appearance.sql',
     ]);
     expect(() => applyMigrations()).not.toThrow();
     const postColumns = database.prepare('PRAGMA table_info(telegram_posts)').all() as Array<{

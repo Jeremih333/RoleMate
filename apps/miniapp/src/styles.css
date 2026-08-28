@@ -9525,3 +9525,73 @@ body {
   flex: 0 0 44px;
   padding: 0;
 }
+
+/* ---- Profile appearance ----
+   A fixed palette rather than free-form colour: each entry has to stay readable
+   as a header tint under both themes. */
+:root {
+  --profile-accent-0: #c2415c;
+  --profile-accent-1: #d97a2b;
+  --profile-accent-2: #8b5cf6;
+  --profile-accent-3: #3f9e54;
+  --profile-accent-4: #2aa5a5;
+  --profile-accent-5: #3b7dd8;
+  --profile-accent-6: #cf4d8a;
+  --profile-accent-7: #6b7280;
+}
+.profile-hero[data-accent] {
+  background:
+    radial-gradient(120% 90% at 50% -20%, var(--hero-tint), transparent 72%),
+    color-mix(in srgb, var(--hero-tint) 26%, var(--surface-elevated));
+}
+.profile-hero-emoji {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, 46px);
+  gap: 10px;
+  overflow: hidden;
+  opacity: 0.14;
+  font-size: 26px;
+  line-height: 1;
+  pointer-events: none;
+  user-select: none;
+}
+.appearance-swatches {
+  display: grid;
+  grid-template-columns: repeat(8, minmax(0, 1fr));
+  gap: 8px;
+  margin-top: 10px;
+}
+.appearance-swatch {
+  aspect-ratio: 1;
+  border: 2px solid transparent;
+  border-radius: 50%;
+  padding: 0;
+  cursor: pointer;
+}
+.appearance-swatch.is-selected {
+  border-color: var(--text);
+  box-shadow: inset 0 0 0 3px var(--surface);
+}
+.appearance-emoji-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 10px;
+}
+.appearance-emoji {
+  display: grid;
+  width: 42px;
+  height: 42px;
+  place-items: center;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--surface-elevated);
+  font-size: 21px;
+  cursor: pointer;
+}
+.appearance-emoji.is-selected {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+}

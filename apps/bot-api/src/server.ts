@@ -888,6 +888,8 @@ export async function buildServer(
         showPosts: z.boolean().default(true),
         showLastSeen: z.boolean().default(true),
         directMessagePolicy: z.enum(['everyone', 'following_and_staff']).default('everyone'),
+        accentColor: z.number().int().min(0).max(15).nullable().optional(),
+        headerEmoji: z.string().trim().min(1).max(8).nullable().optional(),
       })
       .parse(request.body);
     return dataApi.execute('publicProfiles.update', { userId: session.userId, ...body });

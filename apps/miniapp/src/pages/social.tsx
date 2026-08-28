@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState, type CSSProperties } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import type { QueryClient } from '@tanstack/react-query';
 import {
@@ -97,6 +97,9 @@ export function PublicProfilePage() {
   const [displayName, setDisplayName] = useState('');
   const [bio, setBio] = useState('');
   const [avatarMediaIds, setAvatarMediaIds] = useState<string[]>([]);
+  const [accentColor, setAccentColor] = useState<number | null>(null);
+  const [headerEmoji, setHeaderEmoji] = useState<string | null>(null);
+  const premiumStatus = useQuery({ queryKey: ['premium-status'], queryFn: api.premiumStatus });
   const [avatarPickerIndex, setAvatarPickerIndex] = useState(0);
   const [botUploadNotice, setBotUploadNotice] = useState(false);
   const [profileIdOpen, setProfileIdOpen] = useState(false);
@@ -151,6 +154,8 @@ export function PublicProfilePage() {
         showPosts: profile.data?.show_posts !== 0,
         showLastSeen: profile.data?.show_last_seen !== 0,
         directMessagePolicy: profile.data?.direct_message_policy ?? 'everyone',
+        accentColor,
+        headerEmoji,
       });
       // A username typed but never claimed used to be silently dropped when the
       // editor closed, so saving the profile claims it too.
@@ -280,6 +285,8 @@ export function PublicProfilePage() {
     setDisplayName(profile.data.display_name);
     setBio(profile.data.bio);
     setAvatarMediaIds(avatarItems.map((item) => item.id));
+    setAccentColor(profile.data.accent_color ?? null);
+    setHeaderEmoji(profile.data.header_emoji ?? null);
     setUsername(usernames.data?.[0]?.username ?? '');
     save.reset();
     claimUsername.reset();
@@ -312,7 +319,8 @@ export function PublicProfilePage() {
         {ru.miniApp.social.profileTitle}
       </SectionTitle>
       <Card className="public-profile-own-card profile-sheet">
-        <div className="profile-hero">
+        <div className="profile-hero" {...profileHeroProps(profile.data)}>
+          <ProfileHeroEmoji emoji={profile.data.header_emoji ?? null} />
           <ProfileAvatarGallery
             items={avatarItems}
             name={displayName}
@@ -524,6 +532,57 @@ export function PublicProfilePage() {
                 {claimUsername.isError ? (
                   <div className="error-box mt-3">{claimUsername.error.message}</div>
                 ) : null}
+              </div>
+              <div className="mt-5">
+                <strong>{ru.miniApp.social.appearanceTitle}</strong>
+                <p className="mt-1 text-sm text-muted">{ru.miniApp.social.appearanceHint}</p>
+                {premiumStatus.data?.premium ? (
+                  <>
+                    <p className="mt-3 text-xs text-muted">{ru.miniApp.social.appearanceColor}</p>
+                    <div className="appearance-swatches">
+                      {Array.from({ length: PROFILE_ACCENTS }, (_, index) => (
+                        <button
+                          key={index}
+                          type="button"
+                          aria-label={`${ru.miniApp.social.appearanceColor} ${index + 1}`}
+                          aria-pressed={accentColor === index}
+                          className={`appearance-swatch${accentColor === index ? ' is-selected' : ''}`}
+                          style={{ background: `var(--profile-accent-${index})` }}
+                          onClick={() => setAccentColor(accentColor === index ? null : index)}
+                        />
+                      ))}
+                    </div>
+                    <p className="mt-3 text-xs text-muted">{ru.miniApp.social.appearanceEmoji}</p>
+                    <div className="appearance-emoji-row">
+                      <button
+                        type="button"
+                        className={`appearance-emoji${headerEmoji ? '' : ' is-selected'}`}
+                        aria-label={ru.miniApp.social.appearanceNone}
+                        onClick={() => setHeaderEmoji(null)}
+                      >
+                        <X className="h-4 w-4" />
+                      </button>
+                      {ru.miniApp.social.appearanceEmojiOptions.map((emoji) => (
+                        <button
+                          key={emoji}
+                          type="button"
+                          className={`appearance-emoji${headerEmoji === emoji ? ' is-selected' : ''}`}
+                          aria-pressed={headerEmoji === emoji}
+                          onClick={() => setHeaderEmoji(headerEmoji === emoji ? null : emoji)}
+                        >
+                          {emoji}
+                        </button>
+                      ))}
+                    </div>
+                  </>
+                ) : (
+                  <p className="mt-3 text-sm text-muted">
+                    {ru.miniApp.social.appearancePremium}{' '}
+                    <Link className="text-lilac underline" href="/premium">
+                      {ru.miniApp.social.appearanceOpenPremium}
+                    </Link>
+                  </p>
+                )}
               </div>
               <div className="mt-5">
                 <strong>{ru.miniApp.social.avatarTitle}</strong>
@@ -840,6 +899,37 @@ function parseFeaturedAudio(value: string): Array<{
   }
 }
 
+/**
+ * Header tint and background emoji, the way Telegram decorates a profile. The
+ * colour is an index into a fixed palette so it always stays readable.
+ */
+export const PROFILE_ACCENTS = 8;
+
+export function profileHeroProps(profile: {
+  accent_color?: number | null;
+  header_emoji?: string | null;
+}): { 'data-accent'?: string; style?: CSSProperties } {
+  const accent = profile.accent_color;
+  if (accent === null || accent === undefined) return {};
+  return {
+    'data-accent': String(accent),
+    // A custom property, which React types do not model on CSSProperties.
+    style: { '--hero-tint': `var(--profile-accent-${accent % PROFILE_ACCENTS})` } as CSSProperties,
+  };
+}
+
+export function ProfileHeroEmoji({ emoji }: { emoji?: string | null | undefined }) {
+  if (!emoji) return null;
+  // A quiet repeated wash behind the portrait, not a single large glyph.
+  return (
+    <span className="profile-hero-emoji" aria-hidden>
+      {Array.from({ length: 24 }, (_, index) => (
+        <span key={index}>{emoji}</span>
+      ))}
+    </span>
+  );
+}
+
 function ProfileUsernamesLine({ aliases }: { aliases: string[] }) {
   const [primary, ...additional] = aliases;
   if (!primary) return null;
@@ -1042,7 +1132,8 @@ export function PublicProfileViewerPage() {
         </SectionTitle>
       </div>
       <Card className="profile-sheet">
-        <div className="profile-hero">
+        <div className="profile-hero" {...profileHeroProps(profile.data)}>
+          <ProfileHeroEmoji emoji={profile.data.header_emoji ?? null} />
           <ProfileAvatarGallery
             items={avatarItems}
             name={profile.data.display_name}

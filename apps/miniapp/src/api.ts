@@ -249,6 +249,8 @@ export const api = {
     showPosts: boolean;
     showLastSeen: boolean;
     directMessagePolicy: 'everyone' | 'following_and_staff';
+    accentColor?: number | null;
+    headerEmoji?: string | null;
   }) =>
     request<{ updated: true }>('/public-profile', {
       method: 'PUT',
@@ -1079,6 +1081,8 @@ export interface PublicUserProfile {
   id: string;
   display_name: string;
   bio: string;
+  accent_color?: number | null;
+  header_emoji?: string | null;
   avatar_media_id: string | null;
   avatar_render_mode: 'photo' | 'animation' | 'still' | null;
   avatar_media_items?: string;

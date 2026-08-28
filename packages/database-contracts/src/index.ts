@@ -279,6 +279,10 @@ export const workerOperations = {
     showPosts: z.boolean().default(true),
     showLastSeen: z.boolean().default(true),
     directMessagePolicy: z.enum(['everyone', 'following_and_staff']).default('everyone'),
+    // An index into the fixed palette, not a free-form colour: the palette is
+    // picked to stay readable on both themes.
+    accentColor: z.number().int().min(0).max(15).nullable().optional(),
+    headerEmoji: z.string().trim().min(1).max(8).nullable().optional(),
   }),
   'publicProfiles.updatePrivacy': z.object({
     userId: z.string().uuid(),

@@ -2776,6 +2776,15 @@ export function ChatReactionSummary({
   onReact: (reaction: ChatReaction) => void;
 }) {
   const counts = parseMessageReactions(message.reactions);
+  // The library is already cached for the reaction shelf; it tells a chip what
+  // kind of emoji it holds, so a static one is never asked for a Lottie document
+  // it does not have.
+  const library = useQuery({
+    queryKey: ['custom-emoji-packs'],
+    queryFn: api.customEmojiPacks,
+    staleTime: 5 * 60_000,
+    enabled: counts.some((item) => isCustomEmojiKey(item.reaction)),
+  });
   if (!counts.length) return null;
   return (
     <div className="chat-reaction-summary">
@@ -2793,7 +2802,15 @@ export function ChatReactionSummary({
           }
         >
           {isCustomEmojiKey(item.reaction) ? (
-            <CustomEmojiGlyph customEmojiId={item.reaction} renderKind="lottie" size={16} animate />
+            <CustomEmojiGlyph
+              customEmojiId={item.reaction}
+              renderKind={
+                library.data?.emoji.find((emoji) => emoji.custom_emoji_id === item.reaction)
+                  ?.render_kind ?? 'static'
+              }
+              size={16}
+              animate
+            />
           ) : (
             reactionEmoji(
               item.reaction,

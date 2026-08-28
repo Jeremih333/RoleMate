@@ -73,6 +73,7 @@ import { AnimatePresence, motion, useReducedMotion } from 'framer-motion';
 import { useUserStore } from '../store.js';
 import { DoubleHeartIcon } from '../components/double-heart-icon.js';
 import { useViewerTime } from '../components/viewer-time.js';
+import { parseMessageReactions } from '../components/chat-reactions.js';
 
 export function MatchesPage() {
   const queryClient = useQueryClient();
@@ -2669,30 +2670,14 @@ function reactionEmoji(value: string, label?: string): string {
   return legacy[value] ?? label?.split(/\s/u)[0] ?? value;
 }
 
-function ChatReactionSummary({
+export function ChatReactionSummary({
   message,
   onReact,
 }: {
   message: ConversationMessage;
   onReact: (reaction: ChatReaction) => void;
 }) {
-  let counts: Array<{ reaction: ChatReaction; count: number }> = [];
-  try {
-    const parsed: unknown = JSON.parse(message.reactions || '[]');
-    if (Array.isArray(parsed)) {
-      counts = parsed.filter(
-        (item): item is { reaction: ChatReaction; count: number } =>
-          typeof item === 'object' &&
-          item !== null &&
-          typeof Reflect.get(item, 'reaction') === 'string' &&
-          String(Reflect.get(item, 'reaction')).trim().length > 0 &&
-          String(Reflect.get(item, 'reaction')).length <= 16 &&
-          typeof Reflect.get(item, 'count') === 'number',
-      );
-    }
-  } catch {
-    counts = [];
-  }
+  const counts = parseMessageReactions(message.reactions);
   if (!counts.length) return null;
   return (
     <div className="chat-reaction-summary">

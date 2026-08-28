@@ -1030,6 +1030,14 @@ export function PublicProfileViewerPage() {
     refetchOnWindowFocus: 'always',
   });
   const resolvedUserId = profile.data?.id;
+  // A link to your own profile — from a forwarded message, a mention or a
+  // username — used to open the stranger's view of yourself, with Follow and
+  // Block on it. Send it to the page that belongs to you instead.
+  const ownUserId = useUserStore((state) => state.user?.id);
+  const viewingSelf = Boolean(ownUserId && resolvedUserId && ownUserId === resolvedUserId);
+  useEffect(() => {
+    if (viewingSelf) navigate('/profile', { replace: true });
+  }, [navigate, viewingSelf]);
   const profilePeople = useQuery({
     queryKey: ['profile-people', resolvedUserId, openPeopleSection],
     queryFn: () =>
@@ -1357,6 +1365,7 @@ export function PublicProfileViewerPage() {
           </Button>
           {viewerIsOwner ? (
             <Button
+              className="profile-action-icon"
               variant={profile.data.owner_liked ? 'primary' : 'secondary'}
               loading={rate.isPending}
               aria-label={ru.miniApp.social.ownerBlessAction}

@@ -77,6 +77,7 @@ import { parseMessageReactions } from '../components/chat-reactions.js';
 
 export function MatchesPage() {
   const queryClient = useQueryClient();
+  const { confirm, dialog } = useConfirmPrompt();
   // Names and headlines here come from the live profile, but the list was served
   // from cache on every return to the screen, so renames never showed.
   const matches = useQuery({
@@ -102,6 +103,13 @@ export function MatchesPage() {
     mutationFn: (userId: string) => api.swipe(userId, 'skip'),
     onSuccess: () => void queryClient.invalidateQueries({ queryKey: ['incoming-likes'] }),
   });
+  const dismissMatch = useMutation({
+    mutationFn: (matchId: string) => api.dismissMatch(matchId),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ['matches'] });
+      void queryClient.invalidateQueries({ queryKey: ['conversations'] });
+    },
+  });
   if (matches.isLoading) return <Skeleton className="h-80" />;
   return (
     <div className="matches-page">
@@ -110,28 +118,36 @@ export function MatchesPage() {
       </SectionTitle>
       <div className="space-y-3">
         {(matches.data ?? []).map((match) => (
-          <Card key={match.id} className="flex items-center gap-4 p-4">
-            <Link
-              className="profile-author-link flex min-w-0 flex-1 items-center gap-4"
-              href={`/profiles/${match.other_user_id}`}
-            >
-              <ProfileAvatar
-                mediaId={match.avatar_media_id}
-                renderMode={match.avatar_render_mode}
-                name={match.display_name}
-              />
-              <div className="min-w-0 flex-1">
-                <strong className="inline-flex items-center gap-1">
-                  {match.display_name ?? ru.miniApp.community.roleplayer}
-                  <VerificationBadge kind={match.verification_kind} premium={match.has_premium} />
-                </strong>
-                <p className="truncate text-sm text-muted">{match.short_headline}</p>
-              </div>
-            </Link>
-            <a className="button button-secondary" href="/chats">
-              <MessageCircle className="h-4 w-4" />
-            </a>
-          </Card>
+          <SwipeToDismiss
+            key={match.id}
+            label={ru.miniApp.community.dismissMatch}
+            onDismiss={() =>
+              confirm(ru.miniApp.community.dismissMatchConfirm, () => dismissMatch.mutate(match.id))
+            }
+          >
+            <Card className="flex items-center gap-4 p-4">
+              <Link
+                className="profile-author-link flex min-w-0 flex-1 items-center gap-4"
+                href={`/profiles/${match.other_user_id}`}
+              >
+                <ProfileAvatar
+                  mediaId={match.avatar_media_id}
+                  renderMode={match.avatar_render_mode}
+                  name={match.display_name}
+                />
+                <div className="min-w-0 flex-1">
+                  <strong className="inline-flex items-center gap-1">
+                    {match.display_name ?? ru.miniApp.community.roleplayer}
+                    <VerificationBadge kind={match.verification_kind} premium={match.has_premium} />
+                  </strong>
+                  <p className="truncate text-sm text-muted">{match.short_headline}</p>
+                </div>
+              </Link>
+              <a className="button button-secondary" href="/chats">
+                <MessageCircle className="h-4 w-4" />
+              </a>
+            </Card>
+          </SwipeToDismiss>
         ))}
         {!matches.data?.length ? (
           <EmptyState
@@ -207,6 +223,7 @@ export function MatchesPage() {
         ) : null}
         {incoming.isError ? <div className="error-box">{incoming.error.message}</div> : null}
       </div>
+      {dialog}
     </div>
   );
 }

@@ -1274,7 +1274,7 @@ export function PublicProfileViewerPage() {
             }))}
           />
         ) : null}
-        <div className="profile-section-links mt-4">
+        <div className="profile-section-links">
           {profile.data.show_followers !== 0 ? (
             <button
               className="status-pill"
@@ -1734,6 +1734,10 @@ export function PostCard({
   const [viewDelta, setViewDelta] = useState(0);
   const [body, setBody] = useState('');
   const [replyTo, setReplyTo] = useState<{ id: string; name: string } | null>(null);
+  const [replyBody, setReplyBody] = useState('');
+  // The main box stays a single line until it is used, the way YouTube shows it;
+  // the reply box is opened underneath the comment it answers.
+  const [composerOpen, setComposerOpen] = useState(false);
   const [editingCommentId, setEditingCommentId] = useState<string | null>(null);
   const [editingCommentBody, setEditingCommentBody] = useState('');
   const [commentSort, setCommentSort] = useState<'interesting' | 'new'>('interesting');
@@ -1850,10 +1854,18 @@ export function PostCard({
     },
   });
   const comment = useMutation({
-    mutationFn: () => api.addPostComment(post.id, body, replyTo?.id),
-    onSuccess: () => {
-      setBody('');
-      setReplyTo(null);
+    mutationFn: ({ text, parentCommentId }: { text: string; parentCommentId?: string }) =>
+      api.addPostComment(post.id, text, parentCommentId),
+    onSuccess: (_result, submitted) => {
+      if (submitted.parentCommentId) {
+        setReplyTo(null);
+        setReplyBody('');
+        // A new reply is only visible inside an expanded thread.
+        setExpandedThreads((current) => new Set(current).add(submitted.parentCommentId!));
+      } else {
+        setBody('');
+        setComposerOpen(false);
+      }
       void queryClient.invalidateQueries({ queryKey: ['post-comments', post.id] });
       invalidatePostLists(queryClient);
     },
@@ -2783,36 +2795,43 @@ export function PostCard({
               ) : null}
             </div>
           </div>
-          {replyTo ? (
-            <div className="comment-reply-context">
-              <span>{ru.miniApp.social.replyPlaceholder(replyTo.name)}</span>
-              <button type="button" onClick={() => setReplyTo(null)}>
-                {ru.miniApp.social.cancelReply}
-              </button>
-            </div>
-          ) : null}
-          <div className="comment-composer comment-composer-primary">
+          <div
+            className={`comment-composer comment-composer-primary ${
+              composerOpen || body ? 'is-open' : ''
+            }`}
+          >
             <textarea
               className="comment-textarea"
               maxLength={1000}
-              placeholder={
-                replyTo
-                  ? ru.miniApp.social.replyPlaceholder(replyTo.name)
-                  : ru.miniApp.social.commentPlaceholder
-              }
+              rows={composerOpen || body ? 3 : 1}
+              placeholder={ru.miniApp.social.commentPlaceholder}
               value={body}
+              onFocus={() => setComposerOpen(true)}
               onChange={(event) => setBody(event.target.value)}
             />
-            <div className="comment-composer-footer">
-              <span>{body.length}/1000</span>
-              <Button
-                disabled={!body.trim()}
-                loading={comment.isPending}
-                onClick={() => comment.mutate()}
-              >
-                {ru.miniApp.social.sendComment}
-              </Button>
-            </div>
+            {composerOpen || body ? (
+              <div className="comment-composer-footer">
+                <span>{body.length}/1000</span>
+                <div className="flex flex-wrap gap-2">
+                  <Button
+                    variant="secondary"
+                    onClick={() => {
+                      setBody('');
+                      setComposerOpen(false);
+                    }}
+                  >
+                    {ru.miniApp.social.cancelReply}
+                  </Button>
+                  <Button
+                    disabled={!body.trim()}
+                    loading={comment.isPending && !comment.variables?.parentCommentId}
+                    onClick={() => comment.mutate({ text: body.trim() })}
+                  >
+                    {ru.miniApp.social.sendComment}
+                  </Button>
+                </div>
+              </div>
+            ) : null}
           </div>
           <div className="space-y-3">
             {comments.data
@@ -2933,7 +2952,13 @@ export function PostCard({
                         variant="ghost"
                         aria-label={ru.miniApp.social.replyToComment}
                         title={ru.miniApp.social.replyToComment}
-                        onClick={() => setReplyTo({ id: item.id, name: item.display_name })}
+                        onClick={() => {
+                          const target = item.parent_comment_id ?? item.id;
+                          setReplyTo((current) =>
+                            current?.id === target ? null : { id: target, name: item.display_name },
+                          );
+                          setReplyBody('');
+                        }}
                       >
                         <MessageCircle className="h-3.5 w-3.5" aria-hidden />
                       </Button>
@@ -2976,6 +3001,50 @@ export function PostCard({
                         </Button>
                       ) : null}
                     </div>
+                    {replyTo?.id === (item.parent_comment_id ?? item.id) ? (
+                      <div className="comment-composer comment-composer-reply is-open">
+                        <textarea
+                          className="comment-textarea"
+                          maxLength={1000}
+                          rows={2}
+                          autoFocus
+                          placeholder={ru.miniApp.social.replyPlaceholder(replyTo.name)}
+                          value={replyBody}
+                          onChange={(event) => setReplyBody(event.target.value)}
+                        />
+                        <div className="comment-composer-footer">
+                          <span>{replyBody.length}/1000</span>
+                          <div className="flex flex-wrap gap-2">
+                            <Button
+                              variant="secondary"
+                              onClick={() => {
+                                setReplyTo(null);
+                                setReplyBody('');
+                              }}
+                            >
+                              {ru.miniApp.social.cancelReply}
+                            </Button>
+                            <Button
+                              disabled={!replyBody.trim()}
+                              loading={
+                                comment.isPending && Boolean(comment.variables?.parentCommentId)
+                              }
+                              onClick={() =>
+                                comment.mutate({
+                                  text: replyBody.trim(),
+                                  parentCommentId: replyTo.id,
+                                })
+                              }
+                            >
+                              {ru.miniApp.social.sendComment}
+                            </Button>
+                          </div>
+                        </div>
+                        {comment.isError ? (
+                          <div className="error-box mt-2">{comment.error.message}</div>
+                        ) : null}
+                      </div>
+                    ) : null}
                     {!item.parent_comment_id && item.thread_reply_count > 0 ? (
                       <button
                         className="comment-replies-toggle"

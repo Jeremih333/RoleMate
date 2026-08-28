@@ -56,9 +56,12 @@ export function ProfileAvatar({
 }
 
 function AvatarFallback({ className, name }: { className: string; name: string }) {
+  // The initial is always wrapped: some places restyle .profile-avatar to a
+  // block, which would drop the flex centring and leave the letter in the
+  // corner. The wrapper centres itself no matter how the circle is displayed.
   return (
     <span className={className} aria-label={name} role="img">
-      {avatarInitial(name)}
+      <AvatarLetter name={name} />
     </span>
   );
 }
@@ -67,8 +70,13 @@ function AvatarLetter({ name }: { name: string }) {
   return <span className="profile-avatar-letter">{avatarInitial(name)}</span>;
 }
 
-function avatarInitial(name: string) {
-  return name.trim().slice(0, 1).toLocaleUpperCase() || 'R';
+/**
+ * The first character of a name, taken by code point so that an emoji or any
+ * other surrogate pair is not sliced in half into an unrenderable glyph.
+ */
+export function avatarInitial(name: string): string {
+  const [first] = Array.from(name.trim());
+  return first ? first.toLocaleUpperCase() : 'R';
 }
 
 function AnimatedProfileAvatar({

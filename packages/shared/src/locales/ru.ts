@@ -1416,6 +1416,9 @@ export const ru = {
       restoreChat: 'Вернуть из архива',
       closePreview: 'Закрыть предпросмотр',
       dismissLike: 'Не подходит',
+      dismissMatch: 'Убрать из симпатий',
+      dismissMatchConfirm:
+        'Убрать эту симпатию? Взаимный интерес будет снят, а общий чат закрыт у обоих.',
       pinChat: 'Закрепить чат',
       unpinChat: 'Открепить чат',
       youPrefix: 'Вы:',

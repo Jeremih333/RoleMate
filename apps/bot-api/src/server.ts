@@ -2866,6 +2866,11 @@ export async function buildServer(
     const session = await authenticate(request);
     return dataApi.execute('matches.list', { userId: session.userId, limit: 50 });
   });
+  app.delete('/api/matches/:matchId', async (request) => {
+    const session = await mutate(request);
+    const { matchId } = z.object({ matchId: z.string().uuid() }).parse(request.params);
+    return dataApi.execute('matches.dismiss', { userId: session.userId, matchId });
+  });
   app.post('/api/conversations/:conversationId/control', async (request) => {
     const session = await mutate(request);
     const params = z.object({ conversationId: z.string().uuid() }).parse(request.params);

@@ -710,6 +710,8 @@ export const api = {
       body: JSON.stringify({ productId }),
     }),
   matches: () => request<Match[]>('/matches'),
+  dismissMatch: (matchId: string) =>
+    request<{ dismissed: true }>(`/matches/${matchId}`, { method: 'DELETE', body: '{}' }),
   blockedUsers: () => request<BlockedUser[]>('/blocks'),
   block: (blockedUserId: string, reason = 'user_request') =>
     request<{ blocked: true }>('/blocks', {

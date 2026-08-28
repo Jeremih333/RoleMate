@@ -5962,9 +5962,15 @@ const handlers: { [K in WorkerOperation]: Handler<K> } = {
   },
   'matches.list': async (env, input) => {
     const rows = await env.DB.prepare(
+      // The name and avatar have to come from the public profile: the legacy
+      // questionnaire row keeps whatever the person was called when they filled
+      // it in, which is why renamed partners kept their old identity here.
       `SELECT m.id, m.status, m.matched_at, c.id AS conversation_id,
-              other.id AS other_user_id, p.display_name, p.short_headline,
-              p.fandoms, p.genres, p.avatar_media_id, p.avatar_render_mode,
+              other.id AS other_user_id,
+              COALESCE(up.display_name, p.display_name) AS display_name,
+              p.short_headline, p.fandoms, p.genres,
+              COALESCE(up.avatar_media_id, p.avatar_media_id) AS avatar_media_id,
+              COALESCE(up.avatar_render_mode, p.avatar_render_mode) AS avatar_render_mode,
               CASE
                 WHEN other.role = 'admin' AND other.telegram_user_id = 1040929628 THEN 'owner'
                 WHEN EXISTS (
@@ -5989,6 +5995,7 @@ const handlers: { [K in WorkerOperation]: Handler<K> } = {
        FROM matches m
        JOIN users other ON other.id = CASE WHEN m.user_a_id = ?1 THEN m.user_b_id ELSE m.user_a_id END
        LEFT JOIN profiles p ON p.user_id = other.id
+       LEFT JOIN user_profiles up ON up.user_id = other.id
        LEFT JOIN conversations c ON c.match_id = m.id
        WHERE (m.user_a_id = ?1 OR m.user_b_id = ?1)
          AND m.status = 'active' AND m.source = 'mutual'
@@ -5998,6 +6005,32 @@ const handlers: { [K in WorkerOperation]: Handler<K> } = {
       .bind(input.userId, input.limit)
       .all();
     return rows.results.map((row) => premiumPresentation(row));
+  },
+  /**
+   * Closes a mutual match the same way leaving its chat does. Without this the
+   * list of mutual interest could only ever grow: every match stayed on the
+   * screen for good, including the ones both sides had lost interest in.
+   */
+  'matches.dismiss': async (env, input) => {
+    const match = await env.DB.prepare(
+      `SELECT id FROM matches
+       WHERE id = ?1 AND status = 'active' AND (user_a_id = ?2 OR user_b_id = ?2)`,
+    )
+      .bind(input.matchId, input.userId)
+      .first<{ id: string }>();
+    if (!match) throw new ApiError(404, 'MATCH_NOT_FOUND', 'Match not found');
+    await env.DB.batch([
+      env.DB.prepare(
+        `UPDATE matches SET status = 'closed', closed_at = CURRENT_TIMESTAMP,
+           closed_by_user_id = ?2, close_reason = 'user_request'
+         WHERE id = ?1`,
+      ).bind(input.matchId, input.userId),
+      env.DB.prepare(
+        `UPDATE conversations SET status = 'closed', closed_at = CURRENT_TIMESTAMP
+         WHERE match_id = ?1 AND status <> 'closed'`,
+      ).bind(input.matchId),
+    ]);
+    return { dismissed: true };
   },
   'conversations.startDirect': async (env, input) => {
     if (input.userId === input.targetUserId) {

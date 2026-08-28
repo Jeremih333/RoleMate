@@ -3470,38 +3470,26 @@ audio {
 .comment-composer-primary {
   margin-bottom: 18px;
 }
-.comment-reply-context {
-  display: flex;
-  min-width: 0;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  margin-bottom: 8px;
-  padding: 9px 12px;
-  border-radius: 12px;
-  color: var(--muted);
-  background: rgba(255, 255, 255, 0.045);
-  font-size: 12px;
-}
-.comment-reply-context span {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.comment-reply-context button {
-  flex: 0 0 auto;
-  color: #c8afff;
-  font-weight: 700;
+/* The reply box belongs to the comment above it, so it is indented with the
+   thread rather than floating at the top of the list. */
+.comment-composer-reply {
+  margin: 10px 0 4px;
 }
 .comment-composer:focus-within {
   border-color: #9d73ef;
   box-shadow: 0 0 0 3px rgba(140, 87, 225, 0.12);
 }
+/* Collapsed, the box is a single inviting line; it grows once it is being
+   written in, the way YouTube's comment field behaves. */
 .comment-textarea {
   display: block;
   width: 100%;
-  min-height: 112px;
+  min-height: 46px;
+  resize: none;
+  padding: 13px 15px;
+}
+.comment-composer.is-open .comment-textarea {
+  min-height: 96px;
   resize: vertical;
   padding: 14px 15px 8px;
   border: 0;
@@ -4562,11 +4550,29 @@ audio {
   opacity: 0;
 }
 
+/* The letter is centred by its own box rather than by the circle's layout, so
+   it stays in the middle wherever .profile-avatar has been restyled, and it is
+   scaled from the circle it sits in instead of inheriting the surrounding text
+   size. */
 .profile-avatar-letter {
   position: absolute;
   inset: 0;
   display: grid;
   place-items: center;
+  font-size: 1.05rem;
+  font-weight: 800;
+  line-height: 1;
+  letter-spacing: 0;
+  text-transform: uppercase;
+}
+.comment-avatar-link .profile-avatar .profile-avatar-letter {
+  font-size: 1.15rem;
+}
+.profile-avatar-large .profile-avatar-letter {
+  font-size: 2.6rem;
+}
+.post-top-comment .profile-avatar .profile-avatar-letter {
+  font-size: 0.85rem;
 }
 
 .profile-avatar-large {
@@ -9218,9 +9224,13 @@ body {
    A tinted hero with the portrait centred, then flat information rows where the
    value leads and a muted label sits under it, then a settings-style list of
    counts. Replaces the boxed panels and the four cramped stat tiles. */
+/* One rhythm for the whole card: the hero and the info rows keep their own
+   padding, everything else is inset by the same 18px and separated by 14px, and
+   the card closes with the same 18px so the last block is not flush with its
+   edge. */
 .profile-sheet {
   position: relative;
-  padding: 0;
+  padding: 0 0 18px;
   overflow: hidden;
 }
 
@@ -9353,8 +9363,17 @@ body {
 .profile-sheet > .profile-link-list {
   margin-top: 4px;
 }
-.profile-sheet > .swipe-playlist {
+.profile-sheet > .swipe-playlist,
+.profile-sheet > .profile-section-links,
+.profile-sheet > .error-box,
+.profile-sheet > p {
   margin-top: 14px;
+}
+.profile-sheet > .profile-actions-row {
+  padding-top: 16px;
+}
+.profile-sheet > .owner-blessing {
+  margin-top: 16px;
 }
 /* The card is a plain block and .button is inline-flex, so symmetric margins left
    the action shrunk to its label and hugging the left edge instead of centred.
@@ -9363,7 +9382,6 @@ body {
   display: flex;
   width: calc(100% - 36px);
   margin-top: 14px;
-  margin-bottom: 18px;
 }
 
 /* Telegram's unread affordances: a count on the row and a line marking where

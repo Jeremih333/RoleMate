@@ -159,7 +159,7 @@ export function MusicPlayerProvider({ children }: { children: ReactNode }) {
         target !== undefined && currentTrack?.id === target.id && currentTrack.src === target.src;
       pendingSeekRef.current = Math.max(0, startPosition);
       persistOrderRef.current = persistOrder ?? null;
-      setDrawerOpen((open) => open && tracks.length > 1);
+      setDrawerOpen((open) => open && tracks.length > 0);
       setQueue(tracks);
       setCurrentIndex(safeIndex);
       setPosition(Math.max(0, startPosition));
@@ -299,10 +299,9 @@ export function MusicPlayerProvider({ children }: { children: ReactNode }) {
           <button
             className="global-music-title"
             type="button"
-            disabled={queue.length <= 1}
-            onClick={() => {
-              if (queue.length > 1) setDrawerOpen(true);
-            }}
+            // A single track has a playlist too: it holds the cover, the title
+            // and the queue actions, so the drawer opens for one track as well.
+            onClick={() => setDrawerOpen(true)}
           >
             <strong>{currentTrack.title}</strong>
             <span>
@@ -327,15 +326,15 @@ export function MusicPlayerProvider({ children }: { children: ReactNode }) {
                 >
                   <SkipForward />
                 </button>
-                <button
-                  type="button"
-                  onClick={() => setDrawerOpen(true)}
-                  aria-label={ru.miniApp.musicPlayer.openPlaylist}
-                >
-                  <ListMusic />
-                </button>
               </>
             ) : null}
+            <button
+              type="button"
+              onClick={() => setDrawerOpen(true)}
+              aria-label={ru.miniApp.musicPlayer.openPlaylist}
+            >
+              <ListMusic />
+            </button>
             <button
               type="button"
               onClick={() => {
@@ -355,7 +354,7 @@ export function MusicPlayerProvider({ children }: { children: ReactNode }) {
           </div>
         </div>
       ) : null}
-      {drawerOpen && currentTrack && queue.length > 1 ? (
+      {drawerOpen && currentTrack ? (
         <div
           className="music-drawer-backdrop"
           role="presentation"

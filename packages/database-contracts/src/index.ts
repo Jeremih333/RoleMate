@@ -621,6 +621,10 @@ export const workerOperations = {
     variantId: z.string().uuid(),
   }),
   'matches.list': z.object({ userId: z.string().uuid() }).merge(paginationSchema),
+  'matches.dismiss': z.object({
+    userId: z.string().uuid(),
+    matchId: z.string().uuid(),
+  }),
   'conversations.startDirect': z.object({
     userId: z.string().uuid(),
     targetUserId: z.string().uuid(),

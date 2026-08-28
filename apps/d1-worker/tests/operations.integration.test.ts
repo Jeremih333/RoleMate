@@ -163,6 +163,66 @@ async function onboard(id: number): Promise<string> {
 }
 
 describe('D1 domain operations', () => {
+  it('shows the public identity in mutual matches and lets one be dismissed', async () => {
+    const viewerId = await onboard(2_205);
+    const partnerId = await onboard(2_206);
+    sqlite
+      .prepare(
+        `INSERT INTO user_profiles (user_id, display_name, bio) VALUES (?, 'Public identity', '')
+         ON CONFLICT(user_id) DO UPDATE SET display_name = 'Public identity'`,
+      )
+      .run(partnerId);
+    sqlite
+      .prepare("UPDATE profiles SET display_name = 'Old questionnaire name' WHERE user_id = ?")
+      .run(partnerId);
+    for (const [userId, targetUserId, key] of [
+      [viewerId, partnerId, 'match-identity-first'],
+      [partnerId, viewerId, 'match-identity-second'],
+    ] as const) {
+      await executeOperation(
+        env,
+        'swipes.create',
+        { userId, targetUserId, action: 'like', source: 'miniapp', idempotencyKey: key },
+        crypto.randomUUID(),
+      );
+    }
+
+    const listMatches = async (userId: string) =>
+      (await executeOperation(
+        env,
+        'matches.list',
+        { userId, limit: 20 },
+        crypto.randomUUID(),
+      )) as Array<{ id: string; display_name: string }>;
+
+    const matches = await listMatches(viewerId);
+    expect(matches).toHaveLength(1);
+    // The questionnaire keeps the name the partner signed up with; the list has
+    // to show the name their profile carries now.
+    expect(matches[0]?.display_name).toBe('Public identity');
+
+    await executeOperation(
+      env,
+      'matches.dismiss',
+      { userId: viewerId, matchId: matches[0]!.id },
+      crypto.randomUUID(),
+    );
+    await expect(listMatches(viewerId)).resolves.toEqual([]);
+    await expect(listMatches(partnerId)).resolves.toEqual([]);
+    expect(
+      sqlite.prepare('SELECT status, close_reason FROM matches WHERE id = ?').get(matches[0]!.id),
+    ).toEqual({ status: 'closed', close_reason: 'user_request' });
+
+    await expect(
+      executeOperation(
+        env,
+        'matches.dismiss',
+        { userId: viewerId, matchId: matches[0]!.id },
+        crypto.randomUUID(),
+      ),
+    ).rejects.toMatchObject({ code: 'MATCH_NOT_FOUND' });
+  });
+
   it('lets a user without a questionnaire publish a post', async () => {
     const authorId = await upsert(9_310_001);
     await executeOperation(

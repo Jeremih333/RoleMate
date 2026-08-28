@@ -163,15 +163,296 @@ async function onboard(id: number): Promise<string> {
 }
 
 describe('D1 domain operations', () => {
+  it('caps how many packs one person can import into the shared library', async () => {
+    const userId = await onboard(2_631);
+    sqlite
+      .prepare("INSERT INTO app_config (key, value) VALUES ('custom_emoji_packs_per_user', '2')")
+      .run();
+    const importPack = (name: string) =>
+      executeOperation(
+        env,
+        'customEmoji.import',
+        {
+          userId,
+          setName: name,
+          title: name,
+          emoji: [
+            {
+              customEmojiId: String(9_000 + name.length * 7),
+              fileId: `file-${name}`,
+              renderKind: 'static',
+              needsRepainting: false,
+            },
+          ],
+        },
+        crypto.randomUUID(),
+      );
+    await importPack('PackOne');
+    await importPack('PackTwo');
+    await expect(importPack('PackThree')).rejects.toMatchObject({
+      code: 'CUSTOM_EMOJI_PACK_LIMIT',
+    });
+    // Re-importing something already in the library is always allowed: it does
+    // not add a pack, it refreshes one.
+    await expect(importPack('PackOne')).resolves.toMatchObject({ reimported: true });
+  });
+
+  it('reacts with a custom emoji, groups it by id and refuses an unknown one', async () => {
+    const first = await onboard(2_621);
+    const second = await onboard(2_622);
+    const conversation = (await executeOperation(
+      env,
+      'conversations.startDirect',
+      { userId: first, targetUserId: second },
+      crypto.randomUUID(),
+    )) as { conversationId: string };
+    const message = (await executeOperation(
+      env,
+      'conversations.recordMiniAppMessage',
+      {
+        userId: second,
+        conversationId: conversation.conversationId,
+        destinationMessageId: 4_101,
+        messageType: 'text',
+        encryptedContent: 'encrypted.custom-emoji-reaction.payload',
+      },
+      crypto.randomUUID(),
+    )) as { messageId: string };
+    await executeOperation(
+      env,
+      'customEmoji.import',
+      {
+        userId: first,
+        setName: 'ReactionPack',
+        title: 'Reactions',
+        emoji: [
+          { customEmojiId: '8001', fileId: 'file-a', renderKind: 'static', needsRepainting: false },
+        ],
+      },
+      crypto.randomUUID(),
+    );
+
+    const react = (customEmojiId?: string) =>
+      executeOperation(
+        env,
+        'conversations.messages.react',
+        {
+          userId: first,
+          conversationId: conversation.conversationId,
+          messageId: message.messageId,
+          reaction: customEmojiId ? 'custom' : 'heart',
+          ...(customEmojiId ? { customEmojiId } : {}),
+        },
+        crypto.randomUUID(),
+      );
+
+    // An emoji nobody imported cannot be attached to a message.
+    await expect(react('9999')).rejects.toMatchObject({ code: 'CUSTOM_EMOJI_NOT_FOUND' });
+
+    await expect(react('8001')).resolves.toMatchObject({ reaction: '8001' });
+    const listed = (await executeOperation(
+      env,
+      'conversations.messages.list',
+      { userId: first, conversationId: conversation.conversationId, limit: 20 },
+      crypto.randomUUID(),
+    )) as Array<{ id: string; own_reaction: string | null; reactions: string }>;
+    const row = listed.find((item) => item.id === message.messageId);
+    expect(row?.own_reaction).toBe('8001');
+    expect(JSON.parse(row?.reactions ?? '[]')).toEqual([{ reaction: '8001', count: 1 }]);
+
+    // Choosing the same custom emoji again clears it, like the built-in ones.
+    await expect(react('8001')).resolves.toMatchObject({ reaction: null });
+    // The built-in reactions still work next to it, and the stored marker never
+    // exceeds the sixteen characters the column allows.
+    await expect(react()).resolves.toMatchObject({ reaction: 'heart' });
+    expect(
+      sqlite
+        .prepare(
+          'SELECT reaction, custom_emoji_id FROM conversation_message_reactions WHERE message_id = ?',
+        )
+        .get(message.messageId),
+    ).toEqual({ reaction: 'heart', custom_emoji_id: null });
+  });
+
+  it('keeps header decoration on Premium and monochrome emoji, and rolls it back when Premium ends', async () => {
+    const userId = await onboard(2_611);
+    const viewerId = await onboard(2_612);
+    await executeOperation(
+      env,
+      'customEmoji.import',
+      {
+        userId,
+        setName: 'AdaptivePack',
+        title: 'Adaptive',
+        emoji: [
+          {
+            customEmojiId: '7001',
+            fileId: 'file-mono',
+            renderKind: 'static',
+            needsRepainting: true,
+          },
+          {
+            customEmojiId: '7002',
+            fileId: 'file-colour',
+            renderKind: 'static',
+            needsRepainting: false,
+          },
+        ],
+      },
+      crypto.randomUUID(),
+    );
+    const profileInput = {
+      userId,
+      displayName: 'Header owner',
+      bio: 'Checking header decoration rules.',
+      avatarMediaIds: [] as string[],
+      visibilityMode: 'public' as const,
+      showFollowers: true,
+      showFollowing: true,
+      showQuestionnaires: true,
+      showPosts: true,
+      showLastSeen: true,
+      directMessagePolicy: 'everyone' as const,
+    };
+
+    // Without Premium the decoration is dropped rather than refused, exactly as
+    // the accent colour already behaves.
+    await executeOperation(
+      env,
+      'publicProfiles.update',
+      { ...profileInput, accentColor: 3, headerCustomEmojiId: '7001' },
+      crypto.randomUUID(),
+    );
+    expect(
+      sqlite
+        .prepare('SELECT accent_color, header_custom_emoji_id FROM user_profiles WHERE user_id = ?')
+        .get(userId),
+    ).toEqual({ accent_color: null, header_custom_emoji_id: null });
+
+    sqlite
+      .prepare(
+        `INSERT INTO premium_entitlements (id, user_id, source, status, starts_at, ends_at)
+         VALUES (?, ?, 'admin', 'active', CURRENT_TIMESTAMP, datetime('now', '+7 days'))`,
+      )
+      .run(crypto.randomUUID(), userId);
+
+    // A full-colour emoji cannot decorate a header: it would ignore the tint.
+    await expect(
+      executeOperation(
+        env,
+        'publicProfiles.update',
+        { ...profileInput, accentColor: 3, headerCustomEmojiId: '7002' },
+        crypto.randomUUID(),
+      ),
+    ).rejects.toMatchObject({ code: 'CUSTOM_EMOJI_NOT_MONOCHROME' });
+    await expect(
+      executeOperation(
+        env,
+        'publicProfiles.update',
+        { ...profileInput, accentColor: 3, headerCustomEmojiId: '999999' },
+        crypto.randomUUID(),
+      ),
+    ).rejects.toMatchObject({ code: 'CUSTOM_EMOJI_NOT_MONOCHROME' });
+
+    await executeOperation(
+      env,
+      'publicProfiles.update',
+      { ...profileInput, accentColor: 3, headerEmoji: null, headerCustomEmojiId: '7001' },
+      crypto.randomUUID(),
+    );
+    const stored = sqlite
+      .prepare('SELECT accent_color, header_custom_emoji_id FROM user_profiles WHERE user_id = ?')
+      .get(userId);
+    expect(stored).toEqual({ accent_color: 3, header_custom_emoji_id: '7001' });
+
+    const readProfile = async () =>
+      (await executeOperation(
+        env,
+        'publicProfiles.get',
+        { requesterUserId: viewerId, profileUserId: userId },
+        crypto.randomUUID(),
+      )) as { accent_color: number | null; header_custom_emoji_id: string | null };
+    expect(await readProfile()).toMatchObject({ accent_color: 3, header_custom_emoji_id: '7001' });
+
+    // The moment the subscription lapses the profile is presented plain, without
+    // waiting for its owner to save anything.
+    sqlite
+      .prepare(
+        "UPDATE premium_entitlements SET ends_at = datetime('now', '-1 minute') WHERE user_id = ?",
+      )
+      .run(userId);
+    expect(await readProfile()).toMatchObject({
+      accent_color: null,
+      header_custom_emoji_id: null,
+    });
+  });
+
+  it('imports a custom emoji pack, re-imports it in place and shares it with everyone', async () => {
+    const importerId = await onboard(2_601);
+    const otherId = await onboard(2_602);
+    const emoji = (count: number, offset = 0) =>
+      Array.from({ length: count }, (_, index) => ({
+        customEmojiId: String(5_000 + offset + index),
+        emoji: 'X',
+        fileId: `file-${offset + index}`,
+        thumbnailFileId: `thumb-${offset + index}`,
+        renderKind: index % 3 === 0 ? 'lottie' : index % 3 === 1 ? 'video' : 'static',
+        needsRepainting: index % 2 === 0,
+        fileSizeBytes: 9_000,
+      }));
+
+    const first = (await executeOperation(
+      env,
+      'customEmoji.import',
+      { userId: importerId, setName: 'TopicIcons', title: 'Topic Icons', emoji: emoji(4) },
+      crypto.randomUUID(),
+    )) as { packId: string; total: number; monochrome: number; reimported: boolean };
+    expect(first).toMatchObject({ total: 4, monochrome: 2, reimported: false });
+
+    // A second import of the same set updates the pack instead of duplicating it,
+    // and rows the set no longer contains do not survive.
+    const second = (await executeOperation(
+      env,
+      'customEmoji.import',
+      { userId: otherId, setName: 'TopicIcons', title: 'Topic Icons v2', emoji: emoji(2, 100) },
+      crypto.randomUUID(),
+    )) as { packId: string; total: number; reimported: boolean };
+    expect(second.packId).toBe(first.packId);
+    expect(second.reimported).toBe(true);
+    expect(sqlite.prepare('SELECT COUNT(*) AS total FROM custom_emoji_packs').get()).toEqual({
+      total: 1,
+    });
+    expect(sqlite.prepare('SELECT COUNT(*) AS total FROM custom_emoji').get()).toEqual({
+      total: 2,
+    });
+
+    // The pack is visible to a user who never imported anything.
+    const library = (await executeOperation(
+      env,
+      'customEmoji.packs.list',
+      { userId: await onboard(2_603), limit: 30 },
+      crypto.randomUUID(),
+    )) as { packs: Array<{ title: string; is_own: number }>; emoji: Array<{ pack_id: string }> };
+    expect(library.packs).toEqual([
+      expect.objectContaining({ title: 'Topic Icons v2', is_own: 0 }),
+    ]);
+    expect(library.emoji).toHaveLength(2);
+
+    await expect(
+      executeOperation(env, 'customEmoji.resolve', { customEmojiId: '5100' }, crypto.randomUUID()),
+    ).resolves.toMatchObject({ file_id: 'file-100', render_kind: 'lottie' });
+    await expect(
+      executeOperation(env, 'customEmoji.resolve', { customEmojiId: '404' }, crypto.randomUUID()),
+    ).rejects.toMatchObject({ code: 'CUSTOM_EMOJI_NOT_FOUND' });
+  });
+
   it('shows the custom badge instead of the moderator check when both apply', async () => {
     const moderatorId = await onboard(2_501);
     const ownerId = await upsert(1_040_929_628);
     const viewerId = await onboard(2_502);
     sqlite.prepare("UPDATE users SET role = 'admin' WHERE id = ?").run(ownerId);
     sqlite
-      .prepare(
-        `INSERT INTO moderator_assignments (user_id, assigned_by_user_id) VALUES (?, ?)`,
-      )
+      .prepare(`INSERT INTO moderator_assignments (user_id, assigned_by_user_id) VALUES (?, ?)`)
       .run(moderatorId, ownerId);
 
     const readKind = async () =>

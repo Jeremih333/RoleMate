@@ -283,6 +283,13 @@ export const workerOperations = {
     // picked to stay readable on both themes.
     accentColor: z.number().int().min(0).max(15).nullable().optional(),
     headerEmoji: z.string().trim().min(1).max(8).nullable().optional(),
+    // A Telegram custom emoji id is a decimal string of about twenty digits.
+    headerCustomEmojiId: z
+      .string()
+      .trim()
+      .regex(/^[0-9]{1,32}$/)
+      .nullable()
+      .optional(),
   }),
   'publicProfiles.updatePrivacy': z.object({
     userId: z.string().uuid(),
@@ -403,6 +410,43 @@ export const workerOperations = {
   'questionnaires.recordView': z.object({
     userId: z.string().uuid(),
     questionnaireId: z.string().uuid(),
+  }),
+  'customEmoji.import': z.object({
+    userId: z.string().uuid(),
+    setName: z
+      .string()
+      .trim()
+      .min(1)
+      .max(64)
+      .regex(/^[A-Za-z0-9_]+$/),
+    title: z.string().trim().min(1).max(120),
+    emoji: z
+      .array(
+        z.object({
+          customEmojiId: z
+            .string()
+            .trim()
+            .regex(/^[0-9]{1,32}$/),
+          emoji: z.string().max(16).optional(),
+          fileId: z.string().min(1).max(256),
+          thumbnailFileId: z.string().min(1).max(256).optional(),
+          renderKind: z.enum(['static', 'video', 'lottie']),
+          needsRepainting: z.boolean(),
+          fileSizeBytes: z.number().int().min(0).optional(),
+        }),
+      )
+      .min(1)
+      .max(200),
+  }),
+  'customEmoji.packs.list': z.object({
+    userId: z.string().uuid(),
+    limit: z.number().int().min(1).max(50).default(30),
+  }),
+  'customEmoji.resolve': z.object({
+    customEmojiId: z
+      .string()
+      .trim()
+      .regex(/^[0-9]{1,32}$/),
   }),
   'profiles.media.resolve': z.object({
     requesterUserId: z.string().uuid(),
@@ -788,6 +832,14 @@ export const workerOperations = {
     conversationId: z.string().uuid(),
     messageId: z.string().uuid(),
     reaction: z.string().trim().min(1).max(16),
+    // Set when the reaction is a Telegram custom emoji; `reaction` then carries
+    // the marker that keeps the existing length constraint satisfied.
+    customEmojiId: z
+      .string()
+      .trim()
+      .regex(/^[0-9]{1,32}$/)
+      .nullable()
+      .optional(),
   }),
   'conversations.messages.updateOwnText': z.object({
     userId: z.string().uuid(),

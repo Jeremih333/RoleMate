@@ -233,6 +233,11 @@ function premiumPresentation<T extends Record<string, unknown>>(row: T): T {
       normalized.featured_audio_items = '[]';
     }
   }
+  // Appearance is a Premium decoration. A lapsed subscription has to show the
+  // plain profile immediately, without waiting for the owner to save it again.
+  for (const field of ['accent_color', 'header_emoji', 'header_custom_emoji_id']) {
+    if (Object.prototype.hasOwnProperty.call(normalized, field)) normalized[field] = null;
+  }
   if (normalized.avatar_render_mode === 'animation') {
     normalized.avatar_render_mode = 'still';
   }
@@ -1887,6 +1892,7 @@ const handlers: { [K in WorkerOperation]: Handler<K> } = {
               up.visibility_mode, up.show_followers, up.show_following,
               up.show_questionnaires, up.show_posts, up.show_last_seen,
               up.direct_message_policy, up.accent_color, up.header_emoji,
+              up.header_custom_emoji_id,
               up.created_at, up.updated_at,
               CASE
                 WHEN u.role = 'admin' AND u.telegram_user_id = 1040929628 THEN 'owner'
@@ -2048,7 +2054,7 @@ const handlers: { [K in WorkerOperation]: Handler<K> } = {
               up.moderation_status, up.moderation_reason, up.visibility_mode,
               up.show_followers, up.show_following, up.show_questionnaires, up.show_posts,
               up.show_last_seen, up.direct_message_policy,
-              up.accent_color, up.header_emoji, up.created_at,
+              up.accent_color, up.header_emoji, up.header_custom_emoji_id, up.created_at,
               CASE
                 WHEN u.role = 'admin' AND u.telegram_user_id = 1040929628 THEN 'owner'
                 WHEN EXISTS (
@@ -2497,6 +2503,21 @@ const handlers: { [K in WorkerOperation]: Handler<K> } = {
     if (!policy.allowed) {
       throw new ApiError(403, 'LINK_POLICY_VIOLATION', policy.reason);
     }
+    // Only a repaintable (single-colour) custom emoji may decorate the header: a
+    // full-colour one fights the header tint and reads as a rendering fault.
+    let headerCustomEmojiId: string | null = null;
+    if (premium && input.headerCustomEmojiId) {
+      const emoji = await env.DB.prepare(
+        `SELECT custom_emoji_id FROM custom_emoji
+         WHERE custom_emoji_id = ?1 AND needs_repainting = 1`,
+      )
+        .bind(input.headerCustomEmojiId)
+        .first<{ custom_emoji_id: string }>();
+      if (!emoji) {
+        throw new ApiError(400, 'CUSTOM_EMOJI_NOT_MONOCHROME', 'Custom emoji cannot be repainted');
+      }
+      headerCustomEmojiId = emoji.custom_emoji_id;
+    }
     const avatarMediaIds =
       input.avatarMediaIds ?? (input.avatarMediaId ? [input.avatarMediaId] : []);
     const available = (
@@ -2561,7 +2582,7 @@ const handlers: { [K in WorkerOperation]: Handler<K> } = {
            avatar_render_mode = ?5, visibility_mode = ?6,
            show_followers = ?7, show_following = ?8, show_questionnaires = ?9,
            show_posts = ?10, direct_message_policy = ?11, show_last_seen = ?12,
-           accent_color = ?13, header_emoji = ?14,
+           accent_color = ?13, header_emoji = ?14, header_custom_emoji_id = ?15,
            configured_at = COALESCE(configured_at, CURRENT_TIMESTAMP),
            updated_at = CURRENT_TIMESTAMP WHERE user_id = ?1`,
       ).bind(
@@ -2579,6 +2600,7 @@ const handlers: { [K in WorkerOperation]: Handler<K> } = {
         input.showLastSeen ? 1 : 0,
         premium ? (input.accentColor ?? null) : null,
         premium ? (input.headerEmoji ?? null) : null,
+        headerCustomEmojiId,
       ),
     ]);
     return { updated: true };
@@ -3485,6 +3507,139 @@ const handlers: { [K in WorkerOperation]: Handler<K> } = {
       .bind(input.userId, input.questionnaireId)
       .run();
     return { recorded: result.meta.changes === 1 };
+  },
+  /**
+   * Stores a custom emoji pack resolved from a t.me/addemoji link. Packs are
+   * global: the files stay in Telegram and are addressed by file id, so a pack
+   * imported by one person costs nothing to share with everyone and every viewer
+   * hits the same cached assets. Re-importing refreshes the pack in place.
+   */
+  'customEmoji.import': async (env, input) => {
+    const existing = await env.DB.prepare('SELECT id FROM custom_emoji_packs WHERE set_name = ?1')
+      .bind(input.setName)
+      .first<{ id: string }>();
+    if (!existing) {
+      // The library is shared, so its size is everyone's problem: one person
+      // cannot fill it, and it cannot grow without bound overall. Re-importing a
+      // pack that is already there is always allowed — it refreshes, not adds.
+      const counts = await env.DB.prepare(
+        `SELECT
+           (SELECT COUNT(*) FROM custom_emoji_packs) AS total,
+           (SELECT COUNT(*) FROM custom_emoji_packs WHERE imported_by_user_id = ?1) AS own`,
+      )
+        .bind(input.userId)
+        .first<{ total: number; own: number }>();
+      const perUserLimit = await configInt(env, 'custom_emoji_packs_per_user', 20, 1, 200);
+      const globalLimit = await configInt(env, 'custom_emoji_packs_total', 300, 1, 5000);
+      if (Number(counts?.own ?? 0) >= perUserLimit) {
+        throw new ApiError(429, 'CUSTOM_EMOJI_PACK_LIMIT', 'Too many imported packs');
+      }
+      if (Number(counts?.total ?? 0) >= globalLimit) {
+        throw new ApiError(429, 'CUSTOM_EMOJI_LIBRARY_FULL', 'Emoji library is full');
+      }
+    }
+    const packId = existing?.id ?? crypto.randomUUID();
+    const monochrome = input.emoji.filter((item) => item.needsRepainting).length;
+    const statements = [
+      env.DB.prepare(
+        `INSERT INTO custom_emoji_packs
+           (id, set_name, title, emoji_count, monochrome_count, imported_by_user_id)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6)
+         ON CONFLICT(set_name) DO UPDATE SET
+           title = excluded.title, emoji_count = excluded.emoji_count,
+           monochrome_count = excluded.monochrome_count, updated_at = CURRENT_TIMESTAMP`,
+      ).bind(packId, input.setName, input.title, input.emoji.length, monochrome, input.userId),
+      // An emoji can move to another pack only if Telegram itself moved it, and a
+      // re-import must not leave rows behind that the set no longer contains.
+      env.DB.prepare('DELETE FROM custom_emoji WHERE pack_id = ?1').bind(packId),
+      ...input.emoji.map((item, position) =>
+        env.DB.prepare(
+          `INSERT INTO custom_emoji
+             (custom_emoji_id, pack_id, emoji, file_id, thumbnail_file_id, render_kind,
+              needs_repainting, file_size_bytes, position)
+           VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
+           ON CONFLICT(custom_emoji_id) DO UPDATE SET
+             pack_id = excluded.pack_id, emoji = excluded.emoji, file_id = excluded.file_id,
+             thumbnail_file_id = excluded.thumbnail_file_id, render_kind = excluded.render_kind,
+             needs_repainting = excluded.needs_repainting,
+             file_size_bytes = excluded.file_size_bytes, position = excluded.position`,
+        ).bind(
+          item.customEmojiId,
+          packId,
+          item.emoji ?? '',
+          item.fileId,
+          item.thumbnailFileId ?? null,
+          item.renderKind,
+          item.needsRepainting ? 1 : 0,
+          item.fileSizeBytes ?? null,
+          position,
+        ),
+      ),
+      env.DB.prepare(
+        `INSERT OR IGNORE INTO user_custom_emoji_packs (user_id, pack_id) VALUES (?1, ?2)`,
+      ).bind(input.userId, packId),
+    ];
+    await env.DB.batch(statements);
+    return {
+      packId,
+      title: input.title,
+      total: input.emoji.length,
+      monochrome,
+      reimported: Boolean(existing),
+    };
+  },
+  'customEmoji.packs.list': async (env, input) => {
+    const packs = (
+      await env.DB.prepare(
+        `SELECT p.id, p.set_name, p.title, p.emoji_count, p.monochrome_count,
+                EXISTS (
+                  SELECT 1 FROM user_custom_emoji_packs up
+                  WHERE up.pack_id = p.id AND up.user_id = ?1
+                ) AS is_own
+         FROM custom_emoji_packs p
+         ORDER BY is_own DESC, p.created_at ASC
+         LIMIT ?2`,
+      )
+        .bind(input.userId, input.limit)
+        .all<{ id: string }>()
+    ).results;
+    if (!packs.length) return { packs: [], emoji: [] };
+    const emoji = (
+      await env.DB.prepare(
+        // Bounded on purpose: this list is read by every reaction menu, and rows
+        // read are the scarcest thing on the free plan.
+        `SELECT ce.custom_emoji_id, ce.pack_id, ce.emoji, ce.render_kind, ce.needs_repainting
+         FROM custom_emoji ce
+         ORDER BY ce.pack_id, ce.position
+         LIMIT ?1`,
+      )
+        .bind(await configInt(env, 'custom_emoji_library_limit', 600, 50, 3000))
+        .all()
+    ).results;
+    return { packs, emoji };
+  },
+  /**
+   * Resolves the Telegram file behind one custom emoji. Packs are public content,
+   * so this is readable by any signed-in user; the still thumbnail is used for
+   * TGS emoji and for header decoration.
+   */
+  'customEmoji.resolve': async (env, input) => {
+    const emoji = await env.DB.prepare(
+      `SELECT custom_emoji_id, file_id, thumbnail_file_id, render_kind, needs_repainting,
+              file_size_bytes
+       FROM custom_emoji WHERE custom_emoji_id = ?1`,
+    )
+      .bind(input.customEmojiId)
+      .first<{
+        custom_emoji_id: string;
+        file_id: string;
+        thumbnail_file_id: string | null;
+        render_kind: string;
+        needs_repainting: number;
+        file_size_bytes: number | null;
+      }>();
+    if (!emoji) throw new ApiError(404, 'CUSTOM_EMOJI_NOT_FOUND', 'Custom emoji not found');
+    return emoji;
   },
   'profiles.media.resolve': async (env, input) => {
     let media = await env.DB.prepare(
@@ -7062,14 +7217,14 @@ const handlers: { [K in WorkerOperation]: Handler<K> } = {
               END AS forwarded_author_verification_kind,
               CASE WHEN message.sender_user_id = ?2 THEN 1 ELSE 0 END AS is_own,
               CASE WHEN message.telegram_file_id IS NULL THEN 0 ELSE 1 END AS has_media,
-              own_reaction.reaction AS own_reaction,
+              COALESCE(own_reaction.custom_emoji_id, own_reaction.reaction) AS own_reaction,
               COALESCE((
                 SELECT json_group_array(json_object('reaction', grouped.reaction, 'count', grouped.total))
                 FROM (
-                  SELECT reaction, COUNT(*) AS total
+                  SELECT COALESCE(custom_emoji_id, reaction) AS reaction, COUNT(*) AS total
                   FROM conversation_message_reactions
                   WHERE message_id = message.id
-                  GROUP BY reaction ORDER BY reaction
+                  GROUP BY COALESCE(custom_emoji_id, reaction) ORDER BY 1
                 ) grouped
               ), '[]') AS reactions
        FROM conversation_messages message
@@ -7147,14 +7302,14 @@ const handlers: { [K in WorkerOperation]: Handler<K> } = {
               END AS forwarded_author_verification_kind,
               CASE WHEN message.sender_user_id = ?2 THEN 1 ELSE 0 END AS is_own,
               CASE WHEN message.telegram_file_id IS NULL THEN 0 ELSE 1 END AS has_media,
-              own_reaction.reaction AS own_reaction,
+              COALESCE(own_reaction.custom_emoji_id, own_reaction.reaction) AS own_reaction,
               COALESCE((
                 SELECT json_group_array(json_object('reaction', grouped.reaction, 'count', grouped.total))
                 FROM (
-                  SELECT reaction, COUNT(*) AS total
+                  SELECT COALESCE(custom_emoji_id, reaction) AS reaction, COUNT(*) AS total
                   FROM conversation_message_reactions
                   WHERE message_id = message.id
-                  GROUP BY reaction ORDER BY reaction
+                  GROUP BY COALESCE(custom_emoji_id, reaction) ORDER BY 1
                 ) grouped
               ), '[]') AS reactions
        FROM conversation_messages message
@@ -7271,7 +7426,8 @@ const handlers: { [K in WorkerOperation]: Handler<K> } = {
   },
   'conversations.messages.react': async (env, input) => {
     const message = await env.DB.prepare(
-      `SELECT reaction.reaction AS own_reaction, message.sender_user_id
+      `SELECT COALESCE(reaction.custom_emoji_id, reaction.reaction) AS own_reaction,
+              message.sender_user_id
        FROM conversation_messages message
        JOIN conversation_participants participant
          ON participant.conversation_id = message.conversation_id AND participant.user_id = ?1
@@ -7283,7 +7439,19 @@ const handlers: { [K in WorkerOperation]: Handler<K> } = {
       .bind(input.userId, input.conversationId, input.messageId)
       .first<{ own_reaction: string | null; sender_user_id: string }>();
     if (!message) throw new ApiError(404, 'CHAT_MESSAGE_NOT_FOUND', 'Chat message not found');
-    if (message.own_reaction === input.reaction) {
+    // A custom emoji is identified by its Telegram id; the built-in reactions keep
+    // their short keys, so both live in the same row without widening the CHECK.
+    const customEmojiId = input.customEmojiId ?? null;
+    if (customEmojiId) {
+      const known = await env.DB.prepare(
+        'SELECT 1 AS found FROM custom_emoji WHERE custom_emoji_id = ?1',
+      )
+        .bind(customEmojiId)
+        .first();
+      if (!known) throw new ApiError(404, 'CUSTOM_EMOJI_NOT_FOUND', 'Custom emoji not found');
+    }
+    const key = customEmojiId ?? input.reaction;
+    if (message.own_reaction === key) {
       await env.DB.prepare(
         'DELETE FROM conversation_message_reactions WHERE message_id = ?1 AND user_id = ?2',
       )
@@ -7292,14 +7460,15 @@ const handlers: { [K in WorkerOperation]: Handler<K> } = {
       return { reaction: null, targetUserId: message.sender_user_id };
     }
     await env.DB.prepare(
-      `INSERT INTO conversation_message_reactions (message_id, user_id, reaction)
-       VALUES (?1, ?2, ?3)
+      `INSERT INTO conversation_message_reactions (message_id, user_id, reaction, custom_emoji_id)
+       VALUES (?1, ?2, ?3, ?4)
        ON CONFLICT(message_id, user_id) DO UPDATE SET
-         reaction = excluded.reaction, updated_at = CURRENT_TIMESTAMP`,
+         reaction = excluded.reaction, custom_emoji_id = excluded.custom_emoji_id,
+         updated_at = CURRENT_TIMESTAMP`,
     )
-      .bind(input.messageId, input.userId, input.reaction)
+      .bind(input.messageId, input.userId, input.reaction, customEmojiId)
       .run();
-    return { reaction: input.reaction, targetUserId: message.sender_user_id };
+    return { reaction: key, targetUserId: message.sender_user_id };
   },
   'conversations.messages.updateOwnText': async (env, input) => {
     const result = await env.DB.prepare(

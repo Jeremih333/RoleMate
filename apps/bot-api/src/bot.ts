@@ -17,6 +17,11 @@ import { DataApiError, findDataApiError, type DataApiClient } from './d1-client.
 import type { AppEnv } from './env.js';
 import { validateUserContentLinks } from './content-policy.js';
 import { telegramAudioMetadata } from './telegram-audio-metadata.js';
+import {
+  collectCustomEmoji,
+  CUSTOM_EMOJI_SET_LIMIT,
+  parseAddEmojiSetName,
+} from './custom-emoji.js';
 
 type PostMediaContentType = 'photo' | 'document' | 'animation' | 'video' | 'voice' | 'audio';
 
@@ -269,6 +274,62 @@ export function createBot(
     conversationId?: string;
   }): Promise<void> => {
     await dataApi.execute('notifications.telegram.enqueue', input);
+  };
+  /**
+   * Imports a custom emoji set the user linked with t.me/addemoji. The files stay
+   * in Telegram; only ids are stored, so the import is cheap and the pack becomes
+   * available to everyone in the app afterwards.
+   */
+  const importCustomEmojiSet = async (
+    context: Context,
+    userId: string,
+    setName: string,
+  ): Promise<void> => {
+    let set;
+    try {
+      set = await context.api.getStickerSet(setName);
+    } catch {
+      await context.reply(ru.bot.customEmoji.setNotFound);
+      return;
+    }
+    if (set.sticker_type !== 'custom_emoji') {
+      await context.reply(ru.bot.customEmoji.notEmojiSet);
+      return;
+    }
+    const emoji = collectCustomEmoji(set.stickers);
+    if (!emoji.length) {
+      await context.reply(ru.bot.customEmoji.setEmpty);
+      return;
+    }
+    const result = await dataApi.execute<{
+      total: number;
+      monochrome: number;
+      reimported: boolean;
+    }>('customEmoji.import', {
+      userId,
+      setName,
+      title: set.title.slice(0, 120),
+      emoji,
+    });
+    const skipped = Math.max(0, set.stickers.length - result.total);
+    await context.reply(
+      ru.bot.customEmoji.imported({
+        title: set.title,
+        total: result.total,
+        monochrome: result.monochrome,
+        skipped,
+        limit: CUSTOM_EMOJI_SET_LIMIT,
+        reimported: result.reimported,
+      }),
+      env.MINI_APP_URL
+        ? {
+            reply_markup: new InlineKeyboard().webApp(
+              ru.bot.customEmoji.openPicker,
+              `${env.MINI_APP_URL}/profile`,
+            ),
+          }
+        : {},
+    );
   };
   const synchronizePersonalMenuButton = async (context: Context): Promise<void> => {
     if (!env.MINI_APP_URL || !context.from) return;
@@ -1653,6 +1714,19 @@ export function createBot(
     }
     if (!context.from) return;
     const user = await upsertUser(context, dataApi);
+    // An addemoji link is unambiguous, so it is handled before anything else can
+    // swallow the message — a pack link pasted while a post draft is open is a
+    // pack, not a post.
+    // Only in a private chat: a pack link posted in a group is somebody talking,
+    // not somebody asking the bot to import it.
+    const emojiSetName =
+      context.chat.type === 'private'
+        ? parseAddEmojiSetName([text, ...hiddenLinks].join('\n'))
+        : null;
+    if (emojiSetName) {
+      await importCustomEmojiSet(context, user.userId, emojiSetName);
+      return;
+    }
     const draft = await dataApi.execute<{ id: string } | null>('posts.draft.get', {
       userId: user.userId,
     });

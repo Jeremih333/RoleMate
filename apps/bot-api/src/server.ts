@@ -894,6 +894,12 @@ export async function buildServer(
         directMessagePolicy: z.enum(['everyone', 'following_and_staff']).default('everyone'),
         accentColor: z.number().int().min(0).max(15).nullable().optional(),
         headerEmoji: z.string().trim().min(1).max(8).nullable().optional(),
+        headerCustomEmojiId: z
+          .string()
+          .trim()
+          .regex(/^[0-9]{1,32}$/)
+          .nullable()
+          .optional(),
       })
       .parse(request.body);
     return dataApi.execute('publicProfiles.update', { userId: session.userId, ...body });
@@ -2037,9 +2043,14 @@ export async function buildServer(
         messageId: z.string().uuid(),
       })
       .parse(request.params);
-    const { reaction } = z
+    const { reaction, customEmojiId } = z
       .object({
         reaction: z.string().trim().min(1).max(16),
+        customEmojiId: z
+          .string()
+          .trim()
+          .regex(/^[0-9]{1,32}$/)
+          .optional(),
       })
       .parse(request.body);
     const result = await dataApi.execute<{
@@ -2050,6 +2061,7 @@ export async function buildServer(
       conversationId,
       messageId,
       reaction,
+      ...(customEmojiId ? { customEmojiId } : {}),
     });
     if (result.reaction && result.targetUserId !== session.userId) {
       await queueTelegramActivityNotification({
@@ -2978,6 +2990,52 @@ export async function buildServer(
       sort,
       limit: 100,
     });
+  });
+  app.get('/api/custom-emoji/packs', async (request) => {
+    const session = await authenticate(request);
+    return dataApi.execute('customEmoji.packs.list', { userId: session.userId, limit: 30 });
+  });
+  app.get('/api/custom-emoji/:customEmojiId', async (request, reply) => {
+    await authenticate(request);
+    const { customEmojiId } = z
+      .object({ customEmojiId: z.string().regex(/^[0-9]{1,32}$/) })
+      .parse(request.params);
+    const { thumbnail } = z
+      .object({ thumbnail: z.enum(['0', '1']).optional() })
+      .parse(request.query);
+    const emoji = await dataApi.execute<{
+      file_id: string;
+      thumbnail_file_id: string | null;
+      render_kind: 'static' | 'video' | 'lottie';
+    }>('customEmoji.resolve', { customEmojiId });
+    // A TGS cannot be played without a Lottie runtime, so its still thumbnail is
+    // what gets served; callers can ask for the thumbnail of anything.
+    const wantsThumbnail = thumbnail === '1' || emoji.render_kind === 'lottie';
+    const fileId = wantsThumbnail ? (emoji.thumbnail_file_id ?? emoji.file_id) : emoji.file_id;
+    const file = await bot.api.getFile(fileId);
+    if (!file.file_path) throw new DataApiError('MEDIA_UNAVAILABLE', ru.api.mediaUnavailable, 404);
+    const response = await fetch(
+      `https://api.telegram.org/file/bot${env.TELEGRAM_BOT_TOKEN}/${file.file_path}`,
+      telegramFileRequestInit(request),
+    );
+    if (!response.ok) throw new DataApiError('MEDIA_UNAVAILABLE', ru.api.mediaUnavailable, 502);
+    const extension = file.file_path.split('.').pop()?.toLowerCase();
+    const contentType =
+      response.headers.get('content-type') ??
+      (extension === 'webm'
+        ? 'video/webm'
+        : extension === 'tgs'
+          ? 'application/gzip'
+          : extension === 'png'
+            ? 'image/png'
+            : 'image/webp');
+    reply.header('Content-Type', contentType);
+    // Emoji packs are public, immutable Telegram content addressed by a stable id.
+    // A year of browser caching is what keeps a picker of two hundred glyphs from
+    // costing two hundred Worker requests every time it opens.
+    reply.header('Cache-Control', 'public, max-age=31536000, immutable');
+    applySeekableMediaHeaders(reply, response);
+    return reply.send(response.body);
   });
   app.get('/api/post-comments/:commentId/voice', async (request, reply) => {
     const session = await authenticate(request);

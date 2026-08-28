@@ -1000,8 +1000,17 @@ function ChatPinnedBar({
 function useMessageReaction(conversationId: string, messageId: string, onDone?: () => void) {
   const queryClient = useQueryClient();
   return useMutation({
+    // A custom emoji is sent alongside a short marker: the reaction column is
+    // limited to sixteen characters, far short of a Telegram custom emoji id.
     mutationFn: (reaction: ChatReaction) =>
-      api.reactConversationMessage(conversationId, messageId, reaction),
+      isCustomEmojiReaction(reaction)
+        ? api.reactConversationMessage(
+            conversationId,
+            messageId,
+            CUSTOM_EMOJI_REACTION,
+            customEmojiIdOf(reaction),
+          )
+        : api.reactConversationMessage(conversationId, messageId, reaction),
     onSuccess: () => {
       onDone?.();
       void queryClient.invalidateQueries({ queryKey: ['conversation-messages', conversationId] });
@@ -2655,6 +2664,54 @@ function ConversationReplyCount({ message }: { message: ConversationMessage }) {
   );
 }
 
+/** Marker stored in the constrained reaction column when a custom emoji is used. */
+const CUSTOM_EMOJI_REACTION = 'custom';
+/** Prefix that carries a custom emoji id through the reaction callbacks. */
+const CUSTOM_EMOJI_PREFIX = 'ce:';
+
+/**
+ * A stored reaction key is a custom emoji when it is the numeric Telegram id
+ * rather than one of the built-in names.
+ */
+export function isCustomEmojiKey(key: string): boolean {
+  return /^[0-9]{6,32}$/.test(key);
+}
+
+export function isCustomEmojiReaction(reaction: string): boolean {
+  return reaction.startsWith(CUSTOM_EMOJI_PREFIX);
+}
+
+export function customEmojiIdOf(reaction: string): string {
+  return reaction.slice(CUSTOM_EMOJI_PREFIX.length);
+}
+
+/**
+ * Renders one custom emoji. A TGS is served as its still thumbnail because the
+ * app carries no Lottie runtime; a WEBM plays as a muted looping video.
+ */
+function CustomEmojiGlyph({
+  item,
+  size = 22,
+}: {
+  item: { custom_emoji_id: string; render_kind?: 'static' | 'video' | 'lottie'; emoji: string };
+  size?: number;
+}) {
+  // Every kind is drawn from its still thumbnail: one URL shape for the whole
+  // library means one cache entry per emoji, no video decoding for a glyph the
+  // size of a letter, and no Lottie runtime in the bundle. The picker can hold
+  // hundreds of these, and on the free plan each extra request shape costs.
+  return (
+    <img
+      className="custom-emoji-glyph"
+      style={{ width: size, height: size }}
+      src={`/api/custom-emoji/${item.custom_emoji_id}?thumbnail=1`}
+      alt={item.emoji}
+      loading="lazy"
+      decoding="async"
+    />
+  );
+}
+
 function ChatReactionMenu({
   onReact,
   onClose,
@@ -2662,6 +2719,14 @@ function ChatReactionMenu({
   onReact: (reaction: ChatReaction) => void;
   onClose?: () => void;
 }) {
+  // Imported packs are shared by everyone and change rarely, so the library is
+  // fetched once and reused by every reaction menu on the screen.
+  const library = useQuery({
+    queryKey: ['custom-emoji-packs'],
+    queryFn: api.customEmojiPacks,
+    staleTime: 5 * 60_000,
+  });
+  const customEmoji = library.data?.emoji ?? [];
   return (
     <>
       {onClose ? (
@@ -2684,6 +2749,16 @@ function ChatReactionMenu({
           {Object.entries(ru.miniApp.community.reactionNames).map(([value, label]) => (
             <button key={value} type="button" onClick={() => onReact(value)} aria-label={label}>
               {reactionEmoji(value, label)}
+            </button>
+          ))}
+          {customEmoji.map((item) => (
+            <button
+              key={item.custom_emoji_id}
+              type="button"
+              aria-label={item.emoji || ru.miniApp.community.customEmojiReaction}
+              onClick={() => onReact(`${CUSTOM_EMOJI_PREFIX}${item.custom_emoji_id}`)}
+            >
+              <CustomEmojiGlyph item={item} />
             </button>
           ))}
         </div>
@@ -2719,11 +2794,21 @@ export function ChatReactionSummary({
           className={message.own_reaction === item.reaction ? 'is-own' : ''}
           key={item.reaction}
           type="button"
-          onClick={() => onReact(item.reaction)}
+          onClick={() =>
+            onReact(
+              isCustomEmojiKey(item.reaction)
+                ? `${CUSTOM_EMOJI_PREFIX}${item.reaction}`
+                : item.reaction,
+            )
+          }
         >
-          {reactionEmoji(
-            item.reaction,
-            (ru.miniApp.community.reactionNames as Record<string, string>)[item.reaction],
+          {isCustomEmojiKey(item.reaction) ? (
+            <CustomEmojiGlyph size={16} item={{ custom_emoji_id: item.reaction, emoji: '' }} />
+          ) : (
+            reactionEmoji(
+              item.reaction,
+              (ru.miniApp.community.reactionNames as Record<string, string>)[item.reaction],
+            )
           )}{' '}
           {item.count}
         </button>

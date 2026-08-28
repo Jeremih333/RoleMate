@@ -108,7 +108,17 @@ export function PublicProfilePage() {
   const [avatarMediaIds, setAvatarMediaIds] = useState<string[]>([]);
   const [accentColor, setAccentColor] = useState<number | null>(null);
   const [headerEmoji, setHeaderEmoji] = useState<string | null>(null);
+  const [headerCustomEmojiId, setHeaderCustomEmojiId] = useState<string | null>(null);
   const premiumStatus = useQuery({ queryKey: ['premium-status'], queryFn: api.premiumStatus });
+  const customEmoji = useQuery({
+    queryKey: ['custom-emoji-packs'],
+    queryFn: api.customEmojiPacks,
+    // Packs change only when somebody imports one, so this is cheap to hold.
+    staleTime: 5 * 60_000,
+  });
+  const monochromeCustomEmoji = (customEmoji.data?.emoji ?? []).filter(
+    (item) => item.needs_repainting === 1,
+  );
   const [avatarPickerIndex, setAvatarPickerIndex] = useState(0);
   const [botUploadNotice, setBotUploadNotice] = useState(false);
   const [profileIdOpen, setProfileIdOpen] = useState(false);
@@ -143,6 +153,9 @@ export function PublicProfilePage() {
         profile.data.avatar_render_mode,
       ).map((item) => item.id),
     );
+    setAccentColor(profile.data.accent_color ?? null);
+    setHeaderEmoji(profile.data.header_emoji ?? null);
+    setHeaderCustomEmojiId(profile.data.header_custom_emoji_id ?? null);
     setInitialized(true);
   }, [initialized, profile.data]);
   useEffect(() => {
@@ -165,6 +178,7 @@ export function PublicProfilePage() {
         directMessagePolicy: profile.data?.direct_message_policy ?? 'everyone',
         accentColor,
         headerEmoji,
+        headerCustomEmojiId,
       });
       // A username typed but never claimed used to be silently dropped when the
       // editor closed, so saving the profile claims it too.
@@ -329,7 +343,10 @@ export function PublicProfilePage() {
       </SectionTitle>
       <Card className="public-profile-own-card profile-sheet">
         <div className="profile-hero" {...profileHeroProps(profile.data)}>
-          <ProfileHeroEmoji emoji={profile.data.header_emoji ?? null} />
+          <ProfileHeroEmoji
+            emoji={profile.data.header_emoji ?? null}
+            customEmojiId={profile.data.header_custom_emoji_id ?? null}
+          />
           <ProfileAvatarGallery
             items={avatarItems}
             name={displayName}
@@ -577,7 +594,10 @@ export function PublicProfilePage() {
                             type="button"
                             className={`appearance-emoji${headerEmoji ? '' : ' is-selected'}`}
                             aria-label={ru.miniApp.social.appearanceNone}
-                            onClick={() => setHeaderEmoji(null)}
+                            onClick={() => {
+                              setHeaderEmoji(null);
+                              setHeaderCustomEmojiId(null);
+                            }}
                           >
                             <X className="h-4 w-4" />
                           </button>
@@ -587,12 +607,60 @@ export function PublicProfilePage() {
                               type="button"
                               className={`appearance-emoji${headerEmoji === emoji ? ' is-selected' : ''}`}
                               aria-pressed={headerEmoji === emoji}
-                              onClick={() => setHeaderEmoji(headerEmoji === emoji ? null : emoji)}
+                              onClick={() => {
+                                setHeaderCustomEmojiId(null);
+                                setHeaderEmoji(headerEmoji === emoji ? null : emoji);
+                              }}
                             >
                               {emoji}
                             </button>
                           ))}
                         </div>
+                        {/* Only repaintable emoji reach this list: a full-colour
+                            glyph cannot be tinted and would fight the header. */}
+                        {monochromeCustomEmoji.length ? (
+                          <>
+                            <p className="mt-3 text-xs text-muted">
+                              {ru.miniApp.social.appearanceCustomEmoji}
+                            </p>
+                            <div className="appearance-emoji-row">
+                              {monochromeCustomEmoji.map((item) => (
+                                <button
+                                  key={item.custom_emoji_id}
+                                  type="button"
+                                  className={`appearance-emoji appearance-emoji-custom${
+                                    headerCustomEmojiId === item.custom_emoji_id
+                                      ? ' is-selected'
+                                      : ''
+                                  }`}
+                                  aria-pressed={headerCustomEmojiId === item.custom_emoji_id}
+                                  aria-label={item.emoji || ru.miniApp.social.appearanceCustomEmoji}
+                                  onClick={() => {
+                                    setHeaderEmoji(null);
+                                    setHeaderCustomEmojiId(
+                                      headerCustomEmojiId === item.custom_emoji_id
+                                        ? null
+                                        : item.custom_emoji_id,
+                                    );
+                                  }}
+                                >
+                                  <i
+                                    className="profile-hero-emoji-glyph"
+                                    style={
+                                      {
+                                        '--hero-emoji-src': `url('/api/custom-emoji/${item.custom_emoji_id}?thumbnail=1')`,
+                                      } as CSSProperties
+                                    }
+                                  />
+                                </button>
+                              ))}
+                            </div>
+                          </>
+                        ) : (
+                          <p className="mt-3 text-xs text-muted">
+                            {ru.miniApp.social.appearanceCustomEmojiEmpty}
+                          </p>
+                        )}
                       </>
                     ) : (
                       <p className="mt-3 text-sm text-muted">
@@ -944,14 +1012,36 @@ export function profileHeroProps(profile: {
   };
 }
 
-export function ProfileHeroEmoji({ emoji }: { emoji?: string | null | undefined }) {
-  if (!emoji) return null;
-  // A quiet repeated wash behind the portrait, not a single large glyph.
+export function ProfileHeroEmoji({
+  emoji,
+  customEmojiId,
+}: {
+  emoji?: string | null | undefined;
+  customEmojiId?: string | null | undefined;
+}) {
+  if (!emoji && !customEmojiId) return null;
+  // A quiet repeated wash behind the portrait, not a single large glyph. A custom
+  // emoji is drawn as a mask so it takes the header's own colour: only
+  // repaintable (single-colour) emoji are allowed here, and painting them rather
+  // than showing their own palette is what keeps the header readable.
+  const tiles = Array.from({ length: 36 }, (_, index) =>
+    customEmojiId ? (
+      <i
+        key={index}
+        className="profile-hero-emoji-glyph"
+        style={
+          {
+            '--hero-emoji-src': `url('/api/custom-emoji/${customEmojiId}?thumbnail=1')`,
+          } as CSSProperties
+        }
+      />
+    ) : (
+      <span key={index}>{emoji}</span>
+    ),
+  );
   return (
-    <span className="profile-hero-emoji" aria-hidden>
-      {Array.from({ length: 36 }, (_, index) => (
-        <span key={index}>{emoji}</span>
-      ))}
+    <span className={`profile-hero-emoji ${customEmojiId ? 'is-custom' : ''}`} aria-hidden>
+      {tiles}
     </span>
   );
 }
@@ -1168,7 +1258,10 @@ export function PublicProfileViewerPage() {
       </div>
       <Card className="profile-sheet">
         <div className="profile-hero" {...profileHeroProps(profile.data)}>
-          <ProfileHeroEmoji emoji={profile.data.header_emoji ?? null} />
+          <ProfileHeroEmoji
+            emoji={profile.data.header_emoji ?? null}
+            customEmojiId={profile.data.header_custom_emoji_id ?? null}
+          />
           <ProfileAvatarGallery
             items={avatarItems}
             name={profile.data.display_name}

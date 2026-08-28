@@ -251,6 +251,7 @@ export const api = {
     directMessagePolicy: 'everyone' | 'following_and_staff';
     accentColor?: number | null;
     headerEmoji?: string | null;
+    headerCustomEmojiId?: string | null;
   }) =>
     request<{ updated: true }>('/public-profile', {
       method: 'PUT',
@@ -678,11 +679,20 @@ export const api = {
           body,
         });
   },
-  reactConversationMessage: (conversationId: string, messageId: string, reaction: ChatReaction) =>
+  reactConversationMessage: (
+    conversationId: string,
+    messageId: string,
+    reaction: ChatReaction,
+    customEmojiId?: string,
+  ) =>
     request<{ reaction: ChatReaction | null }>(
       `/conversations/${conversationId}/messages/${messageId}/reaction`,
-      { method: 'PUT', body: JSON.stringify({ reaction }) },
+      {
+        method: 'PUT',
+        body: JSON.stringify({ reaction, ...(customEmojiId ? { customEmojiId } : {}) }),
+      },
     ),
+  customEmojiPacks: () => request<CustomEmojiLibrary>('/custom-emoji/packs'),
   shareConversationProfile: (conversationId: string, replyToMessageId?: string) =>
     request<{ sent: true; messageId: string }>(`/conversations/${conversationId}/profile-share`, {
       method: 'POST',
@@ -1092,6 +1102,7 @@ export interface PublicUserProfile {
   bio: string;
   accent_color?: number | null;
   header_emoji?: string | null;
+  header_custom_emoji_id?: string | null;
   avatar_media_id: string | null;
   avatar_render_mode: 'photo' | 'animation' | 'still' | null;
   avatar_media_items?: string;
@@ -1223,6 +1234,28 @@ export interface PostEngagementUser {
 }
 
 export type SearchScope = 'questionnaires' | 'profiles';
+
+export interface CustomEmojiPack {
+  id: string;
+  set_name: string;
+  title: string;
+  emoji_count: number;
+  monochrome_count: number;
+  is_own: number;
+}
+
+export interface CustomEmojiItem {
+  custom_emoji_id: string;
+  pack_id: string;
+  emoji: string;
+  render_kind: 'static' | 'video' | 'lottie';
+  needs_repainting: number;
+}
+
+export interface CustomEmojiLibrary {
+  packs: CustomEmojiPack[];
+  emoji: CustomEmojiItem[];
+}
 
 export interface PostComment {
   id: string;

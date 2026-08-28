@@ -103,6 +103,7 @@ describe('D1 migrations', () => {
       '0073_special_badge.sql',
       '0074_comment_voice.sql',
       '0075_special_badge_moderator.sql',
+      '0076_custom_emoji.sql',
     ]);
     expect(() => applyMigrations()).not.toThrow();
     const postColumns = database.prepare('PRAGMA table_info(telegram_posts)').all() as Array<{

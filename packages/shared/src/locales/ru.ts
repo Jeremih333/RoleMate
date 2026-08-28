@@ -215,6 +215,36 @@ export const ru = {
       `RoleMate Premium для собеседника. ${description}`,
     moderationWarning: (reason: string) =>
       `⚠️ Предупреждение от модерации RoleMate\n\n${reason}\n\nЧто делать дальше: удали или исправь то, из-за чего пришло предупреждение. Повторные нарушения ведут к временной, а затем к постоянной блокировке. Если считаешь предупреждение ошибкой, напиши в поддержку через раздел «Помощь» в приложении.`,
+    customEmoji: {
+      setNotFound:
+        'Не получилось открыть этот набор. Проверь ссылку вида t.me/addemoji/… — набор должен быть доступен всем.',
+      notEmojiSet:
+        'Это набор стикеров, а не эмодзи. Нужна ссылка вида t.me/addemoji/… — её даёт сам набор эмодзи.',
+      setEmpty: 'В этом наборе не нашлось эмодзи, которые можно загрузить.',
+      openPicker: 'Открыть оформление',
+      imported: (input: {
+        title: string;
+        total: number;
+        monochrome: number;
+        skipped: number;
+        limit: number;
+        reimported: boolean;
+      }) =>
+        [
+          input.reimported
+            ? `Набор «${input.title}» обновлён: ${input.total} эмодзи.`
+            : `Набор «${input.title}» загружен: ${input.total} эмодзи.`,
+          input.monochrome
+            ? `Из них ${input.monochrome} монохромных — их можно поставить в шапку профиля (нужен Premium).`
+            : 'Монохромных эмодзи в наборе нет, поэтому в шапку профиля из него поставить нечего.',
+          input.skipped
+            ? `Пропущено: ${input.skipped}. Из набора берутся первые ${input.limit} эмодзи подходящего размера.`
+            : '',
+          'Эмодзи доступны всем в реакциях чата.',
+        ]
+          .filter(Boolean)
+          .join('\n'),
+    },
     selectChat: '🕊 Выбери чат. Следующие сообщения будут отправлены в него анонимно:',
     premiumSelect: `⭐ Выбери тариф Premium.\n\n${FULL_FOOTER}`,
     referral: (link: string, rewardDays: number) =>
@@ -691,6 +721,9 @@ export const ru = {
       appearanceTitle: 'Оформление профиля',
       appearanceHint: 'Цвет шапки и фоновый эмодзи видят все, кто открывает твой профиль.',
       appearanceColor: 'Цвет профиля',
+      appearanceCustomEmoji: 'Премиум-эмодзи из твоих наборов',
+      appearanceCustomEmojiEmpty:
+        'Монохромных премиум-эмодзи пока нет. Пришли боту ссылку вида t.me/addemoji/… — в шапку можно ставить только одноцветные эмодзи, они перекрашиваются под цвет профиля.',
       appearanceEmoji: 'Фоновый эмодзи',
       appearanceNone: 'Без эмодзи',
       appearancePremium: 'Оформление профиля доступно с Premium.',
@@ -1386,6 +1419,7 @@ export const ru = {
       saveMessageEdit: 'Сохранить сообщение',
       changeMediaOrder: 'Изменить порядок медиа',
       replaceMedia: 'Заменить',
+      customEmojiReaction: 'Премиум-эмодзи',
       reactionNames: {
         heart: '❤️ Сердце',
         thumbs_up: '👍 Нравится',

@@ -1661,6 +1661,8 @@ export const ru = {
       deleteAccountDone: 'Аккаунт и пользовательские данные удалены.',
     },
     admin: {
+      promptConfirm: 'Подтвердить',
+      promptCancel: 'Отмена',
       eyebrow: 'доступ владельца',
       title: 'Управление RoleMate',
       protectedTitle: 'Защищённая панель',

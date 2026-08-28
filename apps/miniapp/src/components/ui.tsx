@@ -1,5 +1,6 @@
 import {
   useEffect,
+  useState,
   type ButtonHTMLAttributes,
   type HTMLAttributes,
   type PropsWithChildren,
@@ -194,4 +195,67 @@ export function InfoDialog({
       </div>
     </div>
   );
+}
+
+/**
+ * A themed replacement for window.prompt. A native prompt inside a Telegram
+ * WebApp is unstyled, unreliable on mobile clients, and the moderation panel
+ * used it fifteen times over — including before destructive actions.
+ *
+ * Returns an `ask` function that resolves with the typed value, or null when the
+ * moderator backs out, plus the element to render once in the component.
+ */
+export function useTextPrompt(): {
+  ask: (title: string, initialValue?: string) => Promise<string | null>;
+  dialog: ReactNode;
+} {
+  const [request, setRequest] = useState<{
+    title: string;
+    resolve: (value: string | null) => void;
+  } | null>(null);
+  const [value, setValue] = useState('');
+
+  const close = (result: string | null) => {
+    request?.resolve(result);
+    setRequest(null);
+    setValue('');
+  };
+
+  const ask = (title: string, initialValue = '') =>
+    new Promise<string | null>((resolve) => {
+      setValue(initialValue);
+      setRequest({ title, resolve });
+    });
+
+  const dialog = request ? (
+    <div
+      className="confirm-dialog-backdrop"
+      role="presentation"
+      onMouseDown={(event) => {
+        if (event.currentTarget === event.target) close(null);
+      }}
+    >
+      <Card className="confirm-dialog" role="dialog" aria-modal="true">
+        <h2>{request.title}</h2>
+        <input
+          className="input-field mt-3"
+          autoFocus
+          value={value}
+          onChange={(event) => setValue(event.target.value)}
+          onKeyDown={(event) => {
+            if (event.key === 'Enter') close(value);
+            if (event.key === 'Escape') close(null);
+          }}
+        />
+        <div className="confirm-dialog-actions">
+          <Button onClick={() => close(value)}>{ru.miniApp.admin.promptConfirm}</Button>
+          <Button variant="secondary" onClick={() => close(null)}>
+            {ru.miniApp.admin.promptCancel}
+          </Button>
+        </div>
+      </Card>
+    </div>
+  ) : null;
+
+  return { ask, dialog };
 }

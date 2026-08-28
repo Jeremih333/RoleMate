@@ -322,6 +322,8 @@ export async function buildServer(
     ].slice(0, 20);
   const queueTelegramActivityNotification = async (input: {
     targetUserId: string;
+    /** Whoever caused it; the bot never reports someone's own action back to them. */
+    actorUserId?: string;
     category:
       | 'like'
       | 'follow'
@@ -387,6 +389,7 @@ export async function buildServer(
       deliveries.map((delivery) =>
         queueTelegramActivityNotification({
           targetUserId: delivery.user_id,
+          actorUserId: input.actorUserId,
           category: 'mention',
           message,
           openPath: delivery.open_path,
@@ -409,6 +412,7 @@ export async function buildServer(
       deliveries.map((delivery) =>
         queueTelegramActivityNotification({
           targetUserId: delivery.user_id,
+          actorUserId: input.actorUserId,
           category: input.entityType === 'post' ? 'follower_post' : 'follower_questionnaire',
           message: input.message,
           openPath: delivery.open_path,
@@ -957,6 +961,7 @@ export async function buildServer(
     if (result.created) {
       await queueTelegramActivityNotification({
         targetUserId: userId,
+        actorUserId: session.userId,
         category: 'follow',
         message: ru.bot.newFollowerNotification,
         openPath: `/profiles/${encodeURIComponent(session.userId)}`,
@@ -1005,6 +1010,7 @@ export async function buildServer(
     if (value === 1 && !result.removed) {
       await queueTelegramActivityNotification({
         targetUserId: userId,
+        actorUserId: session.userId,
         category: 'like',
         message: ru.bot.profileLikeNotification,
         openPath: '/profile',
@@ -2048,6 +2054,7 @@ export async function buildServer(
     if (result.reaction && result.targetUserId !== session.userId) {
       await queueTelegramActivityNotification({
         targetUserId: result.targetUserId,
+        actorUserId: session.userId,
         category: 'reaction',
         message: ru.bot.newReactionNotification,
         openPath: `/chats?conversation=${encodeURIComponent(conversationId)}`,
@@ -3097,8 +3104,10 @@ export async function buildServer(
       })
       .parse(request.body);
     // The audio has to become a Telegram file before it can be stored, the same
-    // as every other media file here. It is delivered to the author's own chat
-    // with the bot, quietly, so the recording is never lost.
+    // as every other media file here. It passes through the author's own chat
+    // for a moment and the message is removed straight away: the file id stays
+    // valid, and the private chat with the bot is left carrying only what the
+    // bot actually has to say.
     let storedVoice: { telegramFileId: string; fileSizeBytes: number } | null = null;
     if (voice) {
       const allowedVoiceTypes = ['audio/mpeg', 'audio/mp4', 'audio/ogg', 'audio/webm'];
@@ -3122,6 +3131,7 @@ export async function buildServer(
             });
       const telegramFileId =
         telegramMediaFileId(delivered, 'voice') ?? telegramMediaFileId(delivered, 'audio');
+      await bot.api.deleteMessage(delivered.chat.id, delivered.message_id).catch(() => undefined);
       if (!telegramFileId) {
         throw new DataApiError('CHAT_MEDIA_UNAVAILABLE', ru.api.requestFailed, 502);
       }
@@ -3166,6 +3176,7 @@ export async function buildServer(
     if (activity) {
       await queueTelegramActivityNotification({
         targetUserId: activity.target_user_id,
+        actorUserId: session.userId,
         category: 'comment',
         message: ru.bot.commentNotification,
         openPath: activity.open_path,
@@ -3190,6 +3201,7 @@ export async function buildServer(
       if (replyActivity) {
         await queueTelegramActivityNotification({
           targetUserId: replyActivity.target_user_id,
+          actorUserId: session.userId,
           category: 'comment',
           message: ru.bot.commentNotification,
           openPath: replyActivity.open_path,
@@ -3256,6 +3268,7 @@ export async function buildServer(
     if (result.value === 1) {
       await queueTelegramActivityNotification({
         targetUserId: result.authorUserId,
+        actorUserId: session.userId,
         category: 'comment',
         message: ru.bot.commentLikeNotification,
         openPath: `/posts/${encodeURIComponent(result.postId)}`,
@@ -3278,6 +3291,7 @@ export async function buildServer(
     if (result.value === 1) {
       await queueTelegramActivityNotification({
         targetUserId: result.authorUserId,
+        actorUserId: session.userId,
         category: 'like',
         message: ru.bot.postLikeNotification,
         openPath: `/posts/${encodeURIComponent(postId)}`,

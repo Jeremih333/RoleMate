@@ -519,6 +519,8 @@ export const workerOperations = {
   }),
   'notifications.telegram.enqueue': z.object({
     targetUserId: z.string().uuid(),
+    // Who caused the notification. Nothing is sent to the person who acted.
+    actorUserId: z.string().uuid().optional(),
     conversationId: z.string().uuid().optional(),
     category: z
       .enum([

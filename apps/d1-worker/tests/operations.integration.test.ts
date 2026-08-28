@@ -3600,6 +3600,52 @@ describe('D1 domain operations', () => {
     ).resolves.toBeNull();
   });
 
+  it('never reports a person their own action, and stays quiet while they are in the app', async () => {
+    const actorId = await upsert(2_401);
+    const otherId = await upsert(2_402);
+    const base = {
+      category: 'like' as const,
+      message: 'Someone liked it',
+      openPath: '/posts/example',
+    };
+
+    // Liking your own post must not reach your private chat with the bot.
+    await expect(
+      executeOperation(
+        env,
+        'notifications.telegram.enqueue',
+        { ...base, targetUserId: actorId, actorUserId: actorId, sourceKey: 'self-like:1' },
+        crypto.randomUUID(),
+      ),
+    ).resolves.toMatchObject({ queued: false });
+
+    // The same action towards somebody else does.
+    await expect(
+      executeOperation(
+        env,
+        'notifications.telegram.enqueue',
+        { ...base, targetUserId: otherId, actorUserId: actorId, sourceKey: 'other-like:1' },
+        crypto.randomUUID(),
+      ),
+    ).resolves.toMatchObject({ queued: true });
+
+    // Not while that person has the app open, though.
+    sqlite
+      .prepare(
+        `INSERT INTO web_sessions (id_hash, user_id, csrf_hash, expires_at, last_seen_at)
+         VALUES (?, ?, ?, datetime('now', '+1 day'), CURRENT_TIMESTAMP)`,
+      )
+      .run(crypto.randomUUID(), otherId, crypto.randomUUID());
+    await expect(
+      executeOperation(
+        env,
+        'notifications.telegram.enqueue',
+        { ...base, targetUserId: otherId, actorUserId: actorId, sourceKey: 'other-like:2' },
+        crypto.randomUUID(),
+      ),
+    ).resolves.toMatchObject({ queued: false });
+  });
+
   it('queues idempotent Telegram chat notifications, resolves the current Telegram id, and retries transient failures', async () => {
     const recipientId = await upsert(2004);
     const conversationId = crypto.randomUUID();

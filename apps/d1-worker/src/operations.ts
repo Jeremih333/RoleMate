@@ -4897,7 +4897,8 @@ const handlers: { [K in WorkerOperation]: Handler<K> } = {
                AND participant.conversation_id = ?3
                AND participant.active_in_chat_at >= datetime('now', '-2 minutes')
            )
-         )`,
+         )
+         AND (?7 IS NULL OR target.id <> ?7)`,
     )
       .bind(
         notificationId,
@@ -4906,6 +4907,7 @@ const handlers: { [K in WorkerOperation]: Handler<K> } = {
         input.sourceKey,
         json({ message: input.message, openPath: input.openPath }),
         input.category,
+        input.actorUserId ?? null,
       )
       .run();
     return { queued: result.meta.changes === 1, notificationId };

@@ -3657,7 +3657,10 @@ const handlers: { [K in WorkerOperation]: Handler<K> } = {
            SELECT 1 FROM custom_emoji_assets a
            WHERE a.custom_emoji_id = ce.custom_emoji_id AND a.kind = ?1
          )
-         ORDER BY ce.pack_id, ce.position
+         -- Random rather than ordered: a file Telegram will not give us would
+         -- otherwise sit at the head of the queue and hold up everything behind
+         -- it on every run.
+         ORDER BY RANDOM()
          LIMIT ?2`,
       )
         .bind(input.kind, input.limit)

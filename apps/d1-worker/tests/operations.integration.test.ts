@@ -194,7 +194,7 @@ describe('D1 domain operations', () => {
         crypto.randomUUID(),
       )) as Array<{ custom_emoji_id: string; thumbnail_file_id: string | null }>;
 
-    expect((await pending('thumbnail')).map((item) => item.custom_emoji_id)).toEqual([
+    expect((await pending('thumbnail')).map((item) => item.custom_emoji_id).sort()).toEqual([
       '9201',
       '9202',
     ]);
@@ -213,7 +213,7 @@ describe('D1 domain operations', () => {
     );
     // Cached now, so it is no longer offered — but only for that kind.
     expect((await pending('thumbnail')).map((item) => item.custom_emoji_id)).toEqual(['9202']);
-    expect((await pending('animation')).map((item) => item.custom_emoji_id)).toEqual([
+    expect((await pending('animation')).map((item) => item.custom_emoji_id).sort()).toEqual([
       '9201',
       '9202',
     ]);

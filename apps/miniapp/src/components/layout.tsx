@@ -14,7 +14,7 @@ import {
   Trash2,
 } from 'lucide-react';
 import { Link, useLocation } from 'wouter';
-import { motion, useReducedMotion } from 'framer-motion';
+import { AnimatePresence, motion, useReducedMotion } from 'framer-motion';
 import { createPortal } from 'react-dom';
 import { ru } from '@rolemate/shared';
 import { useUserStore } from '../store.js';
@@ -37,6 +37,19 @@ export function Layout({ children }: { children: ReactNode }) {
   const [location, navigate] = useLocation();
   const reduceMotion = useReducedMotion();
   const sectionSwipe = useRef<{ x: number; y: number; enabled: boolean } | null>(null);
+  // Sections are ordered in the tab bar, so a move to a later tab slides in from
+  // the right and a move back slides in from the left, the way Telegram does it.
+  const navigationIndex = navigation.findIndex(({ to }) =>
+    to === '/' ? location === '/' : location.startsWith(to),
+  );
+  const previousNavigationIndex = useRef(navigationIndex);
+  const slideDirection =
+    navigationIndex < 0 || previousNavigationIndex.current < 0
+      ? 0
+      : Math.sign(navigationIndex - previousNavigationIndex.current);
+  useEffect(() => {
+    previousNavigationIndex.current = navigationIndex;
+  }, [navigationIndex]);
   const [feedTopActionVisible, setFeedTopActionVisible] = useState(false);
   const [notificationsOpen, setNotificationsOpen] = useState(false);
   const queryClient = useQueryClient();
@@ -185,43 +198,52 @@ export function Layout({ children }: { children: ReactNode }) {
       {/* Keyed by route: Layout survives navigation, so without a key the element
           was never recreated and the entrance played once per session. Honours
           the system reduced-motion setting, which framer-motion ignores. */}
-      <motion.main
-        key={location}
-        className="page"
-        initial={reduceMotion ? false : { opacity: 0, y: 8 }}
-        animate={{ opacity: 1, y: 0 }}
-        transition={{ duration: reduceMotion ? 0 : 0.22, ease: [0.22, 0.9, 0.28, 1] }}
-        onTouchStart={(event) => {
-          const target = event.target as HTMLElement;
-          sectionSwipe.current = {
-            x: event.touches[0]?.clientX ?? 0,
-            y: event.touches[0]?.clientY ?? 0,
-            enabled:
-              !target.closest('.telegram-conversation') &&
-              !target.closest(
-                'input,textarea,select,button,a,audio,video,[role="dialog"],.profile-cover,.post-media-carousel,.media-lightbox,.chat-media-carousel,.chat-media-lightbox,.profile-avatar-lightbox,[data-no-section-swipe]',
-              ),
-          };
-        }}
-        onTouchEnd={(event) => {
-          const start = sectionSwipe.current;
-          sectionSwipe.current = null;
-          const touch = event.changedTouches[0];
-          if (!start?.enabled || !touch) return;
-          const deltaX = touch.clientX - start.x;
-          const deltaY = touch.clientY - start.y;
-          if (Math.abs(deltaX) < 90 || Math.abs(deltaX) < Math.abs(deltaY) * 1.35) return;
-          const currentIndex = navigation.findIndex(({ to }) =>
-            to === '/' ? location === '/' : location.startsWith(to),
-          );
-          if (currentIndex < 0) return;
-          const nextIndex = currentIndex + (deltaX < 0 ? 1 : -1);
-          const next = navigation[nextIndex];
-          if (next) navigate(next.to);
-        }}
-      >
-        {children}
-      </motion.main>
+      <AnimatePresence mode="wait" initial={false}>
+        <motion.main
+          key={location}
+          className="page"
+          initial={
+            reduceMotion ? false : { opacity: 0, x: slideDirection * 24, y: slideDirection ? 0 : 8 }
+          }
+          animate={{ opacity: 1, x: 0, y: 0 }}
+          exit={
+            reduceMotion
+              ? { opacity: 1 }
+              : { opacity: 0, x: slideDirection * -16, transition: { duration: 0.12 } }
+          }
+          transition={{ duration: reduceMotion ? 0 : 0.18, ease: [0.22, 0.9, 0.28, 1] }}
+          onTouchStart={(event) => {
+            const target = event.target as HTMLElement;
+            sectionSwipe.current = {
+              x: event.touches[0]?.clientX ?? 0,
+              y: event.touches[0]?.clientY ?? 0,
+              enabled:
+                !target.closest('.telegram-conversation') &&
+                !target.closest(
+                  'input,textarea,select,button,a,audio,video,[role="dialog"],.profile-cover,.post-media-carousel,.media-lightbox,.chat-media-carousel,.chat-media-lightbox,.profile-avatar-lightbox,[data-no-section-swipe]',
+                ),
+            };
+          }}
+          onTouchEnd={(event) => {
+            const start = sectionSwipe.current;
+            sectionSwipe.current = null;
+            const touch = event.changedTouches[0];
+            if (!start?.enabled || !touch) return;
+            const deltaX = touch.clientX - start.x;
+            const deltaY = touch.clientY - start.y;
+            if (Math.abs(deltaX) < 90 || Math.abs(deltaX) < Math.abs(deltaY) * 1.35) return;
+            const currentIndex = navigation.findIndex(({ to }) =>
+              to === '/' ? location === '/' : location.startsWith(to),
+            );
+            if (currentIndex < 0) return;
+            const nextIndex = currentIndex + (deltaX < 0 ? 1 : -1);
+            const next = navigation[nextIndex];
+            if (next) navigate(next.to);
+          }}
+        >
+          {children}
+        </motion.main>
+      </AnimatePresence>
       {feedTopActionVisible ? (
         <button
           className="feed-top-action"

@@ -9605,3 +9605,63 @@ body {
   border-color: var(--accent);
   background: var(--accent-soft);
 }
+
+/* Live activity in the conversation header: three dots keep pulsing while the
+   partner is typing, recording or uploading. */
+.chat-typing-dots {
+  display: inline-flex;
+  gap: 3px;
+  margin-left: 5px;
+  vertical-align: middle;
+}
+.chat-typing-dots i {
+  width: 4px;
+  height: 4px;
+  border-radius: 50%;
+  background: currentColor;
+  animation: chat-typing-dot 1.1s infinite ease-in-out;
+}
+.chat-typing-dots i:nth-child(2) {
+  animation-delay: 0.15s;
+}
+.chat-typing-dots i:nth-child(3) {
+  animation-delay: 0.3s;
+}
+@keyframes chat-typing-dot {
+  0%,
+  60%,
+  100% {
+    opacity: 0.25;
+    transform: translateY(0);
+  }
+  30% {
+    opacity: 1;
+    transform: translateY(-2px);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .chat-typing-dots i {
+    animation: none;
+    opacity: 0.6;
+  }
+}
+
+/* A message that arrives while the chat is open slides up into place. */
+.telegram-message-row.is-fresh {
+  animation: telegram-message-in 0.2s cubic-bezier(0.22, 0.9, 0.28, 1);
+}
+@keyframes telegram-message-in {
+  from {
+    opacity: 0;
+    transform: translateY(10px) scale(0.98);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .telegram-message-row.is-fresh {
+    animation: none;
+  }
+}

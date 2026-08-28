@@ -434,9 +434,7 @@ function UsersQueue({ isOwner }: { isOwner: boolean }) {
                     ask(ru.miniApp.admin.temporaryBanReasonPrompt, (reason) => {
                       if (!reason) return;
                       beginUserAction(user.id);
-                      const bannedUntil = new Date(
-                        Date.now() + 24 * 60 * 60 * 1_000,
-                      ).toISOString();
+                      const bannedUntil = new Date(Date.now() + 24 * 60 * 60 * 1_000).toISOString();
                       moderate.mutate({
                         userId: user.id,
                         action: 'temporary_ban',
@@ -866,7 +864,8 @@ function QuestionnairesQueue() {
               disabled={moderate.isPending}
               onClick={() =>
                 ask(ru.miniApp.admin.rejectionReasonPrompt, (reason) => {
-                  if (reason) moderate.mutate({ profileId: profile.id, status: 'rejected', reason });
+                  if (reason)
+                    moderate.mutate({ profileId: profile.id, status: 'rejected', reason });
                 })
               }
             >
@@ -2287,9 +2286,7 @@ function Moderators() {
     queryFn: () => api.adminUsers(telegramId),
     enabled: canAssign,
   });
-  const candidate = candidates.data?.find(
-    (user) => user.telegram_user_id === parsedTelegramId,
-  );
+  const candidate = candidates.data?.find((user) => user.telegram_user_id === parsedTelegramId);
   if (moderators.isLoading) return <Skeleton className="h-72" />;
   if (moderators.isError) {
     return <AdminRequestError error={moderators.error} retry={() => moderators.refetch()} />;
@@ -2351,9 +2348,8 @@ function Moderators() {
                 variant="secondary"
                 loading={remove.isPending && remove.variables === moderator.telegram_user_id}
                 onClick={() =>
-                  confirm(
-                    ru.miniApp.admin.removeModeratorConfirm(moderator.telegram_user_id),
-                    () => remove.mutate(moderator.telegram_user_id),
+                  confirm(ru.miniApp.admin.removeModeratorConfirm(moderator.telegram_user_id), () =>
+                    remove.mutate(moderator.telegram_user_id),
                   )
                 }
               >

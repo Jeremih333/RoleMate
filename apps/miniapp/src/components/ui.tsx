@@ -214,10 +214,10 @@ export function useConfirmPrompt(): {
   const dialog = (
     <ConfirmDialog
       open={request !== null}
-      title={ru.miniApp.admin.confirmTitle}
+      title={ru.miniApp.dialogs.confirmTitle}
       description={request?.description ?? ''}
-      confirmLabel={ru.miniApp.admin.promptConfirm}
-      cancelLabel={ru.miniApp.admin.promptCancel}
+      confirmLabel={ru.miniApp.dialogs.confirm}
+      cancelLabel={ru.miniApp.dialogs.cancel}
       onConfirm={() => {
         request?.onConfirm();
         setRequest(null);
@@ -284,9 +284,9 @@ export function useTextPrompt(): {
           }}
         />
         <div className="confirm-dialog-actions">
-          <Button onClick={() => close(value)}>{ru.miniApp.admin.promptConfirm}</Button>
+          <Button onClick={() => close(value)}>{ru.miniApp.dialogs.confirm}</Button>
           <Button variant="secondary" onClick={() => close(null)}>
-            {ru.miniApp.admin.promptCancel}
+            {ru.miniApp.dialogs.cancel}
           </Button>
         </div>
       </Card>

@@ -32,7 +32,14 @@ import {
   type SearchPreferencesInput,
   type SearchProfile,
 } from '../api.js';
-import { Button, Card, EmptyState, Skeleton } from '../components/ui.js';
+import {
+  Button,
+  Card,
+  EmptyState,
+  Skeleton,
+  useConfirmPrompt,
+  useTextPrompt,
+} from '../components/ui.js';
 import { ProfileMarkdown } from '../components/markdown.js';
 import { SwipePlaylist, type PlaylistTrack } from '../components/music-player.js';
 import { ProfileAvatar } from '../components/profile-avatar.js';
@@ -647,6 +654,8 @@ function GlobalProfileResult({
 }
 
 export function SearchPage() {
+  const { confirm, dialog: confirmDialog } = useConfirmPrompt();
+  const { ask, dialog: promptDialog } = useTextPrompt();
   const [, navigate] = useLocation();
   const queryClient = useQueryClient();
   const initialState = useRef(initialSearchState());
@@ -976,16 +985,17 @@ export function SearchPage() {
             <ProfileCard
               profile={profile}
               onOpen={() => setSelectedProfile(profile)}
-              onReport={() => {
-                const description = window.prompt(ru.miniApp.search.reportPrompt) ?? '';
-                if (!description) return;
-                report.mutate({
-                  reportedUserId: profile.user_id,
-                  questionnaireId: profile.id,
-                  category: 'other',
-                  description,
-                });
-              }}
+              onReport={() =>
+                ask(ru.miniApp.search.reportPrompt, (description) => {
+                  if (!description) return;
+                  report.mutate({
+                    reportedUserId: profile.user_id,
+                    questionnaireId: profile.id,
+                    category: 'other',
+                    description,
+                  });
+                })
+              }
             />
             {me.data?.isAdmin ? (
               <div
@@ -1108,11 +1118,9 @@ export function SearchPage() {
             <div className="flex justify-center gap-6 text-xs text-muted">
               <button
                 className="inline-flex gap-1"
-                onClick={() => {
-                  if (window.confirm(ru.miniApp.search.blockConfirm)) {
-                    block.mutate(profile.user_id);
-                  }
-                }}
+                onClick={() =>
+                  confirm(ru.miniApp.search.blockConfirm, () => block.mutate(profile.user_id))
+                }
               >
                 <Ban className="h-3.5 w-3.5" /> {ru.miniApp.search.block}
               </button>
@@ -1155,16 +1163,17 @@ export function SearchPage() {
               messagePending={directChat.isPending}
               onMessage={() => directChat.mutate(selectedProfile.user_id)}
               onShare={() => setShareQuestionnaireId(selectedProfile.id)}
-              onReport={() => {
-                const description = window.prompt(ru.miniApp.search.reportPrompt) ?? '';
-                if (!description) return;
-                report.mutate({
-                  reportedUserId: selectedProfile.user_id,
-                  questionnaireId: selectedProfile.id,
-                  category: 'other',
-                  description,
-                });
-              }}
+              onReport={() =>
+                ask(ru.miniApp.search.reportPrompt, (description) => {
+                  if (!description) return;
+                  report.mutate({
+                    reportedUserId: selectedProfile.user_id,
+                    questionnaireId: selectedProfile.id,
+                    category: 'other',
+                    description,
+                  });
+                })
+              }
             />
             {directChat.isError ? (
               <div className="error-box mt-3">{ru.miniApp.search.directChatError}</div>
@@ -1210,6 +1219,8 @@ export function SearchPage() {
         onClose={() => setShareQuestionnaireId(null)}
         onSend={(conversationIds) => shareQuestionnaire.mutate(conversationIds)}
       />
+      {confirmDialog}
+      {promptDialog}
     </div>
   );
 }

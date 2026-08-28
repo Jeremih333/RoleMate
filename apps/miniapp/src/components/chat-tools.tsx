@@ -18,7 +18,7 @@ import {
 } from 'lucide-react';
 import { ru } from '@rolemate/shared';
 import { api, type ChatMediaKind } from '../api.js';
-import { Card, ConfirmDialog } from './ui.js';
+import { Card, ConfirmDialog, useConfirmPrompt } from './ui.js';
 import { getTelegram } from '../telegram.js';
 
 function startChatActivity(
@@ -47,10 +47,6 @@ interface ChatToolsProps {
   replyToMessageId?: string;
 }
 
-function premiumMessage(): void {
-  window.alert(ru.api.premiumRequired);
-}
-
 async function fileBase64(file: File): Promise<string> {
   const buffer = new Uint8Array(await file.arrayBuffer());
   let binary = '';
@@ -77,6 +73,7 @@ function PendingMediaThumbnail({ file }: { file: File }) {
 }
 
 export function ChatTools({ conversationId, premium, onSent, replyToMessageId }: ChatToolsProps) {
+  const { confirm, dialog: confirmDialog } = useConfirmPrompt();
   const [open, setOpen] = useState(false);
   const [busy, setBusy] = useState(false);
   const [notice, setNotice] = useState('');
@@ -125,7 +122,7 @@ export function ChatTools({ conversationId, premium, onSent, replyToMessageId }:
     selectedCaptionPosition: 'top' | 'bottom' = 'bottom',
   ) {
     if (kind !== 'photo' && !premium) {
-      premiumMessage();
+      setNotice(ru.api.premiumRequired);
       return;
     }
     const maxBytes = kind === 'photo' ? 8 * 1024 * 1024 : 20 * 1024 * 1024;
@@ -193,8 +190,13 @@ export function ChatTools({ conversationId, premium, onSent, replyToMessageId }:
     }
   }
 
-  async function giftPremium(productId: string, name: string, stars: number) {
-    if (!window.confirm(ru.miniApp.community.giftPremiumConfirm(name, stars))) return;
+  function giftPremium(productId: string, name: string, stars: number) {
+    confirm(ru.miniApp.community.giftPremiumConfirm(name, stars), () => {
+      void sendGiftPremium(productId);
+    });
+  }
+
+  async function sendGiftPremium(productId: string) {
     setBusy(true);
     setNotice('');
     try {
@@ -213,7 +215,7 @@ export function ChatTools({ conversationId, premium, onSent, replyToMessageId }:
 
   async function shareScenario(variantId: string) {
     if (!premium) {
-      premiumMessage();
+      setNotice(ru.api.premiumRequired);
       return;
     }
     setBusy(true);
@@ -303,7 +305,9 @@ export function ChatTools({ conversationId, premium, onSent, replyToMessageId }:
           </button>
           <button
             type="button"
-            onClick={() => (premium ? audioRef.current?.click() : premiumMessage())}
+            onClick={() =>
+              premium ? audioRef.current?.click() : setNotice(ru.api.premiumRequired)
+            }
           >
             <FileAudio /> {ru.miniApp.community.sendAudio}
           </button>
@@ -312,7 +316,9 @@ export function ChatTools({ conversationId, premium, onSent, replyToMessageId }:
           </button>
           <button
             type="button"
-            onClick={() => (premium ? setScenarioOpen((value) => !value) : premiumMessage())}
+            onClick={() =>
+              premium ? setScenarioOpen((value) => !value) : setNotice(ru.api.premiumRequired)
+            }
           >
             <BookOpen /> {ru.miniApp.community.shareScenario}
           </button>
@@ -347,7 +353,7 @@ export function ChatTools({ conversationId, premium, onSent, replyToMessageId }:
                     key={product.id}
                     type="button"
                     disabled={busy}
-                    onClick={() => void giftPremium(product.id, product.name, product.stars_amount)}
+                    onClick={() => giftPremium(product.id, product.name, product.stars_amount)}
                   >
                     <Gift /> {product.name} · {product.stars_amount} ⭐
                   </button>
@@ -380,7 +386,7 @@ export function ChatTools({ conversationId, premium, onSent, replyToMessageId }:
             (file) => file.type === 'image/gif' || file.type.startsWith('video/'),
           );
           if (gated.length && !premium) {
-            premiumMessage();
+            setNotice(ru.api.premiumRequired);
             return;
           }
           setPendingMediaFiles(files);
@@ -559,6 +565,7 @@ export function ChatTools({ conversationId, premium, onSent, replyToMessageId }:
         onConfirm={() => void shareProfile()}
         onCancel={() => setShareConfirmOpen(false)}
       />
+      {confirmDialog}
     </div>
   );
 }
@@ -599,7 +606,7 @@ export function VoiceRecorderButton({
 
   const start = async () => {
     if (!premium) {
-      premiumMessage();
+      setNotice(ru.api.premiumRequired);
       return;
     }
     if (!navigator.mediaDevices || typeof MediaRecorder === 'undefined') {

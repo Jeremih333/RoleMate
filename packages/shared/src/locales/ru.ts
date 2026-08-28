@@ -527,6 +527,12 @@ export const ru = {
       '🛠 RoleMate временно находится на обслуживании. Основные функции скоро снова будут доступны.',
   },
   miniApp: {
+    // Labels for the themed prompt and confirm dialogs, shared by every screen.
+    dialogs: {
+      confirm: 'Подтвердить',
+      cancel: 'Отмена',
+      confirmTitle: 'Подтвердите действие',
+    },
     time: {
       justNow: 'только что',
       inSeconds: 'через несколько секунд',
@@ -1680,9 +1686,6 @@ export const ru = {
       deleteAccountDone: 'Аккаунт и пользовательские данные удалены.',
     },
     admin: {
-      promptConfirm: 'Подтвердить',
-      promptCancel: 'Отмена',
-      confirmTitle: 'Подтвердите действие',
       eyebrow: 'доступ владельца',
       title: 'Управление RoleMate',
       protectedTitle: 'Защищённая панель',

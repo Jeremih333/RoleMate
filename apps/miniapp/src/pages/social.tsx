@@ -60,6 +60,8 @@ import {
   InfoDialog,
   SectionTitle,
   Skeleton,
+  useConfirmPrompt,
+  useTextPrompt,
 } from '../components/ui.js';
 import { getTelegram } from '../telegram.js';
 import { useViewerTime } from '../components/viewer-time.js';
@@ -470,316 +472,327 @@ export function PublicProfilePage() {
           ? createPortal(
               <div id="public-profile-editor" ref={editorRef} className="public-profile-editor">
                 <header className="public-profile-editor-header">
-              <strong>{ru.miniApp.social.editProfile}</strong>
-              <button
-                type="button"
-                aria-label={ru.miniApp.social.cancelEditing}
-                onClick={requestEditorClose}
-              >
-                <X aria-hidden />
-              </button>
-            </header>
-            <div className="public-profile-editor-content">
-              <p className="mb-5 text-sm leading-relaxed text-muted">
-                {ru.miniApp.social.profileDescription}
-              </p>
-              <label className="field-label" htmlFor="public-display-name">
-                {ru.miniApp.social.displayName}
-              </label>
-              <input
-                id="public-display-name"
-                ref={displayNameRef}
-                className="input"
-                maxLength={80}
-                value={displayName}
-                onChange={(event) => setDisplayName(event.target.value)}
-              />
-              <label className="field-label mt-4" htmlFor="public-bio">
-                {ru.miniApp.social.bio}
-              </label>
-              <textarea
-                id="public-bio"
-                className="input min-h-32"
-                maxLength={1500}
-                value={bio}
-                onChange={(event) => setBio(event.target.value)}
-              />
-              <div className="mt-5 rounded-2xl border border-white/10 p-4">
-                <strong>{ru.miniApp.social.usernameTitle}</strong>
-                <p className="mt-1 text-sm text-muted">{ru.miniApp.social.usernameDescription}</p>
-                <div className="mt-3 flex min-w-0 flex-col gap-2 sm:flex-row">
-                  <input
-                    className="input min-w-0 flex-1"
-                    value={username}
-                    maxLength={33}
-                    placeholder={ru.miniApp.social.usernamePlaceholder}
-                    onChange={(event) => setUsername(event.target.value)}
-                  />
-                  <Button
-                    variant="secondary"
-                    disabled={username.trim().replace(/^@/, '').length < 5}
-                    loading={claimUsername.isPending}
-                    onClick={() => claimUsername.mutate()}
+                  <strong>{ru.miniApp.social.editProfile}</strong>
+                  <button
+                    type="button"
+                    aria-label={ru.miniApp.social.cancelEditing}
+                    onClick={requestEditorClose}
                   >
-                    {ru.miniApp.social.usernameClaim}
-                  </Button>
-                </div>
-                {usernames.data?.[0] ? (
-                  <Button
-                    className="mt-2"
-                    variant="ghost"
-                    loading={releaseUsername.isPending}
-                    onClick={() => releaseUsername.mutate(usernames.data[0]!.username)}
-                  >
-                    {ru.miniApp.social.usernameRelease}
-                  </Button>
-                ) : null}
-                {claimUsername.isError ? (
-                  <div className="error-box mt-3">{claimUsername.error.message}</div>
-                ) : null}
-              </div>
-              <div className="mt-5">
-                <strong>{ru.miniApp.social.appearanceTitle}</strong>
-                <p className="mt-1 text-sm text-muted">{ru.miniApp.social.appearanceHint}</p>
-                {premiumStatus.data?.premium ? (
-                  <>
-                    <p className="mt-3 text-xs text-muted">{ru.miniApp.social.appearanceColor}</p>
-                    <div className="appearance-swatches">
-                      {Array.from({ length: PROFILE_ACCENTS }, (_, index) => (
-                        <button
-                          key={index}
-                          type="button"
-                          aria-label={`${ru.miniApp.social.appearanceColor} ${index + 1}`}
-                          aria-pressed={accentColor === index}
-                          className={`appearance-swatch${accentColor === index ? ' is-selected' : ''}`}
-                          style={{ background: `var(--profile-accent-${index})` }}
-                          onClick={() => setAccentColor(accentColor === index ? null : index)}
-                        />
-                      ))}
-                    </div>
-                    <p className="mt-3 text-xs text-muted">{ru.miniApp.social.appearanceEmoji}</p>
-                    <div className="appearance-emoji-row">
-                      <button
-                        type="button"
-                        className={`appearance-emoji${headerEmoji ? '' : ' is-selected'}`}
-                        aria-label={ru.miniApp.social.appearanceNone}
-                        onClick={() => setHeaderEmoji(null)}
-                      >
-                        <X className="h-4 w-4" />
-                      </button>
-                      {ru.miniApp.social.appearanceEmojiOptions.map((emoji) => (
-                        <button
-                          key={emoji}
-                          type="button"
-                          className={`appearance-emoji${headerEmoji === emoji ? ' is-selected' : ''}`}
-                          aria-pressed={headerEmoji === emoji}
-                          onClick={() => setHeaderEmoji(headerEmoji === emoji ? null : emoji)}
-                        >
-                          {emoji}
-                        </button>
-                      ))}
-                    </div>
-                  </>
-                ) : (
-                  <p className="mt-3 text-sm text-muted">
-                    {ru.miniApp.social.appearancePremium}{' '}
-                    <Link className="text-lilac underline" href="/premium">
-                      {ru.miniApp.social.appearanceOpenPremium}
-                    </Link>
+                    <X aria-hidden />
+                  </button>
+                </header>
+                <div className="public-profile-editor-content">
+                  <p className="mb-5 text-sm leading-relaxed text-muted">
+                    {ru.miniApp.social.profileDescription}
                   </p>
-                )}
-              </div>
-              <div className="mt-5">
-                <strong>{ru.miniApp.social.avatarTitle}</strong>
-                <p className="mt-1 text-sm text-muted">{ru.miniApp.social.avatarDescription}</p>
-                {currentAvatarChoice ? (
-                  <div className="avatar-media-selector mt-3">
-                    <div
-                      className="avatar-media-selector-stage"
-                      onTouchStart={(event) => {
-                        avatarSwipeStart.current = event.touches[0]?.clientX ?? null;
-                      }}
-                      onTouchEnd={(event) => {
-                        const end = event.changedTouches[0]?.clientX;
-                        if (avatarSwipeStart.current === null || end === undefined) return;
-                        const distance = end - avatarSwipeStart.current;
-                        avatarSwipeStart.current = null;
-                        if (Math.abs(distance) < 45) return;
-                        setAvatarPickerIndex((index) =>
-                          distance > 0
-                            ? (index - 1 + avatarChoices.length) % avatarChoices.length
-                            : (index + 1) % avatarChoices.length,
-                        );
-                      }}
-                    >
-                      {currentAvatarChoice.media_type === 'video' ? (
-                        <video
-                          key={currentAvatarChoice.id}
-                          src={`/api/profile-media/${currentAvatarChoice.id}`}
-                          muted
-                          loop
-                          autoPlay
-                          playsInline
-                        />
-                      ) : (
-                        <img src={`/api/profile-media/${currentAvatarChoice.id}`} alt="" />
-                      )}
-                      {avatarMediaIds.includes(currentAvatarChoice.id) ? (
-                        <span className="profile-media-picker-number">
-                          {avatarMediaIds.indexOf(currentAvatarChoice.id) + 1}
-                        </span>
-                      ) : null}
-                      {avatarChoices.length > 1 ? (
-                        <>
+                  <label className="field-label" htmlFor="public-display-name">
+                    {ru.miniApp.social.displayName}
+                  </label>
+                  <input
+                    id="public-display-name"
+                    ref={displayNameRef}
+                    className="input"
+                    maxLength={80}
+                    value={displayName}
+                    onChange={(event) => setDisplayName(event.target.value)}
+                  />
+                  <label className="field-label mt-4" htmlFor="public-bio">
+                    {ru.miniApp.social.bio}
+                  </label>
+                  <textarea
+                    id="public-bio"
+                    className="input min-h-32"
+                    maxLength={1500}
+                    value={bio}
+                    onChange={(event) => setBio(event.target.value)}
+                  />
+                  <div className="mt-5 rounded-2xl border border-white/10 p-4">
+                    <strong>{ru.miniApp.social.usernameTitle}</strong>
+                    <p className="mt-1 text-sm text-muted">
+                      {ru.miniApp.social.usernameDescription}
+                    </p>
+                    <div className="mt-3 flex min-w-0 flex-col gap-2 sm:flex-row">
+                      <input
+                        className="input min-w-0 flex-1"
+                        value={username}
+                        maxLength={33}
+                        placeholder={ru.miniApp.social.usernamePlaceholder}
+                        onChange={(event) => setUsername(event.target.value)}
+                      />
+                      <Button
+                        variant="secondary"
+                        disabled={username.trim().replace(/^@/, '').length < 5}
+                        loading={claimUsername.isPending}
+                        onClick={() => claimUsername.mutate()}
+                      >
+                        {ru.miniApp.social.usernameClaim}
+                      </Button>
+                    </div>
+                    {usernames.data?.[0] ? (
+                      <Button
+                        className="mt-2"
+                        variant="ghost"
+                        loading={releaseUsername.isPending}
+                        onClick={() => releaseUsername.mutate(usernames.data[0]!.username)}
+                      >
+                        {ru.miniApp.social.usernameRelease}
+                      </Button>
+                    ) : null}
+                    {claimUsername.isError ? (
+                      <div className="error-box mt-3">{claimUsername.error.message}</div>
+                    ) : null}
+                  </div>
+                  <div className="mt-5">
+                    <strong>{ru.miniApp.social.appearanceTitle}</strong>
+                    <p className="mt-1 text-sm text-muted">{ru.miniApp.social.appearanceHint}</p>
+                    {premiumStatus.data?.premium ? (
+                      <>
+                        <p className="mt-3 text-xs text-muted">
+                          {ru.miniApp.social.appearanceColor}
+                        </p>
+                        <div className="appearance-swatches">
+                          {Array.from({ length: PROFILE_ACCENTS }, (_, index) => (
+                            <button
+                              key={index}
+                              type="button"
+                              aria-label={`${ru.miniApp.social.appearanceColor} ${index + 1}`}
+                              aria-pressed={accentColor === index}
+                              className={`appearance-swatch${accentColor === index ? ' is-selected' : ''}`}
+                              style={{ background: `var(--profile-accent-${index})` }}
+                              onClick={() => setAccentColor(accentColor === index ? null : index)}
+                            />
+                          ))}
+                        </div>
+                        <p className="mt-3 text-xs text-muted">
+                          {ru.miniApp.social.appearanceEmoji}
+                        </p>
+                        <div className="appearance-emoji-row">
                           <button
-                            className="avatar-media-selector-arrow is-previous"
                             type="button"
-                            aria-label={ru.miniApp.social.previousAvatar}
+                            className={`appearance-emoji${headerEmoji ? '' : ' is-selected'}`}
+                            aria-label={ru.miniApp.social.appearanceNone}
+                            onClick={() => setHeaderEmoji(null)}
+                          >
+                            <X className="h-4 w-4" />
+                          </button>
+                          {ru.miniApp.social.appearanceEmojiOptions.map((emoji) => (
+                            <button
+                              key={emoji}
+                              type="button"
+                              className={`appearance-emoji${headerEmoji === emoji ? ' is-selected' : ''}`}
+                              aria-pressed={headerEmoji === emoji}
+                              onClick={() => setHeaderEmoji(headerEmoji === emoji ? null : emoji)}
+                            >
+                              {emoji}
+                            </button>
+                          ))}
+                        </div>
+                      </>
+                    ) : (
+                      <p className="mt-3 text-sm text-muted">
+                        {ru.miniApp.social.appearancePremium}{' '}
+                        <Link className="text-lilac underline" href="/premium">
+                          {ru.miniApp.social.appearanceOpenPremium}
+                        </Link>
+                      </p>
+                    )}
+                  </div>
+                  <div className="mt-5">
+                    <strong>{ru.miniApp.social.avatarTitle}</strong>
+                    <p className="mt-1 text-sm text-muted">{ru.miniApp.social.avatarDescription}</p>
+                    {currentAvatarChoice ? (
+                      <div className="avatar-media-selector mt-3">
+                        <div
+                          className="avatar-media-selector-stage"
+                          onTouchStart={(event) => {
+                            avatarSwipeStart.current = event.touches[0]?.clientX ?? null;
+                          }}
+                          onTouchEnd={(event) => {
+                            const end = event.changedTouches[0]?.clientX;
+                            if (avatarSwipeStart.current === null || end === undefined) return;
+                            const distance = end - avatarSwipeStart.current;
+                            avatarSwipeStart.current = null;
+                            if (Math.abs(distance) < 45) return;
+                            setAvatarPickerIndex((index) =>
+                              distance > 0
+                                ? (index - 1 + avatarChoices.length) % avatarChoices.length
+                                : (index + 1) % avatarChoices.length,
+                            );
+                          }}
+                        >
+                          {currentAvatarChoice.media_type === 'video' ? (
+                            <video
+                              key={currentAvatarChoice.id}
+                              src={`/api/profile-media/${currentAvatarChoice.id}`}
+                              muted
+                              loop
+                              autoPlay
+                              playsInline
+                            />
+                          ) : (
+                            <img src={`/api/profile-media/${currentAvatarChoice.id}`} alt="" />
+                          )}
+                          {avatarMediaIds.includes(currentAvatarChoice.id) ? (
+                            <span className="profile-media-picker-number">
+                              {avatarMediaIds.indexOf(currentAvatarChoice.id) + 1}
+                            </span>
+                          ) : null}
+                          {avatarChoices.length > 1 ? (
+                            <>
+                              <button
+                                className="avatar-media-selector-arrow is-previous"
+                                type="button"
+                                aria-label={ru.miniApp.social.previousAvatar}
+                                onClick={() =>
+                                  setAvatarPickerIndex(
+                                    (index) =>
+                                      (index - 1 + avatarChoices.length) % avatarChoices.length,
+                                  )
+                                }
+                              >
+                                <ChevronLeft aria-hidden />
+                              </button>
+                              <button
+                                className="avatar-media-selector-arrow is-next"
+                                type="button"
+                                aria-label={ru.miniApp.social.nextAvatar}
+                                onClick={() =>
+                                  setAvatarPickerIndex(
+                                    (index) => (index + 1) % avatarChoices.length,
+                                  )
+                                }
+                              >
+                                <ChevronRight aria-hidden />
+                              </button>
+                            </>
+                          ) : null}
+                        </div>
+                        <div className="avatar-media-selector-toolbar">
+                          <span>
+                            {ru.miniApp.social.avatarPosition(
+                              avatarPickerIndex + 1,
+                              avatarChoices.length,
+                            )}
+                          </span>
+                          <Button
+                            variant={
+                              avatarMediaIds.includes(currentAvatarChoice.id)
+                                ? 'secondary'
+                                : 'primary'
+                            }
+                            disabled={
+                              !avatarMediaIds.includes(currentAvatarChoice.id) &&
+                              avatarMediaIds.length >= 8
+                            }
                             onClick={() =>
-                              setAvatarPickerIndex(
-                                (index) =>
-                                  (index - 1 + avatarChoices.length) % avatarChoices.length,
+                              setAvatarMediaIds((ids) =>
+                                ids.includes(currentAvatarChoice.id)
+                                  ? ids.filter((id) => id !== currentAvatarChoice.id)
+                                  : [...ids, currentAvatarChoice.id],
                               )
                             }
                           >
-                            <ChevronLeft aria-hidden />
-                          </button>
-                          <button
-                            className="avatar-media-selector-arrow is-next"
-                            type="button"
-                            aria-label={ru.miniApp.social.nextAvatar}
-                            onClick={() =>
-                              setAvatarPickerIndex((index) => (index + 1) % avatarChoices.length)
-                            }
-                          >
-                            <ChevronRight aria-hidden />
-                          </button>
-                        </>
+                            {avatarMediaIds.includes(currentAvatarChoice.id)
+                              ? ru.miniApp.social.removeAvatarMedia
+                              : ru.miniApp.social.addAvatarMedia}
+                          </Button>
+                        </div>
+                        <div className="avatar-media-selector-rail">
+                          {avatarChoices.map((item, index) => (
+                            <button
+                              type="button"
+                              className={index === avatarPickerIndex ? 'is-current' : ''}
+                              key={item.id}
+                              aria-label={ru.miniApp.social.avatarPosition(
+                                index + 1,
+                                avatarChoices.length,
+                              )}
+                              onClick={() => setAvatarPickerIndex(index)}
+                            >
+                              {item.media_type === 'video' ? (
+                                <video
+                                  src={`/api/profile-media/${item.id}`}
+                                  muted
+                                  playsInline
+                                  preload="metadata"
+                                />
+                              ) : (
+                                <img src={`/api/profile-media/${item.id}`} alt="" />
+                              )}
+                              {avatarMediaIds.includes(item.id) ? (
+                                <span>{avatarMediaIds.indexOf(item.id) + 1}</span>
+                              ) : null}
+                            </button>
+                          ))}
+                        </div>
+                        <p className="text-xs text-muted">
+                          {ru.miniApp.social.selectedAvatarMedia(avatarMediaIds.length)}
+                        </p>
+                      </div>
+                    ) : null}
+                    <div className="mt-3 flex flex-wrap gap-2">
+                      <Button variant="secondary" onClick={() => openBot('profile_photo')}>
+                        <ImagePlus className="h-4 w-4" /> {ru.miniApp.social.uploadVisualMedia}
+                      </Button>
+                      {avatarMediaIds.length ? (
+                        <Button variant="ghost" onClick={() => setAvatarMediaIds([])}>
+                          {ru.miniApp.social.removeAvatar}
+                        </Button>
                       ) : null}
                     </div>
-                    <div className="avatar-media-selector-toolbar">
-                      <span>
-                        {ru.miniApp.social.avatarPosition(
-                          avatarPickerIndex + 1,
-                          avatarChoices.length,
-                        )}
-                      </span>
-                      <Button
-                        variant={
-                          avatarMediaIds.includes(currentAvatarChoice.id) ? 'secondary' : 'primary'
-                        }
-                        disabled={
-                          !avatarMediaIds.includes(currentAvatarChoice.id) &&
-                          avatarMediaIds.length >= 8
-                        }
-                        onClick={() =>
-                          setAvatarMediaIds((ids) =>
-                            ids.includes(currentAvatarChoice.id)
-                              ? ids.filter((id) => id !== currentAvatarChoice.id)
-                              : [...ids, currentAvatarChoice.id],
-                          )
-                        }
-                      >
-                        {avatarMediaIds.includes(currentAvatarChoice.id)
-                          ? ru.miniApp.social.removeAvatarMedia
-                          : ru.miniApp.social.addAvatarMedia}
-                      </Button>
-                    </div>
-                    <div className="avatar-media-selector-rail">
-                      {avatarChoices.map((item, index) => (
-                        <button
-                          type="button"
-                          className={index === avatarPickerIndex ? 'is-current' : ''}
-                          key={item.id}
-                          aria-label={ru.miniApp.social.avatarPosition(
-                            index + 1,
-                            avatarChoices.length,
-                          )}
-                          onClick={() => setAvatarPickerIndex(index)}
-                        >
-                          {item.media_type === 'video' ? (
-                            <video
-                              src={`/api/profile-media/${item.id}`}
-                              muted
-                              playsInline
-                              preload="metadata"
-                            />
-                          ) : (
-                            <img src={`/api/profile-media/${item.id}`} alt="" />
-                          )}
-                          {avatarMediaIds.includes(item.id) ? (
-                            <span>{avatarMediaIds.indexOf(item.id) + 1}</span>
-                          ) : null}
-                        </button>
-                      ))}
-                    </div>
-                    <p className="text-xs text-muted">
-                      {ru.miniApp.social.selectedAvatarMedia(avatarMediaIds.length)}
-                    </p>
                   </div>
-                ) : null}
-                <div className="mt-3 flex flex-wrap gap-2">
-                  <Button variant="secondary" onClick={() => openBot('profile_photo')}>
-                    <ImagePlus className="h-4 w-4" /> {ru.miniApp.social.uploadVisualMedia}
-                  </Button>
-                  {avatarMediaIds.length ? (
-                    <Button variant="ghost" onClick={() => setAvatarMediaIds([])}>
-                      {ru.miniApp.social.removeAvatar}
+                  <div className="profile-upload-actions mt-5">
+                    <Button variant="secondary" onClick={() => openBot('profile_music')}>
+                      <Music2 className="h-4 w-4" /> {ru.miniApp.profile.uploadMusic}
                     </Button>
-                  ) : null}
-                </div>
-              </div>
-              <div className="profile-upload-actions mt-5">
-                <Button variant="secondary" onClick={() => openBot('profile_music')}>
-                  <Music2 className="h-4 w-4" /> {ru.miniApp.profile.uploadMusic}
-                </Button>
-              </div>
-              {media.data?.length ? (
-                <div className="mt-5">
-                  <strong>{ru.miniApp.profile.mediaTitle}</strong>
-                  <div className="post-media-manager mt-3">
-                    {media.data.map((item, index) => (
-                      <div className="post-media-manager-item" key={item.id}>
-                        <FileText aria-hidden />
-                        <span>
-                          <strong>
-                            {item.track_title || `${ru.miniApp.profile.mediaTitle} ${index + 1}`}
-                          </strong>
-                          <small>
-                            {item.track_performer
-                              ? `${item.track_performer} · ${item.media_type}`
-                              : item.media_type}
-                          </small>
-                        </span>
-                        <button
-                          type="button"
-                          aria-label={ru.miniApp.profile.deleteMedia}
-                          onClick={() => setProfileMediaToDelete(item.id)}
-                        >
-                          <Trash2 aria-hidden />
-                        </button>
-                      </div>
-                    ))}
                   </div>
+                  {media.data?.length ? (
+                    <div className="mt-5">
+                      <strong>{ru.miniApp.profile.mediaTitle}</strong>
+                      <div className="post-media-manager mt-3">
+                        {media.data.map((item, index) => (
+                          <div className="post-media-manager-item" key={item.id}>
+                            <FileText aria-hidden />
+                            <span>
+                              <strong>
+                                {item.track_title ||
+                                  `${ru.miniApp.profile.mediaTitle} ${index + 1}`}
+                              </strong>
+                              <small>
+                                {item.track_performer
+                                  ? `${item.track_performer} · ${item.media_type}`
+                                  : item.media_type}
+                              </small>
+                            </span>
+                            <button
+                              type="button"
+                              aria-label={ru.miniApp.profile.deleteMedia}
+                              onClick={() => setProfileMediaToDelete(item.id)}
+                            >
+                              <Trash2 aria-hidden />
+                            </button>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  ) : null}
+                  <div className="mt-5 flex flex-wrap gap-2">
+                    <Button
+                      loading={save.isPending}
+                      disabled={displayName.trim().length < 2}
+                      onClick={() => save.mutate()}
+                    >
+                      <Save className="h-4 w-4" /> {ru.miniApp.social.save}
+                    </Button>
+                    <Button variant="secondary" onClick={requestEditorClose}>
+                      <X className="h-4 w-4" /> {ru.miniApp.social.cancelEditing}
+                    </Button>
+                  </div>
+                  {save.isSuccess ? (
+                    <p className="mt-3 text-sm text-emerald-400">{ru.miniApp.social.saved}</p>
+                  ) : null}
+                  {save.isError ? <div className="error-box mt-3">{save.error.message}</div> : null}
                 </div>
-              ) : null}
-              <div className="mt-5 flex flex-wrap gap-2">
-                <Button
-                  loading={save.isPending}
-                  disabled={displayName.trim().length < 2}
-                  onClick={() => save.mutate()}
-                >
-                  <Save className="h-4 w-4" /> {ru.miniApp.social.save}
-                </Button>
-                <Button variant="secondary" onClick={requestEditorClose}>
-                  <X className="h-4 w-4" /> {ru.miniApp.social.cancelEditing}
-                </Button>
-              </div>
-              {save.isSuccess ? (
-                <p className="mt-3 text-sm text-emerald-400">{ru.miniApp.social.saved}</p>
-              ) : null}
-              {save.isError ? <div className="error-box mt-3">{save.error.message}</div> : null}
-            </div>
               </div>,
               document.body,
             )
@@ -1437,6 +1450,7 @@ export function PublicProfileViewerPage() {
 }
 
 export function QuestionnairesPage() {
+  const { ask, dialog: promptDialog } = useTextPrompt();
   const queryClient = useQueryClient();
   const [previewQuestionnaireId, setPreviewQuestionnaireId] = useState<string | null>(null);
   const [questionnaireToDelete, setQuestionnaireToDelete] = useState<{
@@ -1450,11 +1464,7 @@ export function QuestionnairesPage() {
     enabled: previewQuestionnaireId !== null,
   });
   const clone = useMutation({
-    mutationFn: () => {
-      const title = window.prompt(ru.miniApp.social.titlePrompt)?.trim();
-      if (!title) return Promise.reject(new Error(ru.miniApp.social.titlePrompt));
-      return api.cloneQuestionnaire(title);
-    },
+    mutationFn: (title: string) => api.cloneQuestionnaire(title),
     onSuccess: () => void queryClient.invalidateQueries({ queryKey: ['questionnaires'] }),
   });
   const setActive = useMutation({
@@ -1655,7 +1665,12 @@ export function QuestionnairesPage() {
             loading={clone.isPending}
             aria-label={ru.miniApp.social.createQuestionnaire}
             title={ru.miniApp.social.createQuestionnaire}
-            onClick={() => clone.mutate()}
+            onClick={() =>
+              ask(ru.miniApp.social.titlePrompt, (title) => {
+                const trimmed = title.trim();
+                if (trimmed) clone.mutate(trimmed);
+              })
+            }
           >
             <Plus className="h-5 w-5" />
           </Button>
@@ -1677,6 +1692,7 @@ export function QuestionnairesPage() {
           if (questionnaireToDelete) remove.mutate(questionnaireToDelete.id);
         }}
       />
+      {promptDialog}
     </div>
   );
 }
@@ -1692,6 +1708,7 @@ export function PostCard({
   canModerate?: boolean;
   initialOpen?: boolean;
 }) {
+  const { confirm, dialog: confirmDialog } = useConfirmPrompt();
   const queryClient = useQueryClient();
   const viewerTime = useViewerTime();
   const [mediaIndex, setMediaIndex] = useState(0);
@@ -2702,11 +2719,9 @@ export function PostCard({
             <Button
               variant="danger"
               loading={deletePost.isPending}
-              onClick={() => {
-                if (window.confirm(ru.miniApp.social.deletePostConfirm)) {
-                  deletePost.mutate();
-                }
-              }}
+              onClick={() =>
+                confirm(ru.miniApp.social.deletePostConfirm, () => deletePost.mutate())
+              }
             >
               <Trash2 className="h-4 w-4" /> {ru.miniApp.social.deletePost}
             </Button>
@@ -3085,6 +3100,7 @@ export function PostCard({
         onClose={() => setPlaylistShareTrackIds([])}
         onSend={(conversationIds) => sharePlaylist.mutate(conversationIds)}
       />
+      {confirmDialog}
     </Card>
   );
 }

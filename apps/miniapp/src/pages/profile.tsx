@@ -29,6 +29,7 @@ import {
   EmptyState,
   SectionTitle,
   Skeleton,
+  useConfirmPrompt,
 } from '../components/ui.js';
 import { getTelegram } from '../telegram.js';
 import { ProfileCard } from './search.js';
@@ -476,6 +477,7 @@ function ProfileMediaPickerPreview({ item }: { item: ProfileMedia }) {
 }
 
 export function ProfilePage() {
+  const { confirm, dialog } = useConfirmPrompt();
   const queryClient = useQueryClient();
   const [stateMessage, setStateMessage] = useState('');
   const [previewOpen, setPreviewOpen] = useState(false);
@@ -653,9 +655,12 @@ export function ProfilePage() {
                 variant={isActive ? 'danger' : 'secondary'}
                 loading={setActive.isPending}
                 onClick={() => {
-                  if (isActive && !window.confirm(ru.miniApp.profile.disableProfileConfirm)) return;
-                  setStateMessage('');
-                  setActive.mutate(!isActive);
+                  const apply = () => {
+                    setStateMessage('');
+                    setActive.mutate(!isActive);
+                  };
+                  if (isActive) confirm(ru.miniApp.profile.disableProfileConfirm, apply);
+                  else apply();
                 }}
               >
                 {isActive ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
@@ -713,6 +718,7 @@ export function ProfilePage() {
         }}
       />
       <p className="mt-5 text-center text-xs text-muted">{ru.miniApp.attribution}</p>
+      {dialog}
     </div>
   );
 }

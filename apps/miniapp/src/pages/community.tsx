@@ -54,6 +54,8 @@ import {
   EmptyState,
   SectionTitle,
   Skeleton,
+  useConfirmPrompt,
+  useTextPrompt,
 } from '../components/ui.js';
 import { applyThemePreference, getTelegram } from '../telegram.js';
 import { ChatTools, VoiceRecorderButton } from '../components/chat-tools.js';
@@ -69,6 +71,7 @@ import {
 import { ShareToChatsDialog } from '../components/share-to-chats.js';
 import { Link, useLocation, useSearch } from 'wouter';
 import { createPortal } from 'react-dom';
+import { AnimatePresence, motion, useReducedMotion } from 'framer-motion';
 import { useUserStore } from '../store.js';
 import { DoubleHeartIcon } from '../components/double-heart-icon.js';
 import { useViewerTime } from '../components/viewer-time.js';
@@ -211,6 +214,7 @@ export function MatchesPage() {
 
 export function ChatsPage() {
   const queryClient = useQueryClient();
+  const { confirm, dialog } = useConfirmPrompt();
   const [, navigate] = useLocation();
   const search = useSearch();
   const ownUserId = useUserStore((state) => state.user?.id);
@@ -311,198 +315,235 @@ export function ChatsPage() {
   if (chats.isLoading) return <Skeleton className="h-80" />;
   if (conversationId && selectedChat) {
     return (
-      <ConversationView
-        chat={selectedChat}
-        premium={premium.data?.premium === true}
-        onBack={() => navigate('/chats')}
-      />
+      <ChatsTransition viewKey="conversation">
+        <ConversationView
+          chat={selectedChat}
+          premium={premium.data?.premium === true}
+          onBack={() => navigate('/chats')}
+        />
+      </ChatsTransition>
     );
   }
   if (conversationId && chats.isFetching) return <Skeleton className="h-80" />;
   if (conversationId && !selectedChat) {
     return (
-      <EmptyState
-        icon={<MessageCircle className="h-7 w-7" />}
-        title={ru.miniApp.community.chatUnavailableTitle}
-        description={ru.miniApp.community.chatUnavailableDescription}
-        action={<Button onClick={() => navigate('/chats')}>{ru.miniApp.community.back}</Button>}
-      />
+      <ChatsTransition viewKey="conversation">
+        <EmptyState
+          icon={<MessageCircle className="h-7 w-7" />}
+          title={ru.miniApp.community.chatUnavailableTitle}
+          description={ru.miniApp.community.chatUnavailableDescription}
+          action={<Button onClick={() => navigate('/chats')}>{ru.miniApp.community.back}</Button>}
+        />
+      </ChatsTransition>
     );
   }
   return (
-    <div>
-      <SectionTitle
-        eyebrow={ru.miniApp.community.chatsEyebrow}
-        action={
-          <div className="chat-list-settings">
-            <button
-              type="button"
-              className={`chat-settings-toggle ${chatSettingsOpen ? 'is-active' : ''}`}
-              aria-label={ru.miniApp.community.chatSettings}
-              aria-expanded={chatSettingsOpen}
-              onClick={() => setChatSettingsOpen((open) => !open)}
-            >
-              <MoreVertical aria-hidden />
-            </button>
-            {chatSettingsOpen ? (
-              <div className="chat-list-settings-menu">
-                <button
-                  type="button"
-                  aria-expanded={blockedUsersOpen}
-                  onClick={() => {
-                    setBlockedUsersOpen((open) => !open);
-                    setChatSettingsOpen(false);
-                  }}
-                >
-                  <Ban aria-hidden />
-                  {ru.miniApp.community.blockedUsers}
-                </button>
-                <button
-                  type="button"
-                  onClick={() =>
-                    archiveVisibility.mutate(settings.data?.chat_archive_visible === 0)
-                  }
-                >
-                  <Archive aria-hidden />
-                  {settings.data?.chat_archive_visible === 0
-                    ? ru.miniApp.community.showArchive
-                    : ru.miniApp.community.hideArchive}
-                </button>
-              </div>
-            ) : null}
-          </div>
-        }
-      >
-        {ru.miniApp.community.chatsTitle}
-      </SectionTitle>
-      {blockedUsersOpen ? (
-        <Card className="chat-blacklist-panel p-3">
-          <strong>{ru.miniApp.community.blockedUsers}</strong>
-          {blockedUsers.isLoading ? <Skeleton className="mt-3 h-20" /> : null}
-          {blockedUsers.isError ? (
-            <div className="error-box mt-3">{blockedUsers.error.message}</div>
-          ) : null}
-          {!blockedUsers.isLoading && !blockedUsers.data?.length ? (
-            <p className="mt-3 text-sm text-muted">{ru.miniApp.community.blockedUsersEmpty}</p>
-          ) : null}
-          {blockedUsers.data?.map((person) => (
-            <div className="chat-blacklist-row" key={person.id}>
-              <Link
-                className="chat-blacklist-profile"
-                href={`/profiles/${encodeURIComponent(person.id)}`}
-                aria-label={ru.miniApp.community.openBlockedProfile}
+    <ChatsTransition viewKey="list">
+      <div>
+        <SectionTitle
+          eyebrow={ru.miniApp.community.chatsEyebrow}
+          action={
+            <div className="chat-list-settings">
+              <button
+                type="button"
+                className={`chat-settings-toggle ${chatSettingsOpen ? 'is-active' : ''}`}
+                aria-label={ru.miniApp.community.chatSettings}
+                aria-expanded={chatSettingsOpen}
+                onClick={() => setChatSettingsOpen((open) => !open)}
               >
-                <ProfileAvatar
-                  name={person.display_name ?? ru.miniApp.community.blockedUserFallback}
-                />
-                <span>
-                  <strong>
-                    {person.display_name ?? ru.miniApp.community.blockedUserFallback}
-                    <VerificationBadge
-                      kind={person.verification_kind}
-                      premium={person.has_premium}
-                    />
-                  </strong>
-                  {person.username ? <small>@{person.username}</small> : null}
-                </span>
-                <ChevronRight aria-hidden />
-              </Link>
-              <Button
-                variant="secondary"
-                loading={unblock.isPending && unblock.variables === person.id}
-                onClick={() => unblock.mutate(person.id)}
-              >
-                {ru.miniApp.community.unblockUser}
-              </Button>
+                <MoreVertical aria-hidden />
+              </button>
+              {chatSettingsOpen ? (
+                <div className="chat-list-settings-menu">
+                  <button
+                    type="button"
+                    aria-expanded={blockedUsersOpen}
+                    onClick={() => {
+                      setBlockedUsersOpen((open) => !open);
+                      setChatSettingsOpen(false);
+                    }}
+                  >
+                    <Ban aria-hidden />
+                    {ru.miniApp.community.blockedUsers}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() =>
+                      archiveVisibility.mutate(settings.data?.chat_archive_visible === 0)
+                    }
+                  >
+                    <Archive aria-hidden />
+                    {settings.data?.chat_archive_visible === 0
+                      ? ru.miniApp.community.showArchive
+                      : ru.miniApp.community.hideArchive}
+                  </button>
+                </div>
+              ) : null}
             </div>
-          ))}
-        </Card>
-      ) : (
-        <>
-          {settings.data?.chat_archive_visible !== 0 && archivedChats.data?.length ? (
-            <button
-              className="chat-archive-row"
-              type="button"
-              onClick={() => setArchiveOpen((open) => !open)}
-            >
-              <Archive aria-hidden />
-              <span>{ru.miniApp.community.archive}</span>
-              <strong>{archivedChats.data?.length ?? 0}</strong>
-              <ChevronDown className={archiveOpen ? 'is-open' : ''} aria-hidden />
-            </button>
-          ) : null}
-          {settings.data?.chat_archive_visible !== 0 && archiveOpen ? (
-            archivedChats.data?.length ? (
-              <div className="telegram-chat-list chat-archive-list">
-                {archivedChats.data.map((chat) => (
-                  <ChatListRow
-                    key={chat.id}
-                    chat={chat}
-                    ownUserId={ownUserId}
-                    onOpen={() => openConversation(chat.id)}
-                    onArchive={() =>
-                      archiveChat.mutate({ conversationId: chat.id, archived: false })
-                    }
-                    onPin={() => undefined}
+          }
+        >
+          {ru.miniApp.community.chatsTitle}
+        </SectionTitle>
+        {blockedUsersOpen ? (
+          <Card className="chat-blacklist-panel p-3">
+            <strong>{ru.miniApp.community.blockedUsers}</strong>
+            {blockedUsers.isLoading ? <Skeleton className="mt-3 h-20" /> : null}
+            {blockedUsers.isError ? (
+              <div className="error-box mt-3">{blockedUsers.error.message}</div>
+            ) : null}
+            {!blockedUsers.isLoading && !blockedUsers.data?.length ? (
+              <p className="mt-3 text-sm text-muted">{ru.miniApp.community.blockedUsersEmpty}</p>
+            ) : null}
+            {blockedUsers.data?.map((person) => (
+              <div className="chat-blacklist-row" key={person.id}>
+                <Link
+                  className="chat-blacklist-profile"
+                  href={`/profiles/${encodeURIComponent(person.id)}`}
+                  aria-label={ru.miniApp.community.openBlockedProfile}
+                >
+                  <ProfileAvatar
+                    name={person.display_name ?? ru.miniApp.community.blockedUserFallback}
                   />
-                ))}
+                  <span>
+                    <strong>
+                      {person.display_name ?? ru.miniApp.community.blockedUserFallback}
+                      <VerificationBadge
+                        kind={person.verification_kind}
+                        premium={person.has_premium}
+                      />
+                    </strong>
+                    {person.username ? <small>@{person.username}</small> : null}
+                  </span>
+                  <ChevronRight aria-hidden />
+                </Link>
+                <Button
+                  variant="secondary"
+                  loading={unblock.isPending && unblock.variables === person.id}
+                  onClick={() => unblock.mutate(person.id)}
+                >
+                  {ru.miniApp.community.unblockUser}
+                </Button>
               </div>
-            ) : (
-              <p className="mb-4 text-sm text-muted">{ru.miniApp.community.archiveEmpty}</p>
-            )
-          ) : null}
-          {orderedChats.length ? (
-            <>
-              <p className="mb-4 text-sm text-muted">{ru.miniApp.community.chatListHint}</p>
-              <div className="telegram-chat-list">
-                {orderedChats.map((chat) => (
-                  <ChatListRow
-                    key={chat.id}
-                    chat={chat}
-                    ownUserId={ownUserId}
-                    onOpen={() => openConversation(chat.id)}
-                    onArchive={() =>
-                      archiveChat.mutate({ conversationId: chat.id, archived: true })
-                    }
-                    onPin={() =>
-                      pinChat.mutate({ conversationId: chat.id, pinned: chat.pinned_order == null })
-                    }
-                    onDelete={() => {
-                      if (window.confirm(ru.miniApp.community.deleteChatDescription)) {
-                        deleteQuickChat.mutate(chat.id);
+            ))}
+          </Card>
+        ) : (
+          <>
+            {settings.data?.chat_archive_visible !== 0 && archivedChats.data?.length ? (
+              <button
+                className="chat-archive-row"
+                type="button"
+                onClick={() => setArchiveOpen((open) => !open)}
+              >
+                <Archive aria-hidden />
+                <span>{ru.miniApp.community.archive}</span>
+                <strong>{archivedChats.data?.length ?? 0}</strong>
+                <ChevronDown className={archiveOpen ? 'is-open' : ''} aria-hidden />
+              </button>
+            ) : null}
+            {settings.data?.chat_archive_visible !== 0 && archiveOpen ? (
+              archivedChats.data?.length ? (
+                <div className="telegram-chat-list chat-archive-list">
+                  {archivedChats.data.map((chat) => (
+                    <ChatListRow
+                      key={chat.id}
+                      chat={chat}
+                      ownUserId={ownUserId}
+                      onOpen={() => openConversation(chat.id)}
+                      onArchive={() =>
+                        archiveChat.mutate({ conversationId: chat.id, archived: false })
                       }
-                    }}
-                    onBlock={() => {
-                      if (window.confirm(ru.miniApp.community.blockConfirm)) {
-                        blockQuickChat.mutate({
-                          userId: chat.other_user_id,
+                      onPin={() => undefined}
+                    />
+                  ))}
+                </div>
+              ) : (
+                <p className="mb-4 text-sm text-muted">{ru.miniApp.community.archiveEmpty}</p>
+              )
+            ) : null}
+            {orderedChats.length ? (
+              <>
+                <p className="mb-4 text-sm text-muted">{ru.miniApp.community.chatListHint}</p>
+                <div className="telegram-chat-list">
+                  {orderedChats.map((chat) => (
+                    <ChatListRow
+                      key={chat.id}
+                      chat={chat}
+                      ownUserId={ownUserId}
+                      onOpen={() => openConversation(chat.id)}
+                      onArchive={() =>
+                        archiveChat.mutate({ conversationId: chat.id, archived: true })
+                      }
+                      onPin={() =>
+                        pinChat.mutate({
                           conversationId: chat.id,
-                        });
+                          pinned: chat.pinned_order == null,
+                        })
                       }
-                    }}
-                    onReorderOver={(targetId) =>
-                      setOrderedChats((current) => reorderPinnedRows(current, chat.id, targetId))
-                    }
-                    onReorderCommit={() => {
-                      const ids = orderedChats
-                        .filter((item) => item.pinned_order != null)
-                        .map((item) => item.id);
-                      if (ids.length) reorderPins.mutate(ids);
-                    }}
-                  />
-                ))}
-              </div>
-            </>
-          ) : (
-            <EmptyState
-              icon={<MessageCircle className="h-7 w-7" />}
-              title={ru.miniApp.community.chatsEmptyTitle}
-              description={ru.miniApp.community.chatsEmptyDescription}
-            />
-          )}
-        </>
-      )}
-    </div>
+                      onDelete={() =>
+                        confirm(ru.miniApp.community.deleteChatDescription, () =>
+                          deleteQuickChat.mutate(chat.id),
+                        )
+                      }
+                      onBlock={() =>
+                        confirm(ru.miniApp.community.blockConfirm, () =>
+                          blockQuickChat.mutate({
+                            userId: chat.other_user_id,
+                            conversationId: chat.id,
+                          }),
+                        )
+                      }
+                      onReorderOver={(targetId) =>
+                        setOrderedChats((current) => reorderPinnedRows(current, chat.id, targetId))
+                      }
+                      onReorderCommit={() => {
+                        const ids = orderedChats
+                          .filter((item) => item.pinned_order != null)
+                          .map((item) => item.id);
+                        if (ids.length) reorderPins.mutate(ids);
+                      }}
+                    />
+                  ))}
+                </div>
+              </>
+            ) : (
+              <EmptyState
+                icon={<MessageCircle className="h-7 w-7" />}
+                title={ru.miniApp.community.chatsEmptyTitle}
+                description={ru.miniApp.community.chatsEmptyDescription}
+              />
+            )}
+          </>
+        )}
+        {dialog}
+      </div>
+    </ChatsTransition>
+  );
+}
+
+/**
+ * Slides the conversation in from the right and the chat list back in from the
+ * left. Both views are returned from the same position in CommunityPage, so a
+ * single AnimatePresence instance survives the switch and can play the exit.
+ */
+function ChatsTransition({ viewKey, children }: { viewKey: string; children: ReactNode }) {
+  const reduceMotion = useReducedMotion();
+  const enterFrom = viewKey === 'list' ? -28 : 28;
+  return (
+    <AnimatePresence mode="wait" initial={false}>
+      <motion.div
+        key={viewKey}
+        initial={reduceMotion ? false : { opacity: 0, x: enterFrom }}
+        animate={{ opacity: 1, x: 0 }}
+        exit={
+          reduceMotion
+            ? { opacity: 1 }
+            : { opacity: 0, x: -enterFrom, transition: { duration: 0.12 } }
+        }
+        transition={{ duration: reduceMotion ? 0 : 0.18, ease: [0.22, 0.9, 0.28, 1] }}
+      >
+        {children}
+      </motion.div>
+    </AnimatePresence>
   );
 }
 
@@ -1126,6 +1167,8 @@ function ConversationView({
   const queryClient = useQueryClient();
   const [, navigate] = useLocation();
   const [menuOpen, setMenuOpen] = useState(false);
+  const { confirm, dialog: confirmDialog } = useConfirmPrompt();
+  const { ask, dialog: promptDialog } = useTextPrompt();
   const [selectionMode, setSelectionMode] = useState(false);
   const [selectedMessages, setSelectedMessages] = useState<string[]>([]);
   const [confirmation, setConfirmation] = useState<'chat' | 'messages' | null>(null);
@@ -1346,6 +1389,18 @@ function ConversationView({
   const invalidateMessages = () =>
     void queryClient.invalidateQueries({ queryKey: ['conversation-messages', chat.id] });
   const messageGroups = groupConversationMessages(messages.data ?? []);
+  const seenMessages = useRef<{ ids: Set<string>; initialised: boolean }>({
+    ids: new Set(),
+    initialised: false,
+  });
+  useEffect(() => {
+    if (!messages.data) return;
+    for (const item of messages.data) seenMessages.current.ids.add(item.id);
+    seenMessages.current.initialised = true;
+  }, [messages.data]);
+  useEffect(() => {
+    seenMessages.current = { ids: new Set(), initialised: false };
+  }, [chat.id]);
   const liveActivity = conversationLiveActivity(livePresence.data?.activity);
 
   return (
@@ -1372,6 +1427,13 @@ function ConversationView({
             </strong>
             <small className={liveActivity || chat.is_online ? 'is-online' : ''}>
               {liveActivity ?? conversationPresence(chat, viewerTime.relative)}
+              {liveActivity ? (
+                <span className="chat-typing-dots" aria-hidden>
+                  <i />
+                  <i />
+                  <i />
+                </span>
+              ) : null}
             </small>
           </span>
         </Link>
@@ -1462,16 +1524,16 @@ function ConversationView({
                 aria-label={ru.miniApp.community.report}
                 title={ru.miniApp.community.report}
                 onClick={() => {
-                  const description = window.prompt(ru.miniApp.community.reportPrompt) ?? '';
-                  if (description) {
+                  setMenuOpen(false);
+                  ask(ru.miniApp.community.reportPrompt, (description) => {
+                    if (!description) return;
                     report.mutate({
                       reportedUserId: chat.other_user_id,
                       conversationId: chat.id,
                       category: 'other',
                       description,
                     });
-                  }
-                  setMenuOpen(false);
+                  });
                 }}
               >
                 <AlertTriangle /> <span>{ru.miniApp.community.report}</span>
@@ -1492,10 +1554,10 @@ function ConversationView({
                 aria-label={ru.miniApp.community.block}
                 title={ru.miniApp.community.block}
                 onClick={() => {
-                  if (window.confirm(ru.miniApp.community.blockConfirm)) {
-                    block.mutate(chat.other_user_id);
-                  }
                   setMenuOpen(false);
+                  confirm(ru.miniApp.community.blockConfirm, () =>
+                    block.mutate(chat.other_user_id),
+                  );
                 }}
               >
                 <Ban /> <span>{ru.miniApp.community.block}</span>
@@ -1607,6 +1669,10 @@ function ConversationView({
           const message = group[0]!;
           const selected = selectedMessages.includes(message.id);
           const selectable = selectionMode;
+          // Only messages that arrive while the chat is open animate in; the
+          // batch present on the first render must not all fly in at once.
+          const isFresh =
+            seenMessages.current.initialised && !seenMessages.current.ids.has(message.id);
           // Telegram's "unread from here" line. The server resolves it before it
           // marks the chat read, otherwise it could never be shown.
           const unreadDivider = group.some((item) => item.is_first_unread) ? (
@@ -1622,7 +1688,9 @@ function ConversationView({
                 data-message-id={message.id}
                 className={`telegram-message-row ${message.is_own ? 'is-own' : ''} ${
                   selected ? 'is-selected' : ''
-                } ${highlightedMessageId === message.id ? 'is-highlighted' : ''}`}
+                } ${highlightedMessageId === message.id ? 'is-highlighted' : ''} ${
+                  isFresh ? 'is-fresh' : ''
+                }`}
                 onClick={
                   selectable
                     ? () =>
@@ -1953,6 +2021,8 @@ function ConversationView({
           </Card>
         </div>
       ) : null}
+      {confirmDialog}
+      {promptDialog}
     </div>
   );
 }
@@ -3643,6 +3713,7 @@ export function SettingsPage() {
   const settings = useQuery({ queryKey: ['settings'], queryFn: api.settings });
   const premium = useQuery({ queryKey: ['premium-status'], queryFn: api.premiumStatus });
   const publicProfile = useQuery({ queryKey: ['public-profile'], queryFn: api.publicProfile });
+  const { ask, dialog } = useTextPrompt();
   const [form, setForm] = useState<SettingsInput | null>(null);
   const [privacyForm, setPrivacyForm] = useState<PublicProfilePrivacyInput | null>(null);
   const save = useMutation({
@@ -4024,10 +4095,11 @@ export function SettingsPage() {
           variant="secondary"
           loading={deleteAccount.isPending}
           disabled={deleteAccount.isSuccess}
-          onClick={() => {
-            const confirmation = window.prompt(ru.miniApp.community.deleteAccountPrompt);
-            if (confirmation === ru.api.deleteConfirmation) deleteAccount.mutate();
-          }}
+          onClick={() =>
+            ask(ru.miniApp.community.deleteAccountPrompt, (confirmation) => {
+              if (confirmation === ru.api.deleteConfirmation) deleteAccount.mutate();
+            })
+          }
         >
           {ru.miniApp.community.deleteAccountButton}
         </Button>
@@ -4036,6 +4108,7 @@ export function SettingsPage() {
         ) : null}
       </Card>
       <p className="mt-6 text-center text-xs text-muted">{ru.miniApp.attribution}</p>
+      {dialog}
     </div>
   );
 }

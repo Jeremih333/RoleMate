@@ -1,6 +1,6 @@
 import { createBot, miniAppChatMenuButton, synchronizeBotCommands } from './bot.js';
 import { dispatchBroadcastBatch } from './broadcast.js';
-import { collectCustomEmoji } from './custom-emoji.js';
+import { cacheCustomEmojiAsset, collectCustomEmoji } from './custom-emoji.js';
 import { dispatchEngagementReminderBatch } from './engagement-reminders.js';
 import { dispatchTelegramNotificationBatch } from './telegram-notifications.js';
 import { dispatchGroupCampaignBatch } from './group-campaigns.js';
@@ -228,6 +228,29 @@ async function dispatchScheduledTasks(env: WorkerEnv, scheduledTime: number): Pr
   } catch (error) {
     console.error({
       event: 'scheduled_custom_emoji_seed_failed',
+      error: error instanceof Error ? error.message : 'unknown',
+    });
+  }
+  // Bring the pictures for imported emoji into our own storage a few at a time.
+  // Each one costs a getFile, a download and a write, and a scheduled run has a
+  // small subrequest budget it also has to share with everything else here.
+  try {
+    const pending = await dataApi.execute<
+      Array<{ custom_emoji_id: string; file_id: string; thumbnail_file_id: string | null }>
+    >('customEmoji.assets.pending', { kind: 'thumbnail', limit: 8 });
+    for (const emoji of pending) {
+      await cacheCustomEmojiAsset({
+        bot,
+        dataApi,
+        token: runtime.TELEGRAM_BOT_TOKEN,
+        customEmojiId: emoji.custom_emoji_id,
+        kind: 'thumbnail',
+        emoji,
+      });
+    }
+  } catch (error) {
+    console.error({
+      event: 'scheduled_custom_emoji_hydration_failed',
       error: error instanceof Error ? error.message : 'unknown',
     });
   }

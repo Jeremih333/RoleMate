@@ -30,6 +30,7 @@ import { validateUserContentLinks } from './content-policy.js';
 import { InlineKeyboard, InputFile } from 'grammy';
 import { decryptChatContent, encryptChatContent } from './chat-crypto.js';
 import { telegramAudioMetadata } from './telegram-audio-metadata.js';
+import { cacheCustomEmojiAsset } from './custom-emoji.js';
 import { dispatchTelegramNotificationBatch } from './telegram-notifications.js';
 
 const authBodySchema = z.object({ initData: z.string().min(1).max(8_192) });
@@ -2995,6 +2996,11 @@ export async function buildServer(
     const session = await authenticate(request);
     return dataApi.execute('customEmoji.packs.list', { userId: session.userId, limit: 30 });
   });
+  app.delete('/api/custom-emoji/packs/:packId', async (request) => {
+    const session = await mutate(request);
+    const { packId } = z.object({ packId: z.string().uuid() }).parse(request.params);
+    return dataApi.execute('customEmoji.packs.remove', { userId: session.userId, packId });
+  });
   app.get('/api/custom-emoji/:customEmojiId', async (request, reply) => {
     await authenticate(request);
     const { customEmojiId } = z
@@ -3003,39 +3009,45 @@ export async function buildServer(
     const { thumbnail } = z
       .object({ thumbnail: z.enum(['0', '1']).optional() })
       .parse(request.query);
+    const kind = thumbnail === '0' ? 'animation' : 'thumbnail';
+    const cached = await dataApi.execute<{ content_type: string; data_base64: string } | null>(
+      'customEmoji.assets.get',
+      { customEmojiId, kind },
+    );
+    if (cached) {
+      reply.header('Content-Type', cached.content_type);
+      // Packs are public, immutable Telegram content addressed by a stable id.
+      // A year of browser caching is what keeps a picker of hundreds of glyphs
+      // from costing hundreds of requests every time it opens.
+      reply.header('Cache-Control', 'public, max-age=31536000, immutable');
+      return reply.send(Buffer.from(cached.data_base64, 'base64'));
+    }
+    // Not cached yet: fetch it once, hand it to the caller, and keep it. This is
+    // the only path that touches Telegram, and it runs at most once per emoji.
     const emoji = await dataApi.execute<{
       file_id: string;
       thumbnail_file_id: string | null;
       render_kind: 'static' | 'video' | 'lottie';
     }>('customEmoji.resolve', { customEmojiId });
-    // A TGS cannot be played without a Lottie runtime, so its still thumbnail is
-    // what gets served; callers can ask for the thumbnail of anything.
-    const wantsThumbnail = thumbnail === '1' || emoji.render_kind === 'lottie';
-    const fileId = wantsThumbnail ? (emoji.thumbnail_file_id ?? emoji.file_id) : emoji.file_id;
-    const file = await bot.api.getFile(fileId);
-    if (!file.file_path) throw new DataApiError('MEDIA_UNAVAILABLE', ru.api.mediaUnavailable, 404);
-    const response = await fetch(
-      `https://api.telegram.org/file/bot${env.TELEGRAM_BOT_TOKEN}/${file.file_path}`,
-      telegramFileRequestInit(request),
-    );
-    if (!response.ok) throw new DataApiError('MEDIA_UNAVAILABLE', ru.api.mediaUnavailable, 502);
-    const extension = file.file_path.split('.').pop()?.toLowerCase();
-    const contentType =
-      response.headers.get('content-type') ??
-      (extension === 'webm'
-        ? 'video/webm'
-        : extension === 'tgs'
-          ? 'application/gzip'
-          : extension === 'png'
-            ? 'image/png'
-            : 'image/webp');
-    reply.header('Content-Type', contentType);
-    // Emoji packs are public, immutable Telegram content addressed by a stable id.
-    // A year of browser caching is what keeps a picker of two hundred glyphs from
-    // costing two hundred Worker requests every time it opens.
+    const stored = await cacheCustomEmojiAsset({
+      bot,
+      dataApi,
+      token: env.TELEGRAM_BOT_TOKEN,
+      customEmojiId,
+      kind,
+      emoji,
+      requestInit: telegramFileRequestInit(request),
+    });
+    if (!stored) {
+      // Telegram is throttling or the file is gone. Say so without caching the
+      // failure, so the picture appears on the next attempt.
+      reply.header('Cache-Control', 'no-store');
+      reply.code(503);
+      return reply.send({ error: { code: 'CUSTOM_EMOJI_UNAVAILABLE' } });
+    }
+    reply.header('Content-Type', stored.contentType);
     reply.header('Cache-Control', 'public, max-age=31536000, immutable');
-    applySeekableMediaHeaders(reply, response);
-    return reply.send(response.body);
+    return reply.send(Buffer.from(stored.dataBase64, 'base64'));
   });
   app.get('/api/post-comments/:commentId/voice', async (request, reply) => {
     const session = await authenticate(request);

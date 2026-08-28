@@ -19,7 +19,9 @@ import { createPortal } from 'react-dom';
 import { ru } from '@rolemate/shared';
 import { useUserStore } from '../store.js';
 import { api, type UserNotification } from '../api.js';
-import { applyThemePreference, getTelegram } from '../telegram.js';
+import { applyThemePreference, getTelegram, trackTopbarHeight } from '../telegram.js';
+import { CUSTOM_EMOJI_PACK_EVENT } from './custom-emoji-token.js';
+import { CustomEmojiPickerDialog } from './custom-emoji-picker.js';
 import { useViewerTime } from './viewer-time.js';
 
 const navigation = [
@@ -37,6 +39,19 @@ export function Layout({ children }: { children: ReactNode }) {
   const [location, navigate] = useLocation();
   const reduceMotion = useReducedMotion();
   const sectionSwipe = useRef<{ x: number; y: number; enabled: boolean } | null>(null);
+  const topbarRef = useRef<HTMLElement>(null);
+  useEffect(() => trackTopbarHeight(topbarRef.current), []);
+  // Tapping a custom emoji anywhere — a message, a comment, a questionnaire —
+  // shows the pack it came from. The sheet lives here so any screen can raise it.
+  const [emojiPackFor, setEmojiPackFor] = useState<string | null>(null);
+  useEffect(() => {
+    const open = (event: Event) => {
+      const detail = (event as CustomEvent<string>).detail;
+      if (detail) setEmojiPackFor(detail);
+    };
+    window.addEventListener(CUSTOM_EMOJI_PACK_EVENT, open);
+    return () => window.removeEventListener(CUSTOM_EMOJI_PACK_EVENT, open);
+  }, []);
   // Sections are ordered in the tab bar, so a move to a later tab slides in from
   // the right and a move back slides in from the left, the way Telegram does it.
   const navigationIndex = navigation.findIndex(({ to }) =>
@@ -119,7 +134,7 @@ export function Layout({ children }: { children: ReactNode }) {
   const unread = notifications.data?.filter((item) => !item.read_at).length ?? 0;
   return (
     <div className="app-shell">
-      <header className="topbar">
+      <header className="topbar" ref={topbarRef}>
         <Link href="/" className="brand" aria-label={ru.brand.name}>
           <img className="brand-mark" src="/assets/telegram-bot-avatar.jpg" alt="" />
           <span>
@@ -244,6 +259,12 @@ export function Layout({ children }: { children: ReactNode }) {
           {children}
         </motion.main>
       </AnimatePresence>
+      {emojiPackFor ? (
+        <CustomEmojiPickerDialog
+          focusPackOfEmojiId={emojiPackFor}
+          onClose={() => setEmojiPackFor(null)}
+        />
+      ) : null}
       {feedTopActionVisible ? (
         <button
           className="feed-top-action"

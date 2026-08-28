@@ -693,6 +693,11 @@ export const api = {
       },
     ),
   customEmojiPacks: () => request<CustomEmojiLibrary>('/custom-emoji/packs'),
+  removeCustomEmojiPack: (packId: string) =>
+    request<{ removed: true }>(`/custom-emoji/packs/${packId}`, {
+      method: 'DELETE',
+      body: '{}',
+    }),
   shareConversationProfile: (conversationId: string, replyToMessageId?: string) =>
     request<{ sent: true; messageId: string }>(`/conversations/${conversationId}/profile-share`, {
       method: 'POST',
@@ -1242,6 +1247,7 @@ export interface CustomEmojiPack {
   emoji_count: number;
   monochrome_count: number;
   is_own: number;
+  can_remove: number;
 }
 
 export interface CustomEmojiItem {

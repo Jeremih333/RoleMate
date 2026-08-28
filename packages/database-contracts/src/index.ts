@@ -438,6 +438,31 @@ export const workerOperations = {
       .min(1)
       .max(200),
   }),
+  'customEmoji.packs.remove': z.object({
+    userId: z.string().uuid(),
+    packId: z.string().uuid(),
+  }),
+  'customEmoji.assets.pending': z.object({
+    kind: z.enum(['thumbnail', 'animation']),
+    limit: z.number().int().min(1).max(50).default(12),
+  }),
+  'customEmoji.assets.store': z.object({
+    customEmojiId: z
+      .string()
+      .trim()
+      .regex(/^[0-9]{1,32}$/),
+    kind: z.enum(['thumbnail', 'animation']),
+    contentType: z.string().min(1).max(120),
+    dataBase64: z.string().min(1),
+    byteSize: z.number().int().min(1),
+  }),
+  'customEmoji.assets.get': z.object({
+    customEmojiId: z
+      .string()
+      .trim()
+      .regex(/^[0-9]{1,32}$/),
+    kind: z.enum(['thumbnail', 'animation']),
+  }),
   'customEmoji.seed.pending': z.object({}),
   'customEmoji.packs.list': z.object({
     userId: z.string().uuid(),

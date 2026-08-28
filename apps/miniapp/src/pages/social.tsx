@@ -644,8 +644,7 @@ export function PublicProfilePage() {
                         </div>
                         {customEmojiPickerOpen ? (
                           <CustomEmojiPickerDialog
-                            library={customEmoji.data}
-                            loading={customEmoji.isLoading}
+                            monochromeOnly
                             selectedId={headerCustomEmojiId}
                             onPick={(value) => {
                               setHeaderEmoji(null);

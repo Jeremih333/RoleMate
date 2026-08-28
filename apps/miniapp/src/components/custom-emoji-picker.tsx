@@ -1,35 +1,59 @@
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { Trash2, X } from 'lucide-react';
 import { createPortal } from 'react-dom';
-import { X } from 'lucide-react';
 import { ru } from '@rolemate/shared';
-import type { CustomEmojiLibrary } from '../api.js';
-import { Button } from './ui.js';
+import { api } from '../api.js';
+import { Button, useConfirmPrompt } from './ui.js';
+import { CustomEmojiGlyph } from './custom-emoji-glyph.js';
 
 /**
- * Picks one emoji out of the imported packs. Only repaintable emoji are offered
- * for a profile header — a full-colour glyph cannot take the header's tint — and
- * the sheet is rendered in a portal so the editor's own stacking context cannot
- * trap it behind the navigation.
+ * The imported packs, in one sheet.
+ *
+ * It is used to choose a header emoji (repaintable ones only — a full-colour
+ * glyph cannot take the header's colour), to insert an emoji into text, and to
+ * simply look at a pack when somebody taps one of its emoji. Removing a pack
+ * takes it out everywhere, so it is offered only to whoever brought it in and to
+ * staff, and always behind a confirmation.
  */
 export function CustomEmojiPickerDialog({
-  library,
-  loading,
   selectedId,
-  monochromeOnly = true,
+  monochromeOnly = false,
+  focusPackOfEmojiId,
   onPick,
   onClose,
 }: {
-  library: CustomEmojiLibrary | undefined;
-  loading: boolean;
-  selectedId: string | null;
+  selectedId?: string | null;
   monochromeOnly?: boolean;
-  onPick: (customEmojiId: string | null) => void;
+  focusPackOfEmojiId?: string | null;
+  onPick?: (customEmojiId: string | null) => void;
   onClose: () => void;
 }) {
-  const packs = library?.packs ?? [];
-  const emoji = (library?.emoji ?? []).filter(
+  const queryClient = useQueryClient();
+  const { confirm, dialog } = useConfirmPrompt();
+  const library = useQuery({
+    queryKey: ['custom-emoji-packs'],
+    queryFn: api.customEmojiPacks,
+    staleTime: 5 * 60_000,
+  });
+  const remove = useMutation({
+    mutationFn: (packId: string) => api.removeCustomEmojiPack(packId),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ['custom-emoji-packs'] });
+      void queryClient.invalidateQueries({ queryKey: ['public-profile'] });
+      void queryClient.invalidateQueries({ queryKey: ['conversations'] });
+    },
+  });
+
+  const packs = library.data?.packs ?? [];
+  const emoji = (library.data?.emoji ?? []).filter(
     (item) => !monochromeOnly || item.needs_repainting === 1,
   );
+  const focusPackId = focusPackOfEmojiId
+    ? (library.data?.emoji.find((item) => item.custom_emoji_id === focusPackOfEmojiId)?.pack_id ??
+      null)
+    : null;
   const groups = packs
+    .filter((pack) => !focusPackId || pack.id === focusPackId)
     .map((pack) => ({ pack, items: emoji.filter((item) => item.pack_id === pack.id) }))
     .filter((group) => group.items.length > 0);
 
@@ -48,18 +72,36 @@ export function CustomEmojiPickerDialog({
             <X aria-hidden />
           </button>
         </header>
-        {loading ? (
+        {library.isLoading ? (
           <p className="custom-emoji-sheet-note">{ru.miniApp.social.customEmojiLoading}</p>
         ) : groups.length ? (
           <div className="custom-emoji-sheet-body">
-            {selectedId ? (
+            {onPick && selectedId ? (
               <Button variant="secondary" onClick={() => onPick(null)}>
                 {ru.miniApp.social.customEmojiClear}
               </Button>
             ) : null}
             {groups.map(({ pack, items }) => (
               <section key={pack.id}>
-                <p className="custom-emoji-pack-title">{pack.title}</p>
+                <div className="custom-emoji-pack-head">
+                  <p className="custom-emoji-pack-title">{pack.title}</p>
+                  {pack.can_remove ? (
+                    <button
+                      type="button"
+                      className="custom-emoji-pack-remove"
+                      aria-label={ru.miniApp.social.customEmojiRemovePack}
+                      title={ru.miniApp.social.customEmojiRemovePack}
+                      disabled={remove.isPending}
+                      onClick={() =>
+                        confirm(ru.miniApp.social.customEmojiRemovePackConfirm, () =>
+                          remove.mutate(pack.id),
+                        )
+                      }
+                    >
+                      <Trash2 aria-hidden />
+                    </button>
+                  ) : null}
+                </div>
                 <div className="custom-emoji-grid">
                   {items.map((item) => (
                     <button
@@ -70,13 +112,14 @@ export function CustomEmojiPickerDialog({
                       }`}
                       aria-pressed={selectedId === item.custom_emoji_id}
                       aria-label={item.emoji || pack.title}
-                      onClick={() => onPick(item.custom_emoji_id)}
+                      disabled={!onPick}
+                      onClick={() => onPick?.(item.custom_emoji_id)}
                     >
-                      <img
-                        src={`/api/custom-emoji/${item.custom_emoji_id}?thumbnail=1`}
-                        alt={item.emoji}
-                        loading="lazy"
-                        decoding="async"
+                      <CustomEmojiGlyph
+                        customEmojiId={item.custom_emoji_id}
+                        renderKind={item.render_kind}
+                        label={item.emoji}
+                        size={30}
                       />
                     </button>
                   ))}
@@ -87,6 +130,8 @@ export function CustomEmojiPickerDialog({
         ) : (
           <p className="custom-emoji-sheet-note">{ru.miniApp.social.customEmojiEmptyHint}</p>
         )}
+        {remove.isError ? <div className="error-box">{remove.error.message}</div> : null}
+        {dialog}
       </section>
     </div>,
     document.body,

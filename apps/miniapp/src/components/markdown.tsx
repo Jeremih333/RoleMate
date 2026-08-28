@@ -2,6 +2,9 @@ import ReactMarkdown from 'react-markdown';
 import type { Ref } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { api } from '../api.js';
+import { ru } from '@rolemate/shared';
+import { CustomEmojiGlyph } from './custom-emoji-glyph.js';
+import { CUSTOM_EMOJI_TOKEN_PATTERN, openCustomEmojiPack } from './custom-emoji-token.js';
 
 export function ProfileMarkdown({
   children,
@@ -28,10 +31,19 @@ export function ProfileMarkdown({
     staleTime: 5 * 60_000,
   });
   const resolved = new Set((mentions.data ?? []).map((item) => item.username.toLowerCase()));
-  const markdown = children.replace(mentionPattern, (whole, prefix: string, username: string) =>
-    resolved.has(username.toLowerCase())
-      ? `${prefix}[@${username}](/u/${username.toLowerCase()})`
-      : whole,
+  const withMentions = children.replace(
+    mentionPattern,
+    (whole, prefix: string, username: string) =>
+      resolved.has(username.toLowerCase())
+        ? `${prefix}[@${username}](/u/${username.toLowerCase()})`
+        : whole,
+  );
+  // A custom emoji is written in text as [ce:<id>]. Turning it into a link keeps
+  // it inside the markdown pipeline that already sanitises everything, and the
+  // link renderer below draws the glyph instead of an anchor.
+  const markdown = withMentions.replace(
+    CUSTOM_EMOJI_TOKEN_PATTERN,
+    (_whole, id: string) => `[·](ce:${id})`,
   );
   return (
     <div ref={contentRef} className={`profile-markdown ${className}`}>
@@ -55,7 +67,22 @@ export function ProfileMarkdown({
             <em className={dimEmphasis ? 'roleplay-action' : undefined}>{emphasisChildren}</em>
           ),
           a: ({ children: linkChildren, href }) =>
-            allowLinks && href ? (
+            href?.startsWith('ce:') ? (
+              <button
+                type="button"
+                className="custom-emoji-inline"
+                aria-label={ru.miniApp.social.customEmojiOpenPack}
+                title={ru.miniApp.social.customEmojiOpenPack}
+                onClick={() => openCustomEmojiPack(href.slice(3))}
+              >
+                <CustomEmojiGlyph
+                  customEmojiId={href.slice(3)}
+                  renderKind="lottie"
+                  size={20}
+                  animate
+                />
+              </button>
+            ) : allowLinks && href ? (
               <a
                 href={href}
                 {...(href.startsWith('/u/')

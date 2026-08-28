@@ -1,4 +1,5 @@
 import type { Sticker } from 'grammy/types';
+import type { DataApiClient } from './d1-client.js';
 
 export interface ImportedCustomEmoji {
   customEmojiId: string;
@@ -69,4 +70,63 @@ export function collectCustomEmoji(stickers: readonly Sticker[]): ImportedCustom
     });
   }
   return collected;
+}
+
+/**
+ * Downloads one custom emoji from Telegram and keeps it. Everything after the
+ * first fetch is served from our own storage: a picker holds hundreds of glyphs,
+ * and asking Telegram for each of them every time is what made them stop
+ * arriving. A TGS is unpacked here — it is gzipped Lottie, and the browser
+ * should not have to carry a decompressor for it.
+ */
+export async function cacheCustomEmojiAsset(input: {
+  bot: { api: { getFile: (fileId: string) => Promise<{ file_path?: string }> } };
+  dataApi: DataApiClient;
+  token: string;
+  customEmojiId: string;
+  kind: 'thumbnail' | 'animation';
+  emoji: { file_id: string; thumbnail_file_id: string | null; render_kind?: string };
+  requestInit?: RequestInit;
+}): Promise<{ contentType: string; dataBase64: string } | null> {
+  const fileId =
+    input.kind === 'thumbnail'
+      ? (input.emoji.thumbnail_file_id ?? input.emoji.file_id)
+      : input.emoji.file_id;
+  try {
+    const file = await input.bot.api.getFile(fileId);
+    if (!file.file_path) return null;
+    const response = await fetch(
+      `https://api.telegram.org/file/bot${input.token}/${file.file_path}`,
+      input.requestInit ?? {},
+    );
+    if (!response.ok) return null;
+    const extension = file.file_path.split('.').pop()?.toLowerCase();
+    let bytes = new Uint8Array(await response.arrayBuffer());
+    let contentType =
+      extension === 'webm'
+        ? 'video/webm'
+        : extension === 'png'
+          ? 'image/png'
+          : extension === 'tgs'
+            ? 'application/json'
+            : (response.headers.get('content-type') ?? 'image/webp');
+    if (extension === 'tgs') {
+      const unpacked = new Response(
+        new Blob([bytes]).stream().pipeThrough(new DecompressionStream('gzip')),
+      );
+      bytes = new Uint8Array(await unpacked.arrayBuffer());
+      contentType = 'application/json';
+    }
+    const dataBase64 = Buffer.from(bytes).toString('base64');
+    await input.dataApi.execute('customEmoji.assets.store', {
+      customEmojiId: input.customEmojiId,
+      kind: input.kind,
+      contentType,
+      dataBase64,
+      byteSize: bytes.byteLength,
+    });
+    return { contentType, dataBase64 };
+  } catch {
+    return null;
+  }
 }

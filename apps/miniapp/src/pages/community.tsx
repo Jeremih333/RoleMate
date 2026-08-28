@@ -74,6 +74,7 @@ import { useUserStore } from '../store.js';
 import { DoubleHeartIcon } from '../components/double-heart-icon.js';
 import { useViewerTime } from '../components/viewer-time.js';
 import { parseMessageReactions } from '../components/chat-reactions.js';
+import { CustomEmojiGlyph } from '../components/custom-emoji-glyph.js';
 
 export function MatchesPage() {
   const queryClient = useQueryClient();
@@ -1210,6 +1211,13 @@ function ConversationView({
   const [menuOpen, setMenuOpen] = useState(false);
   const { confirm, dialog: confirmDialog } = useConfirmPrompt();
   const { ask, dialog: promptDialog } = useTextPrompt();
+  // The layout of an open chat is driven by this class rather than by :has():
+  // the selector is silently ignored by the WebView some Telegram clients embed,
+  // and when it is ignored the composer ends up below the fold.
+  useEffect(() => {
+    document.body.classList.add('chat-open');
+    return () => document.body.classList.remove('chat-open');
+  }, []);
   const [selectionMode, setSelectionMode] = useState(false);
   const [selectedMessages, setSelectedMessages] = useState<string[]>([]);
   const [confirmation, setConfirmation] = useState<'chat' | 'messages' | null>(null);
@@ -2685,33 +2693,6 @@ export function customEmojiIdOf(reaction: string): string {
   return reaction.slice(CUSTOM_EMOJI_PREFIX.length);
 }
 
-/**
- * Renders one custom emoji. A TGS is served as its still thumbnail because the
- * app carries no Lottie runtime; a WEBM plays as a muted looping video.
- */
-function CustomEmojiGlyph({
-  item,
-  size = 22,
-}: {
-  item: { custom_emoji_id: string; render_kind?: 'static' | 'video' | 'lottie'; emoji: string };
-  size?: number;
-}) {
-  // Every kind is drawn from its still thumbnail: one URL shape for the whole
-  // library means one cache entry per emoji, no video decoding for a glyph the
-  // size of a letter, and no Lottie runtime in the bundle. The picker can hold
-  // hundreds of these, and on the free plan each extra request shape costs.
-  return (
-    <img
-      className="custom-emoji-glyph"
-      style={{ width: size, height: size }}
-      src={`/api/custom-emoji/${item.custom_emoji_id}?thumbnail=1`}
-      alt={item.emoji}
-      loading="lazy"
-      decoding="async"
-    />
-  );
-}
-
 function ChatReactionMenu({
   onReact,
   onClose,
@@ -2760,7 +2741,14 @@ function ChatReactionMenu({
               aria-label={item.emoji || ru.miniApp.community.customEmojiReaction}
               onClick={() => onReact(`${CUSTOM_EMOJI_PREFIX}${item.custom_emoji_id}`)}
             >
-              <CustomEmojiGlyph item={item} />
+              {/* Stills in the shelf: it holds dozens of glyphs at once, and
+                  loading a Lottie document for each of them would cost both the
+                  device and the request budget for nothing. */}
+              <CustomEmojiGlyph
+                customEmojiId={item.custom_emoji_id}
+                renderKind={item.render_kind}
+                label={item.emoji}
+              />
             </button>
           ))}
         </div>
@@ -2805,7 +2793,7 @@ export function ChatReactionSummary({
           }
         >
           {isCustomEmojiKey(item.reaction) ? (
-            <CustomEmojiGlyph size={16} item={{ custom_emoji_id: item.reaction, emoji: '' }} />
+            <CustomEmojiGlyph customEmojiId={item.reaction} renderKind="lottie" size={16} animate />
           ) : (
             reactionEmoji(
               item.reaction,

@@ -163,6 +163,243 @@ async function onboard(id: number): Promise<string> {
 }
 
 describe('D1 domain operations', () => {
+  it('caches emoji bytes once and stops offering them for hydration', async () => {
+    const userId = await onboard(2_711);
+    await executeOperation(
+      env,
+      'customEmoji.import',
+      {
+        userId,
+        setName: 'HydrationPack',
+        title: 'Hydration',
+        emoji: [
+          {
+            customEmojiId: '9201',
+            fileId: 'file-anim',
+            thumbnailFileId: 'file-thumb',
+            renderKind: 'lottie',
+            needsRepainting: true,
+          },
+          { customEmojiId: '9202', fileId: 'file-b', renderKind: 'static', needsRepainting: false },
+        ],
+      },
+      crypto.randomUUID(),
+    );
+
+    const pending = async (kind: 'thumbnail' | 'animation') =>
+      (await executeOperation(
+        env,
+        'customEmoji.assets.pending',
+        { kind, limit: 12 },
+        crypto.randomUUID(),
+      )) as Array<{ custom_emoji_id: string; thumbnail_file_id: string | null }>;
+
+    expect((await pending('thumbnail')).map((item) => item.custom_emoji_id)).toEqual([
+      '9201',
+      '9202',
+    ]);
+
+    await executeOperation(
+      env,
+      'customEmoji.assets.store',
+      {
+        customEmojiId: '9201',
+        kind: 'thumbnail',
+        contentType: 'image/webp',
+        dataBase64: 'QUJD',
+        byteSize: 3,
+      },
+      crypto.randomUUID(),
+    );
+    // Cached now, so it is no longer offered — but only for that kind.
+    expect((await pending('thumbnail')).map((item) => item.custom_emoji_id)).toEqual(['9202']);
+    expect((await pending('animation')).map((item) => item.custom_emoji_id)).toEqual([
+      '9201',
+      '9202',
+    ]);
+    await expect(
+      executeOperation(
+        env,
+        'customEmoji.assets.get',
+        { customEmojiId: '9201', kind: 'thumbnail' },
+        crypto.randomUUID(),
+      ),
+    ).resolves.toEqual({ content_type: 'image/webp', data_base64: 'QUJD' });
+    await expect(
+      executeOperation(
+        env,
+        'customEmoji.assets.get',
+        { customEmojiId: '9201', kind: 'animation' },
+        crypto.randomUUID(),
+      ),
+    ).resolves.toBeNull();
+
+    // Re-storing replaces the bytes rather than failing on the primary key.
+    await executeOperation(
+      env,
+      'customEmoji.assets.store',
+      {
+        customEmojiId: '9201',
+        kind: 'thumbnail',
+        contentType: 'image/png',
+        dataBase64: 'REVG',
+        byteSize: 3,
+      },
+      crypto.randomUUID(),
+    );
+    await expect(
+      executeOperation(
+        env,
+        'customEmoji.assets.get',
+        { customEmojiId: '9201', kind: 'thumbnail' },
+        crypto.randomUUID(),
+      ),
+    ).resolves.toEqual({ content_type: 'image/png', data_base64: 'REVG' });
+  });
+
+  it('removes an emoji pack everywhere it was used, and only for people allowed to', async () => {
+    const importerId = await onboard(2_701);
+    const strangerId = await onboard(2_702);
+    const partnerId = await onboard(2_703);
+    const pack = (await executeOperation(
+      env,
+      'customEmoji.import',
+      {
+        userId: importerId,
+        setName: 'RemovablePack',
+        title: 'Removable',
+        emoji: [
+          { customEmojiId: '9101', fileId: 'file-a', renderKind: 'static', needsRepainting: true },
+          { customEmojiId: '9102', fileId: 'file-b', renderKind: 'static', needsRepainting: true },
+        ],
+      },
+      crypto.randomUUID(),
+    )) as { packId: string };
+
+    // The emoji is in use: cached bytes, a header decoration and a reaction.
+    await executeOperation(
+      env,
+      'customEmoji.assets.store',
+      {
+        customEmojiId: '9101',
+        kind: 'thumbnail',
+        contentType: 'image/webp',
+        dataBase64: 'AAAA',
+        byteSize: 3,
+      },
+      crypto.randomUUID(),
+    );
+    sqlite
+      .prepare(
+        `INSERT INTO premium_entitlements (id, user_id, source, status, starts_at, ends_at)
+         VALUES (?, ?, 'admin', 'active', CURRENT_TIMESTAMP, datetime('now', '+7 days'))`,
+      )
+      .run(crypto.randomUUID(), importerId);
+    await executeOperation(
+      env,
+      'publicProfiles.update',
+      {
+        userId: importerId,
+        displayName: 'Pack owner',
+        bio: 'Uses an emoji from the pack in the header.',
+        avatarMediaIds: [],
+        visibilityMode: 'public',
+        showFollowers: true,
+        showFollowing: true,
+        showQuestionnaires: true,
+        showPosts: true,
+        showLastSeen: true,
+        directMessagePolicy: 'everyone',
+        headerCustomEmojiId: '9101',
+      },
+      crypto.randomUUID(),
+    );
+    const conversation = (await executeOperation(
+      env,
+      'conversations.startDirect',
+      { userId: importerId, targetUserId: partnerId },
+      crypto.randomUUID(),
+    )) as { conversationId: string };
+    const message = (await executeOperation(
+      env,
+      'conversations.recordMiniAppMessage',
+      {
+        userId: partnerId,
+        conversationId: conversation.conversationId,
+        destinationMessageId: 7_101,
+        messageType: 'text',
+        encryptedContent: 'encrypted.pack-removal.payload',
+      },
+      crypto.randomUUID(),
+    )) as { messageId: string };
+    await executeOperation(
+      env,
+      'conversations.messages.react',
+      {
+        userId: importerId,
+        conversationId: conversation.conversationId,
+        messageId: message.messageId,
+        reaction: 'custom',
+        customEmojiId: '9102',
+      },
+      crypto.randomUUID(),
+    );
+
+    // Somebody else's pack is not theirs to delete.
+    await expect(
+      executeOperation(
+        env,
+        'customEmoji.packs.remove',
+        { userId: strangerId, packId: pack.packId },
+        crypto.randomUUID(),
+      ),
+    ).rejects.toMatchObject({ code: 'CUSTOM_EMOJI_PACK_FORBIDDEN' });
+
+    await executeOperation(
+      env,
+      'customEmoji.packs.remove',
+      { userId: importerId, packId: pack.packId },
+      crypto.randomUUID(),
+    );
+
+    for (const [table, column] of [
+      ['custom_emoji_packs', 'id'],
+      ['custom_emoji', 'pack_id'],
+      ['user_custom_emoji_packs', 'pack_id'],
+    ] as const) {
+      expect(
+        sqlite
+          .prepare(`SELECT COUNT(*) AS total FROM ${table} WHERE ${column} = ?`)
+          .get(pack.packId),
+      ).toEqual({ total: 0 });
+    }
+    expect(sqlite.prepare('SELECT COUNT(*) AS total FROM custom_emoji_assets').get()).toEqual({
+      total: 0,
+    });
+    expect(
+      sqlite
+        .prepare(
+          'SELECT COUNT(*) AS total FROM conversation_message_reactions WHERE custom_emoji_id IS NOT NULL',
+        )
+        .get(),
+    ).toEqual({ total: 0 });
+    expect(
+      sqlite
+        .prepare('SELECT header_custom_emoji_id FROM user_profiles WHERE user_id = ?')
+        .get(importerId),
+    ).toEqual({ header_custom_emoji_id: null });
+
+    // And a second removal has nothing left to remove.
+    await expect(
+      executeOperation(
+        env,
+        'customEmoji.packs.remove',
+        { userId: importerId, packId: pack.packId },
+        crypto.randomUUID(),
+      ),
+    ).rejects.toMatchObject({ code: 'CUSTOM_EMOJI_PACK_NOT_FOUND' });
+  });
+
   it('caps how many packs one person can import into the shared library', async () => {
     const userId = await onboard(2_631);
     sqlite

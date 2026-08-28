@@ -724,6 +724,12 @@ export const ru = {
       appearanceCustomEmoji: 'Премиум-эмодзи из твоих наборов',
       appearanceCustomEmojiOpen: 'Выбрать из загруженных',
       customEmojiPickerTitle: 'Загруженные премиум-эмодзи',
+      customEmojiOpenPack: 'Показать набор эмодзи',
+      customEmojiInsert: 'Вставить премиум-эмодзи',
+      customEmojiRemovePack: 'Удалить набор',
+      customEmojiRemovePackConfirm:
+        'Удалить набор для всех? Его эмодзи исчезнут из реакций, шапок профилей и текстов.',
+      customEmojiPackRemoved: 'Набор удалён.',
       customEmojiLoading: 'Загружаем наборы…',
       customEmojiClear: 'Убрать эмодзи из шапки',
       customEmojiEmptyHint:

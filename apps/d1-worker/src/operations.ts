@@ -3595,6 +3595,93 @@ const handlers: { [K in WorkerOperation]: Handler<K> } = {
    * pasting its link into a chat. Already imported sets simply stop appearing,
    * so the list needs no clearing.
    */
+  /**
+   * Emoji whose bytes have not been cached yet. The scheduled task walks this in
+   * small batches so a pack becomes self-hosted within a few minutes without
+   * spending a burst of Telegram calls or a worker's subrequest budget.
+   */
+  /**
+   * Removes a pack for everyone. The person who brought it in can take it back
+   * out, and staff can remove anything. Everything that pointed at its emoji is
+   * cleaned up in the same batch: reactions carrying them, headers decorated
+   * with them, and the cached bytes. Text that mentions one simply stops finding
+   * it and renders nothing, which is the same as any other deleted content.
+   */
+  'customEmoji.packs.remove': async (env, input) => {
+    const pack = await env.DB.prepare(
+      `SELECT p.id, p.imported_by_user_id,
+              EXISTS (
+                SELECT 1 FROM users u
+                LEFT JOIN moderator_assignments ma ON ma.user_id = u.id AND ma.is_active = 1
+                WHERE u.id = ?2
+                  AND ((u.role = 'admin' AND u.telegram_user_id = 1040929628)
+                       OR ma.user_id IS NOT NULL)
+              ) AS is_staff
+       FROM custom_emoji_packs p WHERE p.id = ?1`,
+    )
+      .bind(input.packId, input.userId)
+      .first<{ id: string; imported_by_user_id: string | null; is_staff: number }>();
+    if (!pack) throw new ApiError(404, 'CUSTOM_EMOJI_PACK_NOT_FOUND', 'Pack not found');
+    if (!pack.is_staff && pack.imported_by_user_id !== input.userId) {
+      throw new ApiError(403, 'CUSTOM_EMOJI_PACK_FORBIDDEN', 'Pack belongs to somebody else');
+    }
+    await env.DB.batch([
+      env.DB.prepare(
+        `UPDATE user_profiles SET header_custom_emoji_id = NULL
+         WHERE header_custom_emoji_id IN (SELECT custom_emoji_id FROM custom_emoji WHERE pack_id = ?1)`,
+      ).bind(input.packId),
+      env.DB.prepare(
+        `DELETE FROM conversation_message_reactions
+         WHERE custom_emoji_id IN (SELECT custom_emoji_id FROM custom_emoji WHERE pack_id = ?1)`,
+      ).bind(input.packId),
+      env.DB.prepare(
+        `DELETE FROM custom_emoji_assets
+         WHERE custom_emoji_id IN (SELECT custom_emoji_id FROM custom_emoji WHERE pack_id = ?1)`,
+      ).bind(input.packId),
+      env.DB.prepare('DELETE FROM custom_emoji WHERE pack_id = ?1').bind(input.packId),
+      env.DB.prepare('DELETE FROM user_custom_emoji_packs WHERE pack_id = ?1').bind(input.packId),
+      env.DB.prepare('DELETE FROM custom_emoji_packs WHERE id = ?1').bind(input.packId),
+    ]);
+    return { removed: true };
+  },
+  'customEmoji.assets.pending': async (env, input) => {
+    return (
+      await env.DB.prepare(
+        `SELECT ce.custom_emoji_id, ce.file_id, ce.thumbnail_file_id, ce.render_kind
+         FROM custom_emoji ce
+         WHERE NOT EXISTS (
+           SELECT 1 FROM custom_emoji_assets a
+           WHERE a.custom_emoji_id = ce.custom_emoji_id AND a.kind = ?1
+         )
+         ORDER BY ce.pack_id, ce.position
+         LIMIT ?2`,
+      )
+        .bind(input.kind, input.limit)
+        .all()
+    ).results;
+  },
+  'customEmoji.assets.store': async (env, input) => {
+    await env.DB.prepare(
+      `INSERT INTO custom_emoji_assets
+         (custom_emoji_id, kind, content_type, data_base64, byte_size)
+       VALUES (?1, ?2, ?3, ?4, ?5)
+       ON CONFLICT(custom_emoji_id, kind) DO UPDATE SET
+         content_type = excluded.content_type, data_base64 = excluded.data_base64,
+         byte_size = excluded.byte_size, created_at = CURRENT_TIMESTAMP`,
+    )
+      .bind(input.customEmojiId, input.kind, input.contentType, input.dataBase64, input.byteSize)
+      .run();
+    return { stored: true };
+  },
+  'customEmoji.assets.get': async (env, input) => {
+    const asset = await env.DB.prepare(
+      `SELECT content_type, data_base64 FROM custom_emoji_assets
+       WHERE custom_emoji_id = ?1 AND kind = ?2`,
+    )
+      .bind(input.customEmojiId, input.kind)
+      .first<{ content_type: string; data_base64: string }>();
+    return asset ?? null;
+  },
   'customEmoji.seed.pending': async (env) => {
     const config = await env.DB.prepare(
       "SELECT value FROM app_config WHERE key = 'custom_emoji_seed_sets'",
@@ -3628,7 +3715,18 @@ const handlers: { [K in WorkerOperation]: Handler<K> } = {
                 EXISTS (
                   SELECT 1 FROM user_custom_emoji_packs up
                   WHERE up.pack_id = p.id AND up.user_id = ?1
-                ) AS is_own
+                ) AS is_own,
+                CASE
+                  WHEN p.imported_by_user_id = ?1 THEN 1
+                  WHEN EXISTS (
+                    SELECT 1 FROM users u
+                    LEFT JOIN moderator_assignments ma ON ma.user_id = u.id AND ma.is_active = 1
+                    WHERE u.id = ?1
+                      AND ((u.role = 'admin' AND u.telegram_user_id = 1040929628)
+                           OR ma.user_id IS NOT NULL)
+                  ) THEN 1
+                  ELSE 0
+                END AS can_remove
          FROM custom_emoji_packs p
          ORDER BY is_own DESC, p.created_at ASC
          LIMIT ?2`,

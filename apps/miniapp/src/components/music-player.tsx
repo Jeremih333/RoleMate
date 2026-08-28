@@ -234,6 +234,14 @@ export function MusicPlayerProvider({ children }: { children: ReactNode }) {
     ],
   );
 
+  // The player is a fixed strip above everything, so the layout has to know it is
+  // there. A class says so plainly instead of a :has() selector the WebView in
+  // some Telegram clients ignores.
+  useEffect(() => {
+    document.body.classList.toggle('music-open', Boolean(currentTrack));
+    return () => document.body.classList.remove('music-open');
+  }, [currentTrack]);
+
   return (
     <MusicPlayerContext.Provider value={value}>
       {children}

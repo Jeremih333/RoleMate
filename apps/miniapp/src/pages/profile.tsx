@@ -9,6 +9,7 @@ import {
   EyeOff,
   ImagePlus,
   Music2,
+  Smile,
   Trash2,
   UserRound,
   X,
@@ -20,6 +21,8 @@ import { profileSchema, ru, type ProfileInput } from '@rolemate/shared';
 import { ApiError, api } from '../api.js';
 import type { ProfileMedia } from '../api.js';
 import { ProfileMarkdown } from '../components/markdown.js';
+import { CustomEmojiPickerDialog } from '../components/custom-emoji-picker.js';
+import { customEmojiToken } from '../components/custom-emoji-token.js';
 import { ProfileAvatar } from '../components/profile-avatar.js';
 import { VerificationBadge } from '../components/verification-badge.js';
 import {
@@ -171,6 +174,7 @@ function SuggestionTextarea({
   onChange: (value: string) => void;
 }) {
   const recordSelection = useSuggestionSelection();
+  const [emojiPickerOpen, setEmojiPickerOpen] = useState(false);
   const activePhrase =
     value
       .split(/[,;\n]/u)
@@ -201,6 +205,28 @@ function SuggestionTextarea({
         value={value}
         onChange={(event) => onChange(event.target.value)}
       />
+      {/* Imported emoji can be written into the text itself: the token is plain
+          text, so it survives the field, the database and every re-edit. */}
+      <div className="suggestion-textarea-tools">
+        <button
+          type="button"
+          className="custom-emoji-insert"
+          aria-label={ru.miniApp.social.customEmojiInsert}
+          title={ru.miniApp.social.customEmojiInsert}
+          onClick={() => setEmojiPickerOpen(true)}
+        >
+          <Smile aria-hidden />
+        </button>
+      </div>
+      {emojiPickerOpen ? (
+        <CustomEmojiPickerDialog
+          onPick={(customEmojiId) => {
+            if (customEmojiId) onChange(`${value}${customEmojiToken(customEmojiId)}`);
+            setEmojiPickerOpen(false);
+          }}
+          onClose={() => setEmojiPickerOpen(false)}
+        />
+      ) : null}
       {suggestions.data?.length ? (
         <SuggestionRail>
           {suggestions.data

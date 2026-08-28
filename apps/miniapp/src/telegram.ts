@@ -105,6 +105,28 @@ export function trackViewportHeight(): () => void {
 }
 
 /**
+ * Publishes the header's real height as `--topbar-height`. The chat sizes itself
+ * from the viewport minus this value; hard-coding a number here is what pushed
+ * the composer off the bottom of the screen on clients whose header is taller.
+ */
+export function trackTopbarHeight(element: HTMLElement | null): () => void {
+  if (typeof window === 'undefined' || !element) return () => {};
+  const root = document.documentElement;
+  const apply = () => {
+    const height = Math.round(element.getBoundingClientRect().height);
+    if (height > 0) root.style.setProperty('--topbar-height', `${height}px`);
+  };
+  apply();
+  if (typeof ResizeObserver === 'undefined') {
+    window.addEventListener('resize', apply);
+    return () => window.removeEventListener('resize', apply);
+  }
+  const observer = new ResizeObserver(apply);
+  observer.observe(element);
+  return () => observer.disconnect();
+}
+
+/**
  * Telegram's own back arrow in the header. Declared in the API surface but never
  * wired, so the native control did nothing inside a conversation.
  */

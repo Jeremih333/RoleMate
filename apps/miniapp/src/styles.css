@@ -5129,6 +5129,9 @@ audio {
   min-width: 0;
   width: 100%;
   height: 100%;
+  /* A ceiling of its own: even if the surrounding layout fails to constrain it,
+     the message list scrolls inside this and the composer stays on screen. */
+  max-height: calc(var(--app-vh, 100dvh) - var(--topbar-height, 64px));
   min-height: 0;
   flex-direction: column;
   overflow: hidden;
@@ -6202,10 +6205,6 @@ audio {
   }
 }
 
-body:has(.telegram-conversation) {
-  height: var(--app-vh, 100dvh);
-  min-height: var(--app-vh, 100dvh);
-}
 .chat-media-upload-progress {
   position: fixed;
   z-index: 80;
@@ -6253,32 +6252,32 @@ body:has(.telegram-conversation) {
   background: rgb(255 255 255 / 96%);
   box-shadow: 0 14px 38px rgb(55 35 80 / 18%);
 }
-/* An open chat takes the whole shell: the page stops scrolling, loses its
-   padding, and the tab bar steps aside the way it does in Telegram. The
-   selectors look for the conversation anywhere below the page because the view
-   is wrapped in an animated container. */
-/* With a chat open the shell becomes the column that owns the viewport: the
-   header keeps its own height, the chat takes whatever is left, and nothing is
-   computed from a pixel guess about how tall the header happens to be. Guessing
-   is what pushed the composer off the bottom of the screen. */
-.app-shell:has(.telegram-conversation) {
+/* An open chat owns the viewport. Two independent guarantees keep the composer
+   on screen: the shell becomes a column whose height is the visual viewport
+   minus the header's measured height, and the conversation carries the same
+   ceiling itself. Everything keys off a class the view sets rather than :has():
+   that selector is ignored by the WebView some Telegram clients embed, and when
+   it is ignored the column overflows and the composer falls below the fold. */
+body.chat-open {
+  height: var(--app-vh, 100dvh);
+  min-height: 0;
+  overflow: hidden;
+}
+body.chat-open .app-shell {
   display: flex;
   flex-direction: column;
   height: var(--app-vh, 100dvh);
   min-height: 0;
   overflow: hidden;
 }
-.app-shell:has(.telegram-conversation) > .topbar {
+body.chat-open .topbar {
   flex: 0 0 auto;
 }
-body:has(.telegram-conversation) {
-  overflow: hidden;
-}
-body:has(.telegram-conversation) .bottom-nav,
-body:has(.telegram-conversation) .feed-top-action {
+body.chat-open .bottom-nav,
+body.chat-open .feed-top-action {
   display: none;
 }
-.page:has(.telegram-conversation) {
+body.chat-open .page {
   display: flex;
   width: 100%;
   max-width: 100%;
@@ -6288,24 +6287,22 @@ body:has(.telegram-conversation) .feed-top-action {
   overflow: hidden;
   padding: 0;
 }
-.page:has(.telegram-conversation) > * {
+body.chat-open .page > * {
   display: flex;
   width: 100%;
   min-width: 0;
   min-height: 0;
   flex: 1 1 auto;
 }
-/* The player is fixed to the top of the viewport, so the shell steps down by
-   its height instead of letting it cover the header — and the chat, which sizes
-   itself from the viewport, accounts for the same offset. */
-body:has(.global-music-player) .app-shell {
+/* The music player is a fixed strip above the shell. */
+body.music-open .app-shell {
   padding-top: 60px;
 }
-body:has(.global-music-player) .app-shell:has(.telegram-conversation) {
-  height: calc(var(--app-vh, 100dvh) - 60px);
-}
-body:has(.global-music-player) .topbar {
+body.music-open .topbar {
   top: 60px;
+}
+body.music-open.chat-open .app-shell {
+  height: calc(var(--app-vh, 100dvh) - 60px);
 }
 /* The player is a fixed strip above the shell, and the shell already accounts
    for it with padding, so the chat needs no arithmetic of its own here. */
@@ -9892,4 +9889,68 @@ body {
   width: 100%;
   height: 100%;
   object-fit: contain;
+}
+
+.custom-emoji-glyph-holder {
+  position: relative;
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  vertical-align: -0.15em;
+}
+.custom-emoji-glyph-holder svg {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+
+.suggestion-textarea {
+  position: relative;
+}
+.suggestion-textarea-tools {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 6px;
+}
+.custom-emoji-insert,
+.custom-emoji-inline {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 0;
+  padding: 0;
+  background: transparent;
+  cursor: pointer;
+}
+.custom-emoji-insert {
+  width: 32px;
+  height: 32px;
+  border: 1px solid var(--border);
+  border-radius: 50%;
+  color: var(--muted);
+}
+.custom-emoji-insert svg {
+  width: 16px;
+  height: 16px;
+}
+.custom-emoji-pack-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+.custom-emoji-pack-remove {
+  display: grid;
+  width: 28px;
+  height: 28px;
+  place-items: center;
+  border: 0;
+  border-radius: 50%;
+  color: #ff9ca8;
+  background: rgba(203, 82, 99, 0.14);
+}
+.custom-emoji-pack-remove svg {
+  width: 14px;
+  height: 14px;
 }

@@ -1891,13 +1891,13 @@ const handlers: { [K in WorkerOperation]: Handler<K> } = {
               CASE
                 WHEN u.role = 'admin' AND u.telegram_user_id = 1040929628 THEN 'owner'
                 WHEN EXISTS (
-                  SELECT 1 FROM moderator_assignments ma
-                  WHERE ma.user_id = up.user_id AND ma.is_active = 1
-                ) THEN 'moderator'
-                WHEN EXISTS (
                   SELECT 1 FROM profile_badges pb
                   WHERE pb.user_id = up.user_id AND pb.badge = 'special'
                 ) THEN 'special'
+                WHEN EXISTS (
+                  SELECT 1 FROM moderator_assignments ma
+                  WHERE ma.user_id = up.user_id AND ma.is_active = 1
+                ) THEN 'moderator'
                 WHEN EXISTS (
                   SELECT 1 FROM profile_badges pb
                   WHERE pb.user_id = up.user_id AND pb.badge = 'tester'
@@ -2052,13 +2052,13 @@ const handlers: { [K in WorkerOperation]: Handler<K> } = {
               CASE
                 WHEN u.role = 'admin' AND u.telegram_user_id = 1040929628 THEN 'owner'
                 WHEN EXISTS (
-                  SELECT 1 FROM moderator_assignments ma
-                  WHERE ma.user_id = up.user_id AND ma.is_active = 1
-                ) THEN 'moderator'
-                WHEN EXISTS (
                   SELECT 1 FROM profile_badges pb
                   WHERE pb.user_id = up.user_id AND pb.badge = 'special'
                 ) THEN 'special'
+                WHEN EXISTS (
+                  SELECT 1 FROM moderator_assignments ma
+                  WHERE ma.user_id = up.user_id AND ma.is_active = 1
+                ) THEN 'moderator'
                 WHEN EXISTS (
                   SELECT 1 FROM profile_badges pb
                   WHERE pb.user_id = up.user_id AND pb.badge = 'tester'
@@ -2210,13 +2210,13 @@ const handlers: { [K in WorkerOperation]: Handler<K> } = {
                 CASE
                   WHEN u.role = 'admin' AND u.telegram_user_id = 1040929628 THEN 'owner'
                   WHEN EXISTS (
-                    SELECT 1 FROM moderator_assignments ma
-                    WHERE ma.user_id = up.user_id AND ma.is_active = 1
-                  ) THEN 'moderator'
-                  WHEN EXISTS (
                     SELECT 1 FROM profile_badges pb
                     WHERE pb.user_id = up.user_id AND pb.badge = 'special'
                   ) THEN 'special'
+                  WHEN EXISTS (
+                    SELECT 1 FROM moderator_assignments ma
+                    WHERE ma.user_id = up.user_id AND ma.is_active = 1
+                  ) THEN 'moderator'
                   WHEN EXISTS (
                   SELECT 1 FROM profile_badges pb
                   WHERE pb.user_id = up.user_id AND pb.badge = 'tester'
@@ -2375,11 +2375,11 @@ const handlers: { [K in WorkerOperation]: Handler<K> } = {
                     AND avatar_pe.ends_at > CURRENT_TIMESTAMP
                 ) THEN 'still' ELSE up.avatar_render_mode END AS avatar_render_mode,
                 CASE WHEN u.telegram_user_id = 1040929628 THEN 'owner'
-                     WHEN EXISTS (SELECT 1 FROM moderator_assignments ma WHERE ma.user_id = u.id AND ma.is_active = 1) THEN 'moderator'
                      WHEN EXISTS (
                        SELECT 1 FROM profile_badges pb
                        WHERE pb.user_id = u.id AND pb.badge = 'special'
                      ) THEN 'special'
+                     WHEN EXISTS (SELECT 1 FROM moderator_assignments ma WHERE ma.user_id = u.id AND ma.is_active = 1) THEN 'moderator'
                      WHEN EXISTS (
                   SELECT 1 FROM profile_badges pb
                   WHERE pb.user_id = u.id AND pb.badge = 'tester'
@@ -2425,11 +2425,11 @@ const handlers: { [K in WorkerOperation]: Handler<K> } = {
                     AND avatar_pe.ends_at > CURRENT_TIMESTAMP
                 ) THEN 'still' ELSE up.avatar_render_mode END AS avatar_render_mode,
                 CASE WHEN u.telegram_user_id = 1040929628 THEN 'owner'
-                     WHEN EXISTS (SELECT 1 FROM moderator_assignments ma WHERE ma.user_id = u.id AND ma.is_active = 1) THEN 'moderator'
                      WHEN EXISTS (
                        SELECT 1 FROM profile_badges pb
                        WHERE pb.user_id = u.id AND pb.badge = 'special'
                      ) THEN 'special'
+                     WHEN EXISTS (SELECT 1 FROM moderator_assignments ma WHERE ma.user_id = u.id AND ma.is_active = 1) THEN 'moderator'
                      WHEN EXISTS (
                   SELECT 1 FROM profile_badges pb
                   WHERE pb.user_id = u.id AND pb.badge = 'tester'
@@ -2797,13 +2797,13 @@ const handlers: { [K in WorkerOperation]: Handler<K> } = {
                 CASE
                   WHEN u.role = 'admin' AND u.telegram_user_id = 1040929628 THEN 'owner'
                   WHEN EXISTS (
-                    SELECT 1 FROM moderator_assignments ma
-                    WHERE ma.user_id = q.user_id AND ma.is_active = 1
-                  ) THEN 'moderator'
-                  WHEN EXISTS (
                     SELECT 1 FROM profile_badges pb
                     WHERE pb.user_id = q.user_id AND pb.badge = 'special'
                   ) THEN 'special'
+                  WHEN EXISTS (
+                    SELECT 1 FROM moderator_assignments ma
+                    WHERE ma.user_id = q.user_id AND ma.is_active = 1
+                  ) THEN 'moderator'
                   WHEN EXISTS (
                   SELECT 1 FROM profile_badges pb
                   WHERE pb.user_id = q.user_id AND pb.badge = 'tester'
@@ -2959,13 +2959,13 @@ const handlers: { [K in WorkerOperation]: Handler<K> } = {
               CASE
                 WHEN u.role = 'admin' AND u.telegram_user_id = 1040929628 THEN 'owner'
                 WHEN EXISTS (
-                  SELECT 1 FROM moderator_assignments ma
-                  WHERE ma.user_id = q.user_id AND ma.is_active = 1
-                ) THEN 'moderator'
-                WHEN EXISTS (
                   SELECT 1 FROM profile_badges pb
                   WHERE pb.user_id = q.user_id AND pb.badge = 'special'
                 ) THEN 'special'
+                WHEN EXISTS (
+                  SELECT 1 FROM moderator_assignments ma
+                  WHERE ma.user_id = q.user_id AND ma.is_active = 1
+                ) THEN 'moderator'
                 WHEN EXISTS (
                   SELECT 1 FROM profile_badges pb
                   WHERE pb.user_id = q.user_id AND pb.badge = 'tester'
@@ -4053,13 +4053,13 @@ const handlers: { [K in WorkerOperation]: Handler<K> } = {
               CASE
                 WHEN u.role = 'admin' AND u.telegram_user_id = 1040929628 THEN 'owner'
                 WHEN EXISTS (
-                  SELECT 1 FROM moderator_assignments ma
-                  WHERE ma.user_id = p.user_id AND ma.is_active = 1
-                ) THEN 'moderator'
-                WHEN EXISTS (
                   SELECT 1 FROM profile_badges pb
                   WHERE pb.user_id = p.user_id AND pb.badge = 'special'
                 ) THEN 'special'
+                WHEN EXISTS (
+                  SELECT 1 FROM moderator_assignments ma
+                  WHERE ma.user_id = p.user_id AND ma.is_active = 1
+                ) THEN 'moderator'
                 WHEN EXISTS (
                   SELECT 1 FROM profile_badges pb
                   WHERE pb.user_id = p.user_id AND pb.badge = 'tester'
@@ -4624,13 +4624,13 @@ const handlers: { [K in WorkerOperation]: Handler<K> } = {
                 CASE
                   WHEN u.role = 'admin' AND u.telegram_user_id = 1040929628 THEN 'owner'
                   WHEN EXISTS (
-                    SELECT 1 FROM moderator_assignments ma
-                    WHERE ma.user_id = up.user_id AND ma.is_active = 1
-                  ) THEN 'moderator'
-                  WHEN EXISTS (
                     SELECT 1 FROM profile_badges pb
                     WHERE pb.user_id = up.user_id AND pb.badge = 'special'
                   ) THEN 'special'
+                  WHEN EXISTS (
+                    SELECT 1 FROM moderator_assignments ma
+                    WHERE ma.user_id = up.user_id AND ma.is_active = 1
+                  ) THEN 'moderator'
                   WHEN EXISTS (
                   SELECT 1 FROM profile_badges pb
                   WHERE pb.user_id = up.user_id AND pb.badge = 'tester'
@@ -5976,13 +5976,13 @@ const handlers: { [K in WorkerOperation]: Handler<K> } = {
               CASE
                 WHEN other.role = 'admin' AND other.telegram_user_id = 1040929628 THEN 'owner'
                 WHEN EXISTS (
-                  SELECT 1 FROM moderator_assignments moderator
-                  WHERE moderator.user_id = other.id AND moderator.is_active = 1
-                ) THEN 'moderator'
-                WHEN EXISTS (
                   SELECT 1 FROM profile_badges pb
                   WHERE pb.user_id = other.id AND pb.badge = 'special'
                 ) THEN 'special'
+                WHEN EXISTS (
+                  SELECT 1 FROM moderator_assignments moderator
+                  WHERE moderator.user_id = other.id AND moderator.is_active = 1
+                ) THEN 'moderator'
                 WHEN EXISTS (
                   SELECT 1 FROM profile_badges pb
                   WHERE pb.user_id = other.id AND pb.badge = 'tester'
@@ -6268,13 +6268,13 @@ const handlers: { [K in WorkerOperation]: Handler<K> } = {
               CASE
                 WHEN other.telegram_user_id = 1040929628 THEN 'owner'
                 WHEN EXISTS (
-                  SELECT 1 FROM moderator_assignments moderator
-                  WHERE moderator.user_id = other.id AND moderator.is_active = 1
-                ) THEN 'moderator'
-                WHEN EXISTS (
                   SELECT 1 FROM profile_badges pb
                   WHERE pb.user_id = other.id AND pb.badge = 'special'
                 ) THEN 'special'
+                WHEN EXISTS (
+                  SELECT 1 FROM moderator_assignments moderator
+                  WHERE moderator.user_id = other.id AND moderator.is_active = 1
+                ) THEN 'moderator'
                 WHEN EXISTS (
                   SELECT 1 FROM profile_badges pb
                   WHERE pb.user_id = other.id AND pb.badge = 'tester'
@@ -7049,6 +7049,10 @@ const handlers: { [K in WorkerOperation]: Handler<K> } = {
               CASE
                 WHEN forwarded_user.role = 'admin'
                   AND forwarded_user.telegram_user_id = 1040929628 THEN 'owner'
+                WHEN EXISTS (
+                  SELECT 1 FROM profile_badges pb
+                  WHERE pb.user_id = message.forwarded_author_user_id AND pb.badge = 'special'
+                ) THEN 'special'
                 WHEN EXISTS (
                   SELECT 1 FROM moderator_assignments forwarded_moderator
                   WHERE forwarded_moderator.user_id = message.forwarded_author_user_id
@@ -8373,13 +8377,13 @@ const handlers: { [K in WorkerOperation]: Handler<K> } = {
               CASE
                 WHEN u.role = 'admin' AND u.telegram_user_id = 1040929628 THEN 'owner'
                 WHEN EXISTS (
-                  SELECT 1 FROM moderator_assignments ma
-                  WHERE ma.user_id = tp.author_user_id AND ma.is_active = 1
-                ) THEN 'moderator'
-                WHEN EXISTS (
                   SELECT 1 FROM profile_badges pb
                   WHERE pb.user_id = tp.author_user_id AND pb.badge = 'special'
                 ) THEN 'special'
+                WHEN EXISTS (
+                  SELECT 1 FROM moderator_assignments ma
+                  WHERE ma.user_id = tp.author_user_id AND ma.is_active = 1
+                ) THEN 'moderator'
                 WHEN EXISTS (
                   SELECT 1 FROM profile_badges pb
                   WHERE pb.user_id = tp.author_user_id AND pb.badge = 'tester'
@@ -8498,13 +8502,13 @@ const handlers: { [K in WorkerOperation]: Handler<K> } = {
               CASE
                 WHEN author.role = 'admin' AND author.telegram_user_id = 1040929628 THEN 'owner'
                 WHEN EXISTS (
-                  SELECT 1 FROM moderator_assignments ma
-                  WHERE ma.user_id = tp.author_user_id AND ma.is_active = 1
-                ) THEN 'moderator'
-                WHEN EXISTS (
                   SELECT 1 FROM profile_badges pb
                   WHERE pb.user_id = tp.author_user_id AND pb.badge = 'special'
                 ) THEN 'special'
+                WHEN EXISTS (
+                  SELECT 1 FROM moderator_assignments ma
+                  WHERE ma.user_id = tp.author_user_id AND ma.is_active = 1
+                ) THEN 'moderator'
                 WHEN EXISTS (
                   SELECT 1 FROM profile_badges pb
                   WHERE pb.user_id = tp.author_user_id AND pb.badge = 'tester'
@@ -8706,13 +8710,13 @@ const handlers: { [K in WorkerOperation]: Handler<K> } = {
                 CASE
                   WHEN u.role = 'admin' AND u.telegram_user_id = 1040929628 THEN 'owner'
                   WHEN EXISTS (
-                    SELECT 1 FROM moderator_assignments ma
-                    WHERE ma.user_id = tp.author_user_id AND ma.is_active = 1
-                  ) THEN 'moderator'
-                  WHEN EXISTS (
                     SELECT 1 FROM profile_badges pb
                     WHERE pb.user_id = tp.author_user_id AND pb.badge = 'special'
                   ) THEN 'special'
+                  WHEN EXISTS (
+                    SELECT 1 FROM moderator_assignments ma
+                    WHERE ma.user_id = tp.author_user_id AND ma.is_active = 1
+                  ) THEN 'moderator'
                   WHEN EXISTS (
                   SELECT 1 FROM profile_badges pb
                   WHERE pb.user_id = tp.author_user_id AND pb.badge = 'tester'
@@ -8855,13 +8859,13 @@ const handlers: { [K in WorkerOperation]: Handler<K> } = {
                 CASE
                   WHEN u.role = 'admin' AND u.telegram_user_id = 1040929628 THEN 'owner'
                   WHEN EXISTS (
-                    SELECT 1 FROM moderator_assignments ma
-                    WHERE ma.user_id = tp.author_user_id AND ma.is_active = 1
-                  ) THEN 'moderator'
-                  WHEN EXISTS (
                     SELECT 1 FROM profile_badges pb
                     WHERE pb.user_id = tp.author_user_id AND pb.badge = 'special'
                   ) THEN 'special'
+                  WHEN EXISTS (
+                    SELECT 1 FROM moderator_assignments ma
+                    WHERE ma.user_id = tp.author_user_id AND ma.is_active = 1
+                  ) THEN 'moderator'
                   WHEN EXISTS (
                   SELECT 1 FROM profile_badges pb
                   WHERE pb.user_id = tp.author_user_id AND pb.badge = 'tester'
@@ -9039,13 +9043,13 @@ const handlers: { [K in WorkerOperation]: Handler<K> } = {
                 CASE
                   WHEN u.role = 'admin' AND u.telegram_user_id = 1040929628 THEN 'owner'
                   WHEN EXISTS (
-                    SELECT 1 FROM moderator_assignments ma
-                    WHERE ma.user_id = tp.author_user_id AND ma.is_active = 1
-                  ) THEN 'moderator'
-                  WHEN EXISTS (
                     SELECT 1 FROM profile_badges pb
                     WHERE pb.user_id = tp.author_user_id AND pb.badge = 'special'
                   ) THEN 'special'
+                  WHEN EXISTS (
+                    SELECT 1 FROM moderator_assignments ma
+                    WHERE ma.user_id = tp.author_user_id AND ma.is_active = 1
+                  ) THEN 'moderator'
                   WHEN EXISTS (
                   SELECT 1 FROM profile_badges pb
                   WHERE pb.user_id = tp.author_user_id AND pb.badge = 'tester'
@@ -9193,13 +9197,13 @@ const handlers: { [K in WorkerOperation]: Handler<K> } = {
                 CASE
                   WHEN u.role = 'admin' AND u.telegram_user_id = 1040929628 THEN 'owner'
                   WHEN EXISTS (
-                    SELECT 1 FROM moderator_assignments ma
-                    WHERE ma.user_id = tp.author_user_id AND ma.is_active = 1
-                  ) THEN 'moderator'
-                  WHEN EXISTS (
                     SELECT 1 FROM profile_badges pb
                     WHERE pb.user_id = tp.author_user_id AND pb.badge = 'special'
                   ) THEN 'special'
+                  WHEN EXISTS (
+                    SELECT 1 FROM moderator_assignments ma
+                    WHERE ma.user_id = tp.author_user_id AND ma.is_active = 1
+                  ) THEN 'moderator'
                   WHEN EXISTS (
                   SELECT 1 FROM profile_badges pb
                   WHERE pb.user_id = tp.author_user_id AND pb.badge = 'tester'
@@ -9350,13 +9354,13 @@ const handlers: { [K in WorkerOperation]: Handler<K> } = {
                 CASE
                   WHEN u.role = 'admin' AND u.telegram_user_id = 1040929628 THEN 'owner'
                   WHEN EXISTS (
-                    SELECT 1 FROM moderator_assignments ma
-                    WHERE ma.user_id = pc.author_user_id AND ma.is_active = 1
-                  ) THEN 'moderator'
-                  WHEN EXISTS (
                     SELECT 1 FROM profile_badges pb
                     WHERE pb.user_id = pc.author_user_id AND pb.badge = 'special'
                   ) THEN 'special'
+                  WHEN EXISTS (
+                    SELECT 1 FROM moderator_assignments ma
+                    WHERE ma.user_id = pc.author_user_id AND ma.is_active = 1
+                  ) THEN 'moderator'
                   WHEN EXISTS (
                   SELECT 1 FROM profile_badges pb
                   WHERE pb.user_id = pc.author_user_id AND pb.badge = 'tester'
@@ -9679,13 +9683,13 @@ const handlers: { [K in WorkerOperation]: Handler<K> } = {
                 CASE
                   WHEN user.role = 'admin' AND user.telegram_user_id = 1040929628 THEN 'owner'
                   WHEN EXISTS (
-                    SELECT 1 FROM moderator_assignments moderator
-                    WHERE moderator.user_id = profile.user_id AND moderator.is_active = 1
-                  ) THEN 'moderator'
-                  WHEN EXISTS (
                     SELECT 1 FROM profile_badges pb
                     WHERE pb.user_id = profile.user_id AND pb.badge = 'special'
                   ) THEN 'special'
+                  WHEN EXISTS (
+                    SELECT 1 FROM moderator_assignments moderator
+                    WHERE moderator.user_id = profile.user_id AND moderator.is_active = 1
+                  ) THEN 'moderator'
                   WHEN EXISTS (
                     SELECT 1 FROM profile_badges pb
                     WHERE pb.user_id = profile.user_id AND pb.badge = 'tester'
@@ -9864,13 +9868,13 @@ const handlers: { [K in WorkerOperation]: Handler<K> } = {
               CASE
                 WHEN blocked.telegram_user_id = 1040929628 THEN 'owner'
                 WHEN EXISTS (
-                  SELECT 1 FROM moderator_assignments assignment
-                  WHERE assignment.user_id = blocked.id AND assignment.is_active = 1
-                ) THEN 'moderator'
-                WHEN EXISTS (
                   SELECT 1 FROM profile_badges pb
                   WHERE pb.user_id = blocked.id AND pb.badge = 'special'
                 ) THEN 'special'
+                WHEN EXISTS (
+                  SELECT 1 FROM moderator_assignments assignment
+                  WHERE assignment.user_id = blocked.id AND assignment.is_active = 1
+                ) THEN 'moderator'
                 WHEN EXISTS (
                   SELECT 1 FROM profile_badges pb
                   WHERE pb.user_id = blocked.id AND pb.badge = 'tester'
@@ -11112,13 +11116,13 @@ const handlers: { [K in WorkerOperation]: Handler<K> } = {
                 CASE
                   WHEN u.role = 'admin' AND u.telegram_user_id = 1040929628 THEN 'owner'
                   WHEN EXISTS (
-                    SELECT 1 FROM moderator_assignments ma
-                    WHERE ma.user_id = up.user_id AND ma.is_active = 1
-                  ) THEN 'moderator'
-                  WHEN EXISTS (
                     SELECT 1 FROM profile_badges pb
                     WHERE pb.user_id = up.user_id AND pb.badge = 'special'
                   ) THEN 'special'
+                  WHEN EXISTS (
+                    SELECT 1 FROM moderator_assignments ma
+                    WHERE ma.user_id = up.user_id AND ma.is_active = 1
+                  ) THEN 'moderator'
                   WHEN EXISTS (
                   SELECT 1 FROM profile_badges pb
                   WHERE pb.user_id = up.user_id AND pb.badge = 'tester'
@@ -11549,13 +11553,13 @@ const handlers: { [K in WorkerOperation]: Handler<K> } = {
                              CASE
                                WHEN thread_user.telegram_user_id = 1040929628 THEN 'owner'
                                WHEN EXISTS (
-                                 SELECT 1 FROM moderator_assignments ma
-                                 WHERE ma.user_id = thread.author_user_id AND ma.is_active = 1
-                               ) THEN 'moderator'
-                               WHEN EXISTS (
                                  SELECT 1 FROM profile_badges pb
                                  WHERE pb.user_id = thread.author_user_id AND pb.badge = 'special'
                                ) THEN 'special'
+                               WHEN EXISTS (
+                                 SELECT 1 FROM moderator_assignments ma
+                                 WHERE ma.user_id = thread.author_user_id AND ma.is_active = 1
+                               ) THEN 'moderator'
                                WHEN EXISTS (
                   SELECT 1 FROM profile_badges pb
                   WHERE pb.user_id = thread.author_user_id AND pb.badge = 'tester'

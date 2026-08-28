@@ -163,6 +163,34 @@ async function onboard(id: number): Promise<string> {
 }
 
 describe('D1 domain operations', () => {
+  it('shows the custom badge instead of the moderator check when both apply', async () => {
+    const moderatorId = await onboard(2_501);
+    const ownerId = await upsert(1_040_929_628);
+    const viewerId = await onboard(2_502);
+    sqlite.prepare("UPDATE users SET role = 'admin' WHERE id = ?").run(ownerId);
+    sqlite
+      .prepare(
+        `INSERT INTO moderator_assignments (user_id, assigned_by_user_id) VALUES (?, ?)`,
+      )
+      .run(moderatorId, ownerId);
+
+    const readKind = async () =>
+      (
+        (await executeOperation(
+          env,
+          'publicProfiles.get',
+          { requesterUserId: viewerId, profileUserId: moderatorId },
+          crypto.randomUUID(),
+        )) as { verification_kind: string | null }
+      ).verification_kind;
+
+    expect(await readKind()).toBe('moderator');
+    sqlite
+      .prepare("INSERT INTO profile_badges (user_id, badge) VALUES (?, 'special')")
+      .run(moderatorId);
+    expect(await readKind()).toBe('special');
+  });
+
   it('stores a voice comment and serves it to a reader of the post', async () => {
     const authorId = await onboard(2_310);
     const readerId = await onboard(2_311);

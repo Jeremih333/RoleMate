@@ -1551,17 +1551,22 @@ select:focus-visible {
   min-height: 520px;
 }
 
+/* Calmer than it was: a flatter card with one internal rhythm reads as a feed
+   card rather than a decorated box. */
 .questionnaire-card {
   min-height: 0;
   overflow: hidden;
-  border-color: color-mix(in srgb, var(--accent) 24%, var(--border));
-  border-radius: 26px;
+  border-color: color-mix(in srgb, var(--accent) 18%, var(--border));
+  border-radius: 20px;
   background:
-    linear-gradient(155deg, color-mix(in srgb, var(--accent) 8%, transparent), transparent 42%),
+    linear-gradient(155deg, color-mix(in srgb, var(--accent) 6%, transparent), transparent 40%),
     var(--surface);
   box-shadow:
-    inset 0 1px 0 rgb(255 255 255 / 7%),
-    0 22px 54px rgb(8 5 18 / 26%);
+    inset 0 1px 0 rgb(255 255 255 / 5%),
+    0 12px 30px rgb(8 5 18 / 18%);
+}
+.questionnaire-card-body > * + * {
+  margin-top: 14px;
 }
 
 .questionnaire-card .profile-cover {

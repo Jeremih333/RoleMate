@@ -370,7 +370,7 @@ export function ProfileCard({
               ) : null}
             </div>
           </div>
-          <div className="questionnaire-tag-cloud mt-4 flex flex-wrap gap-2">
+          <div className="questionnaire-tag-cloud flex flex-wrap gap-2">
             {[
               ...(expanded ? fandoms : fandoms.slice(0, 2)),
               ...(expanded ? genres : genres.slice(0, 2)),
@@ -383,7 +383,7 @@ export function ProfileCard({
           </div>
           <ProfileMarkdown
             contentRef={descriptionRef}
-            className={`mt-4 text-sm leading-relaxed text-soft ${
+            className={`text-sm leading-relaxed text-soft ${
               descriptionCollapsed ? 'expandable-text-lines-4' : ''
             }`}
             allowLinks={Boolean(profile.has_premium)}

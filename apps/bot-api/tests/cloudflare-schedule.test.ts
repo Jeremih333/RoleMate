@@ -7,6 +7,7 @@ import {
   shouldExpirePendingPayments,
   shouldHydrateEmojiAssets,
   shouldPollEmojiSeeds,
+  recordEmojiHydrationBacklog,
 } from '../src/cloudflare.js';
 
 const at = (time: string) => Date.parse(`2026-08-25T${time}Z`);
@@ -31,11 +32,21 @@ describe('spacing the per-minute scheduled work', () => {
     expect(shouldPollEmojiSeeds(at('12:29:00'))).toBe(false);
   });
 
-  it('caches emoji pictures every third minute', () => {
-    expect(shouldHydrateEmojiAssets(at('12:00:00'))).toBe(true);
-    expect(shouldHydrateEmojiAssets(at('12:03:00'))).toBe(true);
+  it('caches emoji pictures every minute while a pack is still filling', () => {
+    // A freshly imported pack of two hundred should not take half an hour to
+    // appear, so a run that found a full batch looks again immediately.
+    recordEmojiHydrationBacklog(true);
+    expect(shouldHydrateEmojiAssets(at('12:01:00'))).toBe(true);
+    expect(shouldHydrateEmojiAssets(at('12:02:00'))).toBe(true);
+  });
+
+  it('backs off once there is nothing left to cache', () => {
+    recordEmojiHydrationBacklog(false);
     expect(shouldHydrateEmojiAssets(at('12:01:00'))).toBe(false);
-    expect(shouldHydrateEmojiAssets(at('12:02:00'))).toBe(false);
+    expect(shouldHydrateEmojiAssets(at('12:14:00'))).toBe(false);
+    expect(shouldHydrateEmojiAssets(at('12:15:00'))).toBe(true);
+    expect(shouldHydrateEmojiAssets(at('12:30:00'))).toBe(true);
+    recordEmojiHydrationBacklog(true);
   });
 
   it('looks for broadcasts every other minute and group campaigns every fifth', () => {

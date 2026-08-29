@@ -21,6 +21,23 @@ export function stripCustomEmojiTokens(text: string, placeholder = '🙂'): stri
   return text.replace(CUSTOM_EMOJI_TOKEN_PATTERN, placeholder).replace(/\s+/gu, ' ').trim();
 }
 
+/**
+ * The link form a custom emoji takes inside markdown.
+ *
+ * A custom scheme such as `ce:` is stripped by the markdown sanitiser, which
+ * removes the href before the renderer ever sees it — the glyph then had nothing
+ * to draw and the message arrived empty. A fragment has no protocol, so it
+ * passes through untouched with the sanitising left fully in place.
+ */
+export function customEmojiHref(customEmojiId: string): string {
+  return `#ce-${customEmojiId}`;
+}
+
+export function customEmojiIdFromHref(href: string | null | undefined): string | null {
+  const match = /^#ce-([0-9]{1,32})$/.exec(href ?? '');
+  return match?.[1] ?? null;
+}
+
 /** Asks whatever is listening — the shell — to show the pack this emoji is from. */
 export function openCustomEmojiPack(customEmojiId: string): void {
   window.dispatchEvent(new CustomEvent<string>(CUSTOM_EMOJI_PACK_EVENT, { detail: customEmojiId }));

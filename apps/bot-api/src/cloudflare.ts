@@ -160,8 +160,23 @@ export function shouldPollEmojiSeeds(scheduledTime: number): boolean {
   return new Date(scheduledTime).getUTCMinutes() % 30 === 0;
 }
 
+/**
+ * Caching emoji pictures is bursty: nothing to do for days, then a freshly
+ * imported pack of two hundred that people are looking at right now. A fixed
+ * cadence is wrong in both directions — it wastes requests while idle and takes
+ * half an hour to fill a new pack — so the schedule follows the backlog. A run
+ * that found work looks again on the next minute; an empty one backs off.
+ */
+const EMOJI_HYDRATION_IDLE_MINUTES = 15;
+let emojiHydrationBacklog = true;
+
 export function shouldHydrateEmojiAssets(scheduledTime: number): boolean {
-  return new Date(scheduledTime).getUTCMinutes() % 3 === 0;
+  if (emojiHydrationBacklog) return true;
+  return new Date(scheduledTime).getUTCMinutes() % EMOJI_HYDRATION_IDLE_MINUTES === 0;
+}
+
+export function recordEmojiHydrationBacklog(hadWork: boolean): void {
+  emojiHydrationBacklog = hadWork;
 }
 
 export function shouldDispatchBroadcasts(scheduledTime: number): boolean {
@@ -259,11 +274,17 @@ async function dispatchScheduledTasks(env: WorkerEnv, scheduledTime: number): Pr
   // Each one costs a getFile, a download and a write, and a scheduled run has a
   // small subrequest budget it also has to share with everything else here.
   try {
+    // Twelve at a time: each costs a getFile, a download and a write, and a
+    // scheduled run has a small subrequest budget shared with everything else.
+    const batchSize = 12;
     const pending = shouldHydrateEmojiAssets(scheduledTime)
       ? await dataApi.execute<
           Array<{ custom_emoji_id: string; file_id: string; thumbnail_file_id: string | null }>
-        >('customEmoji.assets.pending', { kind: 'thumbnail', limit: 12 })
+        >('customEmoji.assets.pending', { kind: 'thumbnail', limit: batchSize })
       : [];
+    if (shouldHydrateEmojiAssets(scheduledTime)) {
+      recordEmojiHydrationBacklog(pending.length >= batchSize);
+    }
     for (const emoji of pending) {
       await cacheCustomEmojiAsset({
         bot,

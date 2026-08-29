@@ -4,7 +4,12 @@ import { useQuery } from '@tanstack/react-query';
 import { api } from '../api.js';
 import { ru } from '@rolemate/shared';
 import { CustomEmojiGlyph } from './custom-emoji-glyph.js';
-import { CUSTOM_EMOJI_TOKEN_PATTERN, openCustomEmojiPack } from './custom-emoji-token.js';
+import {
+  CUSTOM_EMOJI_TOKEN_PATTERN,
+  customEmojiHref,
+  customEmojiIdFromHref,
+  openCustomEmojiPack,
+} from './custom-emoji-token.js';
 
 export function ProfileMarkdown({
   children,
@@ -46,7 +51,7 @@ export function ProfileMarkdown({
   // showed up as a stray dot whenever the picture had not arrived yet.
   const markdown = withMentions.replace(
     CUSTOM_EMOJI_TOKEN_PATTERN,
-    (_whole, id: string) => `[\u200b](ce:${id})`,
+    (_whole, id: string) => `[\u200b](${customEmojiHref(id)})`,
   );
   return (
     <div ref={contentRef} className={`profile-markdown ${className}`}>
@@ -70,16 +75,16 @@ export function ProfileMarkdown({
             <em className={dimEmphasis ? 'roleplay-action' : undefined}>{emphasisChildren}</em>
           ),
           a: ({ children: linkChildren, href }) =>
-            href?.startsWith('ce:') ? (
+            customEmojiIdFromHref(href) ? (
               <button
                 type="button"
                 className="custom-emoji-inline"
                 aria-label={ru.miniApp.social.customEmojiOpenPack}
                 title={ru.miniApp.social.customEmojiOpenPack}
-                onClick={() => openCustomEmojiPack(href.slice(3))}
+                onClick={() => openCustomEmojiPack(customEmojiIdFromHref(href) ?? '')}
               >
                 <CustomEmojiGlyph
-                  customEmojiId={href.slice(3)}
+                  customEmojiId={customEmojiIdFromHref(href) ?? ''}
                   renderKind="lottie"
                   size={20}
                   animate

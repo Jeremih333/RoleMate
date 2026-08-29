@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import {
   CUSTOM_EMOJI_TOKEN_PATTERN,
+  customEmojiHref,
+  customEmojiIdFromHref,
   customEmojiToken,
   stripCustomEmojiTokens,
 } from './custom-emoji-token.js';
@@ -56,5 +58,23 @@ describe('emoji tokens in plain text', () => {
 
   it('accepts a different mark when a caller wants one', () => {
     expect(stripCustomEmojiTokens('[ce:7]', '*')).toBe('*');
+  });
+});
+
+describe('the link form an emoji takes inside markdown', () => {
+  it('uses a fragment, because a custom scheme is stripped by the sanitiser', () => {
+    const href = customEmojiHref('5348160394433148525');
+    expect(href.startsWith('#')).toBe(true);
+    expect(href).not.toContain(':');
+    expect(customEmojiIdFromHref(href)).toBe('5348160394433148525');
+  });
+
+  it('reads nothing out of an href that is not one of ours', () => {
+    expect(customEmojiIdFromHref('https://example.test')).toBeNull();
+    expect(customEmojiIdFromHref('#ce-')).toBeNull();
+    expect(customEmojiIdFromHref('#ce-abc')).toBeNull();
+    expect(customEmojiIdFromHref('#section')).toBeNull();
+    expect(customEmojiIdFromHref(null)).toBeNull();
+    expect(customEmojiIdFromHref(undefined)).toBeNull();
   });
 });

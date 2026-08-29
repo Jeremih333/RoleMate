@@ -965,6 +965,28 @@ describe('D1 domain operations', () => {
         crypto.randomUUID(),
       ),
     ).rejects.toMatchObject({ code: 'MATCH_NOT_FOUND' });
+
+    // Writing to the person again must not resurrect the entry they removed:
+    // starting a direct chat used to quietly set the match back to active, and
+    // the dismissed sympathy reappeared in the list a little later.
+    await executeOperation(
+      env,
+      'conversations.startDirect',
+      { userId: viewerId, targetUserId: partnerId },
+      crypto.randomUUID(),
+    );
+    await expect(listMatches(viewerId)).resolves.toEqual([]);
+    expect(
+      sqlite.prepare('SELECT status FROM matches WHERE id = ?').pluck().get(matches[0]!.id),
+    ).toBe('closed');
+    // The conversation itself is perfectly usable, which is the whole point of
+    // keeping the two apart.
+    expect(
+      sqlite
+        .prepare('SELECT status FROM conversations WHERE match_id = ?')
+        .pluck()
+        .get(matches[0]!.id),
+    ).toBe('active');
   });
 
   it('lets a user without a questionnaire publish a post', async () => {

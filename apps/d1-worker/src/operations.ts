@@ -6393,9 +6393,13 @@ const handlers: { [K in WorkerOperation]: Handler<K> } = {
          VALUES (?1, ?2, ?3, 'direct')`,
       ).bind(matchId, userA, userB),
       env.DB.prepare(
+        // A match somebody deliberately removed from their mutual-interest list
+        // stays removed. Writing to the person is a separate thing, and quietly
+        // restoring the match here is why dismissed entries kept coming back.
         `UPDATE matches SET status = 'active', closed_at = NULL,
            closed_by_user_id = NULL, close_reason = NULL
-         WHERE user_a_id = ?1 AND user_b_id = ?2`,
+         WHERE user_a_id = ?1 AND user_b_id = ?2
+           AND (close_reason IS NULL OR close_reason <> 'user_request')`,
       ).bind(userA, userB),
       env.DB.prepare(
         `INSERT OR IGNORE INTO conversations (id, match_id)

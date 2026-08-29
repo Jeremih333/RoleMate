@@ -9954,3 +9954,30 @@ body {
   width: 14px;
   height: 14px;
 }
+
+/* A conversation that is closed or paused explains itself where the composer
+   would be, instead of leaving the screen looking broken. */
+.chat-closed-notice {
+  display: flex;
+  min-width: 0;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  flex: 0 0 auto;
+  border-top: 1px solid rgba(124, 146, 177, 0.16);
+  padding: 12px 14px calc(12px + var(--safe-bottom));
+  background: rgba(20, 32, 47, 0.97);
+}
+.chat-closed-notice span {
+  min-width: 0;
+  flex: 1 1 180px;
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.4;
+}
+.chat-closed-notice small {
+  flex: 1 1 100%;
+  color: #ff9ca8;
+  font-size: 12px;
+}

@@ -9985,3 +9985,63 @@ body {
   color: #ff9ca8;
   font-size: 12px;
 }
+
+/* A composer that shows its emoji.
+
+   The field keeps the text and the caret; the copy above it carries the
+   pictures. Only the letters go transparent, so the caret and the selection
+   stay visible exactly where they were, and each glyph covers the token it
+   stands for rather than sitting beside it, which is what keeps everything
+   after it on the same spot. */
+.custom-emoji-field {
+  position: relative;
+}
+
+.custom-emoji-field.is-mirrored > textarea,
+.custom-emoji-field.is-mirrored > input {
+  color: transparent;
+  caret-color: var(--text, #fff);
+}
+
+.custom-emoji-field.is-mirrored > textarea::selection,
+.custom-emoji-field.is-mirrored > input::selection {
+  color: transparent;
+  background: rgb(124 108 255 / 45%);
+}
+
+.custom-emoji-field-mirror {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  color: var(--text, #fff);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  pointer-events: none;
+  border-style: solid;
+  border-color: transparent;
+}
+
+.custom-emoji-field-slot {
+  position: relative;
+  display: inline-block;
+}
+
+.custom-emoji-field-ghost {
+  visibility: hidden;
+}
+
+.custom-emoji-field-picture {
+  position: absolute;
+  top: 50%;
+  left: 0;
+  display: inline-flex;
+  align-items: center;
+  transform: translateY(-50%);
+}
+
+/* The chat composer lays its parts out in a row, so the wrapper has to take the
+   place the field itself used to hold. */
+.telegram-composer .telegram-composer-field {
+  flex: 1 1 auto;
+  min-width: 0;
+}

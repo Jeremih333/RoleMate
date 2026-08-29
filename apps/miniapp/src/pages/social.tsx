@@ -53,6 +53,7 @@ import { SwipePlaylist, type PlaylistTrack } from '../components/music-player.js
 import { CompactAudio } from '../components/compact-audio.js';
 import { CustomEmojiPickerDialog } from '../components/custom-emoji-picker.js';
 import { CustomEmojiInsertButton } from '../components/custom-emoji-insert.js';
+import { CustomEmojiField } from '../components/custom-emoji-field.js';
 import {
   blobBase64,
   CommentVoiceRecorder,
@@ -2958,15 +2959,17 @@ export function PostCard({
               composerOpen || body ? 'is-open' : ''
             }`}
           >
-            <textarea
-              className="comment-textarea"
-              maxLength={1000}
-              rows={composerOpen || body ? 3 : 1}
-              placeholder={ru.miniApp.social.commentPlaceholder}
-              value={body}
-              onFocus={() => setComposerOpen(true)}
-              onChange={(event) => setBody(event.target.value)}
-            />
+            <CustomEmojiField value={body}>
+              <textarea
+                className="comment-textarea"
+                maxLength={1000}
+                rows={composerOpen || body ? 3 : 1}
+                placeholder={ru.miniApp.social.commentPlaceholder}
+                value={body}
+                onFocus={() => setComposerOpen(true)}
+                onChange={(event) => setBody(event.target.value)}
+              />
+            </CustomEmojiField>
             {composerOpen || body ? (
               <div className="comment-composer-footer">
                 <span>{body.length}/1000</span>
@@ -3192,15 +3195,17 @@ export function PostCard({
                     </div>
                     {replyTo?.id === (item.parent_comment_id ?? item.id) ? (
                       <div className="comment-composer comment-composer-reply is-open">
-                        <textarea
-                          className="comment-textarea"
-                          maxLength={1000}
-                          rows={2}
-                          autoFocus
-                          placeholder={ru.miniApp.social.replyPlaceholder(replyTo.name)}
-                          value={replyBody}
-                          onChange={(event) => setReplyBody(event.target.value)}
-                        />
+                        <CustomEmojiField value={replyBody}>
+                          <textarea
+                            className="comment-textarea"
+                            maxLength={1000}
+                            rows={2}
+                            autoFocus
+                            placeholder={ru.miniApp.social.replyPlaceholder(replyTo.name)}
+                            value={replyBody}
+                            onChange={(event) => setReplyBody(event.target.value)}
+                          />
+                        </CustomEmojiField>
                         <div className="comment-composer-footer">
                           <span>{replyBody.length}/1000</span>
                           <div className="flex flex-wrap gap-2">

@@ -77,6 +77,7 @@ import { useViewerTime } from '../components/viewer-time.js';
 import { parseMessageReactions } from '../components/chat-reactions.js';
 import { CustomEmojiGlyph } from '../components/custom-emoji-glyph.js';
 import { CustomEmojiInsertButton } from '../components/custom-emoji-insert.js';
+import { CustomEmojiField } from '../components/custom-emoji-field.js';
 import { stripCustomEmojiTokens } from '../components/custom-emoji-token.js';
 import { CustomEmojiPickerDialog } from '../components/custom-emoji-picker.js';
 
@@ -3507,20 +3508,22 @@ function ChatComposer({
             onCancelReply();
           }}
         />
-        <textarea
-          ref={textareaRef}
-          value={text}
-          maxLength={4_000}
-          rows={1}
-          placeholder={ru.miniApp.community.messagePlaceholder}
-          aria-label={ru.miniApp.community.messagePlaceholder}
-          onChange={(event) => {
-            const value = event.target.value;
-            setText(value);
-            if (value.trim()) startTyping();
-            else stopTyping();
-          }}
-        />
+        <CustomEmojiField value={text} className="telegram-composer-field">
+          <textarea
+            ref={textareaRef}
+            value={text}
+            maxLength={4_000}
+            rows={1}
+            placeholder={ru.miniApp.community.messagePlaceholder}
+            aria-label={ru.miniApp.community.messagePlaceholder}
+            onChange={(event) => {
+              const value = event.target.value;
+              setText(value);
+              if (value.trim()) startTyping();
+              else stopTyping();
+            }}
+          />
+        </CustomEmojiField>
         {/* Imported emoji can be written into a message; tapping one in the
             conversation opens the pack it came from. */}
         <CustomEmojiInsertButton

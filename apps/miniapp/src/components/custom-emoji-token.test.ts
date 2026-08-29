@@ -4,6 +4,8 @@ import {
   customEmojiHref,
   customEmojiIdFromHref,
   customEmojiToken,
+  hasCustomEmojiToken,
+  splitCustomEmojiText,
   stripCustomEmojiTokens,
 } from './custom-emoji-token.js';
 
@@ -76,5 +78,30 @@ describe('the link form an emoji takes inside markdown', () => {
     expect(customEmojiIdFromHref('#section')).toBeNull();
     expect(customEmojiIdFromHref(null)).toBeNull();
     expect(customEmojiIdFromHref(undefined)).toBeNull();
+  });
+});
+
+describe('splitting text for a field to draw', () => {
+  it('separates the emoji from the words around them', () => {
+    expect(splitCustomEmojiText('a [ce:1] b')).toEqual([
+      { kind: 'text', value: 'a ' },
+      { kind: 'emoji', customEmojiId: '1' },
+      { kind: 'text', value: ' b' },
+    ]);
+  });
+
+  it('handles emoji that touch, and text without any', () => {
+    expect(splitCustomEmojiText('[ce:1][ce:2]')).toEqual([
+      { kind: 'emoji', customEmojiId: '1' },
+      { kind: 'emoji', customEmojiId: '2' },
+    ]);
+    expect(splitCustomEmojiText('plain')).toEqual([{ kind: 'text', value: 'plain' }]);
+    expect(splitCustomEmojiText('')).toEqual([]);
+  });
+
+  it('knows cheaply whether there is anything to draw', () => {
+    expect(hasCustomEmojiToken('[ce:5301]')).toBe(true);
+    expect(hasCustomEmojiToken('ce:5301')).toBe(false);
+    expect(hasCustomEmojiToken('[ce:abc]')).toBe(false);
   });
 });

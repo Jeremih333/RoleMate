@@ -902,6 +902,79 @@ describe('D1 domain operations', () => {
     });
   });
 
+  it('keeps a custom emoji in a post, a comment and a questionnaire', async () => {
+    const authorId = await onboard(2_621);
+    grantPremium(authorId);
+    const token = '[ce:5301]';
+
+    // A post written through the bot: the token is part of the text like any
+    // other characters, and it must still be there when the feed is read.
+    const draft = (await executeOperation(
+      env,
+      'posts.draft.start',
+      { userId: authorId },
+      crypto.randomUUID(),
+    )) as { postId: string };
+    await executeOperation(
+      env,
+      'posts.draft.attach',
+      {
+        userId: authorId,
+        sourceChatId: 9_321,
+        sourceMessageId: 21,
+        contentType: 'text',
+        textPreview: `Hello ${token}`,
+        bodyMarkdown: `Hello ${token} world`,
+      },
+      crypto.randomUUID(),
+    );
+    await executeOperation(
+      env,
+      'posts.draft.publish',
+      { userId: authorId, postId: draft.postId },
+      crypto.randomUUID(),
+    );
+    const feed = (await executeOperation(
+      env,
+      'posts.feed.list',
+      { userId: authorId, limit: 10, followingOnly: false, sort: 'new' },
+      crypto.randomUUID(),
+    )) as Array<{ id: string; body_markdown: string | null }>;
+    expect(feed.find((post) => post.id === draft.postId)?.body_markdown).toBe(
+      `Hello ${token} world`,
+    );
+
+    const comment = (await executeOperation(
+      env,
+      'posts.comments.create',
+      { userId: authorId, postId: draft.postId, body: `Nice ${token}` },
+      crypto.randomUUID(),
+    )) as { id: string };
+    const comments = (await executeOperation(
+      env,
+      'posts.comments.list',
+      { userId: authorId, postId: draft.postId, sort: 'new', limit: 20 },
+      crypto.randomUUID(),
+    )) as Array<{ id: string; body: string }>;
+    expect(comments.find((row) => row.id === comment.id)?.body).toBe(`Nice ${token}`);
+
+    // A questionnaire is written in the miniapp, and its text carries emoji the
+    // same way: the token is stored, not stripped.
+    await executeOperation(
+      env,
+      'profiles.upsert',
+      {
+        userId: authorId,
+        profile: { ...profile, about: `${profile.about} ${token}` },
+      },
+      crypto.randomUUID(),
+    );
+    const stored = sqlite
+      .prepare('SELECT about FROM profiles WHERE user_id = ? ORDER BY created_at DESC LIMIT 1')
+      .get(authorId) as { about: string };
+    expect(stored.about).toBe(`${profile.about} ${token}`);
+  });
+
   it('adopts an emoji met in the wild, shows its set and lets somebody add it', async () => {
     const readerId = await onboard(2_611);
     grantPremium(readerId);

@@ -42,3 +42,29 @@ export function customEmojiIdFromHref(href: string | null | undefined): string |
 export function openCustomEmojiPack(customEmojiId: string): void {
   window.dispatchEvent(new CustomEvent<string>(CUSTOM_EMOJI_PACK_EVENT, { detail: customEmojiId }));
 }
+
+export type CustomEmojiSegment =
+  { kind: 'text'; value: string } | { kind: 'emoji'; customEmojiId: string };
+
+/**
+ * Splits text into the pieces a field has to draw: plain runs and the emoji
+ * between them. A composer shows the emoji itself where the token sits, so what
+ * is being written looks like what will be sent instead of like `[ce:5301]`.
+ */
+export function splitCustomEmojiText(text: string): CustomEmojiSegment[] {
+  const segments: CustomEmojiSegment[] = [];
+  let index = 0;
+  for (const match of text.matchAll(CUSTOM_EMOJI_TOKEN_PATTERN)) {
+    const at = match.index ?? 0;
+    if (at > index) segments.push({ kind: 'text', value: text.slice(index, at) });
+    segments.push({ kind: 'emoji', customEmojiId: match[1]! });
+    index = at + match[0].length;
+  }
+  if (index < text.length) segments.push({ kind: 'text', value: text.slice(index) });
+  return segments;
+}
+
+/** Whether text holds an emoji at all — the cheap check a field makes on every keystroke. */
+export function hasCustomEmojiToken(text: string): boolean {
+  return /\[ce:[0-9]{1,32}\]/.test(text);
+}

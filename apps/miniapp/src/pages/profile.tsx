@@ -21,6 +21,7 @@ import { ApiError, api } from '../api.js';
 import type { ProfileMedia } from '../api.js';
 import { ProfileMarkdown } from '../components/markdown.js';
 import { CustomEmojiInsertButton } from '../components/custom-emoji-insert.js';
+import { CustomEmojiField } from '../components/custom-emoji-field.js';
 import { ProfileAvatar } from '../components/profile-avatar.js';
 import { VerificationBadge } from '../components/verification-badge.js';
 import {
@@ -196,12 +197,14 @@ function SuggestionTextarea({
 
   return (
     <div className="suggestion-textarea">
-      <textarea
-        aria-label={label}
-        className={className}
-        value={value}
-        onChange={(event) => onChange(event.target.value)}
-      />
+      <CustomEmojiField value={value}>
+        <textarea
+          aria-label={label}
+          className={className}
+          value={value}
+          onChange={(event) => onChange(event.target.value)}
+        />
+      </CustomEmojiField>
       {/* Imported emoji can be written into the text itself: the token is plain
           text, so it survives the field, the database and every re-edit. */}
       <div className="suggestion-textarea-tools">
@@ -1071,11 +1074,13 @@ export function ProfileEditorPage() {
         </label>
         <label>
           <span>{ru.miniApp.profile.about}</span>
-          <textarea
-            className={`${field} min-h-36`}
-            placeholder={ru.miniApp.profile.aboutPlaceholder}
-            {...form.register('about')}
-          />
+          <CustomEmojiField value={form.watch('about') ?? ''}>
+            <textarea
+              className={`${field} min-h-36`}
+              placeholder={ru.miniApp.profile.aboutPlaceholder}
+              {...form.register('about')}
+            />
+          </CustomEmojiField>
           <div className="suggestion-textarea-tools">
             <CustomEmojiInsertButton
               onInsert={(token) =>

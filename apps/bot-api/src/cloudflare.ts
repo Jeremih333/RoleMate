@@ -150,6 +150,28 @@ export function shouldExpirePendingPayments(scheduledTime: number): boolean {
   return new Date(scheduledTime).getUTCMinutes() % 10 === 0;
 }
 
+/**
+ * Every one of these asks the data worker a question each time the cron fires,
+ * and on the free plan a question that finds nothing still costs a request:
+ * running five of them sixty times an hour spends thousands of requests a day on
+ * an idle product. Each is spaced by how quickly it actually has to notice work.
+ */
+export function shouldPollEmojiSeeds(scheduledTime: number): boolean {
+  return new Date(scheduledTime).getUTCMinutes() % 30 === 0;
+}
+
+export function shouldHydrateEmojiAssets(scheduledTime: number): boolean {
+  return new Date(scheduledTime).getUTCMinutes() % 3 === 0;
+}
+
+export function shouldDispatchBroadcasts(scheduledTime: number): boolean {
+  return new Date(scheduledTime).getUTCMinutes() % 2 === 0;
+}
+
+export function shouldDispatchGroupCampaigns(scheduledTime: number): boolean {
+  return new Date(scheduledTime).getUTCMinutes() % 5 === 0;
+}
+
 async function dispatchScheduledTasks(env: WorkerEnv, scheduledTime: number): Promise<void> {
   const runtime = appEnv(env);
   const dataApi = new DataApiClient({
@@ -208,10 +230,12 @@ async function dispatchScheduledTasks(env: WorkerEnv, scheduledTime: number): Pr
   // Custom emoji packs an operator listed in app_config. Importing needs the bot
   // token, which only lives here, so the scheduled task is what brings them in.
   try {
-    const seed = await dataApi.execute<{ setNames: string[]; ownerUserId: string | null }>(
-      'customEmoji.seed.pending',
-      {},
-    );
+    const seed = shouldPollEmojiSeeds(scheduledTime)
+      ? await dataApi.execute<{ setNames: string[]; ownerUserId: string | null }>(
+          'customEmoji.seed.pending',
+          {},
+        )
+      : { setNames: [], ownerUserId: null };
     const seedOwnerUserId = seed.ownerUserId ?? '';
     for (const setName of seedOwnerUserId ? seed.setNames : []) {
       const set = await bot.api.getStickerSet(setName);
@@ -235,9 +259,11 @@ async function dispatchScheduledTasks(env: WorkerEnv, scheduledTime: number): Pr
   // Each one costs a getFile, a download and a write, and a scheduled run has a
   // small subrequest budget it also has to share with everything else here.
   try {
-    const pending = await dataApi.execute<
-      Array<{ custom_emoji_id: string; file_id: string; thumbnail_file_id: string | null }>
-    >('customEmoji.assets.pending', { kind: 'thumbnail', limit: 8 });
+    const pending = shouldHydrateEmojiAssets(scheduledTime)
+      ? await dataApi.execute<
+          Array<{ custom_emoji_id: string; file_id: string; thumbnail_file_id: string | null }>
+        >('customEmoji.assets.pending', { kind: 'thumbnail', limit: 12 })
+      : [];
     for (const emoji of pending) {
       await cacheCustomEmojiAsset({
         bot,
@@ -254,23 +280,27 @@ async function dispatchScheduledTasks(env: WorkerEnv, scheduledTime: number): Pr
       error: error instanceof Error ? error.message : 'unknown',
     });
   }
-  await dispatchBroadcastBatch(bot, dataApi, (error) => {
-    console.error({
-      event: 'scheduled_broadcast_failed',
-      error: error instanceof Error ? error.message : 'unknown',
+  if (shouldDispatchBroadcasts(scheduledTime)) {
+    await dispatchBroadcastBatch(bot, dataApi, (error) => {
+      console.error({
+        event: 'scheduled_broadcast_failed',
+        error: error instanceof Error ? error.message : 'unknown',
+      });
     });
-  });
-  await dispatchGroupCampaignBatch(bot, dataApi, runtime, (error) => {
-    console.error({
-      event: 'scheduled_group_campaign_failed',
-      error: error instanceof Error ? error.message : 'unknown',
+  }
+  if (shouldDispatchGroupCampaigns(scheduledTime)) {
+    await dispatchGroupCampaignBatch(bot, dataApi, runtime, (error) => {
+      console.error({
+        event: 'scheduled_group_campaign_failed',
+        error: error instanceof Error ? error.message : 'unknown',
+      });
+    }).catch((error: unknown) => {
+      console.error({
+        event: 'scheduled_group_campaign_batch_failed',
+        error: error instanceof Error ? error.message : 'unknown',
+      });
     });
-  }).catch((error: unknown) => {
-    console.error({
-      event: 'scheduled_group_campaign_batch_failed',
-      error: error instanceof Error ? error.message : 'unknown',
-    });
-  });
+  }
   if (shouldDispatchSparseReminderCampaigns(scheduledTime)) {
     await dataApi
       .execute('notifications.onboarding.enqueueDue', { limit: 20 })

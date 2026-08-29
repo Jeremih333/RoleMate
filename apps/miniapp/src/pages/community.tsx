@@ -247,9 +247,9 @@ export function ChatsPage() {
     queryFn: () => api.conversations(),
     refetchOnMount: 'always',
     refetchOnWindowFocus: 'always',
-    // Every local mutation already invalidates this list, so the poll is only a
-    // safety net for the other side's activity.
-    refetchInterval: 45_000,
+    // Every local mutation already invalidates this list, and opening the screen
+    // refetches it, so the poll is only a safety net for the other side.
+    refetchInterval: 120_000,
     refetchIntervalInBackground: false,
   });
   const settings = useQuery({ queryKey: ['settings'], queryFn: api.settings });
@@ -1265,27 +1265,39 @@ function ConversationView({
     replied: boolean;
     row: HTMLDivElement;
   } | null>(null);
+  const reopen = useMutation({
+    mutationFn: () => api.startDirectConversation(chat.other_user_id),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ['conversations'] });
+      void queryClient.invalidateQueries({ queryKey: ['conversation-messages', chat.id] });
+    },
+  });
   const messages = useQuery({
     queryKey: ['conversation-messages', chat.id],
     queryFn: () => api.conversationMessages(chat.id),
-    // A hidden tab kept polling the heaviest query in the app; foregrounded, six
-    // seconds is indistinguishable from four in a text chat.
-    refetchInterval: 6_000,
+    // A hidden tab kept polling the heaviest query in the app. Sending a message
+    // refreshes this immediately, so the poll only has to catch the other side;
+    // ten seconds reads the same as six and costs a third less.
+    refetchInterval: 10_000,
     refetchIntervalInBackground: false,
   });
   const pinnedMessages = useQuery({
     queryKey: ['conversation-message-pins', chat.id],
     queryFn: () => api.pinnedConversationMessages(chat.id),
-    // Pins change rarely and our own changes invalidate immediately, so an
-    // eight-second poll was spending reads for nothing.
-    refetchInterval: 60_000,
+    // Pins change rarely and our own changes invalidate immediately, so this is
+    // only here to notice the other side pinning something.
+    refetchInterval: 180_000,
+    refetchIntervalInBackground: false,
   });
   const livePresence = useQuery({
     queryKey: ['conversation-presence', chat.id],
     queryFn: () => api.conversationPresence(chat.id),
-    // The typing flag lives for five seconds, so polling faster than this spent
-    // D1 reads without showing anything sooner.
-    refetchInterval: 2_500,
+    // This was the most expensive habit in the product: a poll every 2.5 seconds
+    // is 24 requests a minute from one open chat, and each one fans out to the
+    // data worker, so an hour of conversation cost thousands of requests against
+    // a daily allowance of a hundred thousand. A typing hint is worth a second or
+    // two of lag, not the whole budget.
+    refetchInterval: 15_000,
     refetchIntervalInBackground: false,
   });
   // Which pin the bar shows follows the scroll position: the last pinned message
@@ -1949,6 +1961,21 @@ function ConversationView({
           replyTarget={replyTarget}
           onCancelReply={() => setReplyTarget(null)}
         />
+      ) : chat.status !== 'active' && !selectionMode ? (
+        // A chat that is not active used to render nothing at all, so it read as
+        // a broken screen rather than a closed conversation. It says what it is
+        // and offers the way back.
+        <div className="chat-closed-notice">
+          <span>
+            {chat.status === 'paused'
+              ? ru.miniApp.community.chatPausedNotice
+              : ru.miniApp.community.chatClosedNotice}
+          </span>
+          <Button loading={reopen.isPending} onClick={() => reopen.mutate()}>
+            {ru.miniApp.community.chatReopen}
+          </Button>
+          {reopen.isError ? <small>{reopen.error.message}</small> : null}
+        </div>
       ) : null}
       <ConfirmDialog
         open={confirmation === 'chat'}

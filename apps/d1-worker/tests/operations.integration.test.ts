@@ -863,6 +863,14 @@ describe('D1 domain operations', () => {
     expect(
       sqlite.prepare('SELECT status, close_reason FROM matches WHERE id = ?').get(matches[0]!.id),
     ).toEqual({ status: 'closed', close_reason: 'user_request' });
+    // Tidying the list must leave the conversation alone: closing it takes the
+    // composer away from a chat that may hold a hundred messages of history.
+    expect(
+      sqlite
+        .prepare('SELECT status FROM conversations WHERE match_id = ?')
+        .all(matches[0]!.id)
+        .map((row) => (row as { status: string }).status),
+    ).toEqual(['active']);
 
     await expect(
       executeOperation(

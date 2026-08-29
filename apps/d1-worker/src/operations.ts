@@ -6314,17 +6314,17 @@ const handlers: { [K in WorkerOperation]: Handler<K> } = {
       .bind(input.matchId, input.userId)
       .first<{ id: string }>();
     if (!match) throw new ApiError(404, 'MATCH_NOT_FOUND', 'Match not found');
-    await env.DB.batch([
-      env.DB.prepare(
-        `UPDATE matches SET status = 'closed', closed_at = CURRENT_TIMESTAMP,
-           closed_by_user_id = ?2, close_reason = 'user_request'
-         WHERE id = ?1`,
-      ).bind(input.matchId, input.userId),
-      env.DB.prepare(
-        `UPDATE conversations SET status = 'closed', closed_at = CURRENT_TIMESTAMP
-         WHERE match_id = ?1 AND status <> 'closed'`,
-      ).bind(input.matchId),
-    ]);
+    // Only the match is closed. Taking an entry off the mutual-interest list must
+    // never touch the conversation: these two are not the same thing, and closing
+    // the chat took the composer away from people with a hundred messages of
+    // history who had merely tidied a list.
+    await env.DB.prepare(
+      `UPDATE matches SET status = 'closed', closed_at = CURRENT_TIMESTAMP,
+         closed_by_user_id = ?2, close_reason = 'user_request'
+       WHERE id = ?1`,
+    )
+      .bind(input.matchId, input.userId)
+      .run();
     return { dismissed: true };
   },
   'conversations.startDirect': async (env, input) => {

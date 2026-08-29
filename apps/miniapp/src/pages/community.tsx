@@ -77,6 +77,7 @@ import { useViewerTime } from '../components/viewer-time.js';
 import { parseMessageReactions } from '../components/chat-reactions.js';
 import { CustomEmojiGlyph } from '../components/custom-emoji-glyph.js';
 import { CustomEmojiInsertButton } from '../components/custom-emoji-insert.js';
+import { stripCustomEmojiTokens } from '../components/custom-emoji-token.js';
 import { CustomEmojiPickerDialog } from '../components/custom-emoji-picker.js';
 
 export function MatchesPage() {
@@ -732,7 +733,7 @@ function ChatListRow({
 }
 
 function conversationListPreview(chat: Conversation): string {
-  if (chat.draft_text?.trim()) return chat.draft_text.trim();
+  if (chat.draft_text?.trim()) return stripCustomEmojiTokens(chat.draft_text);
   if (chat.last_message_text) {
     const shared = parseSharedEntity(chat.last_message_text);
     const telegramProfile = parseTelegramProfileShare(chat.last_message_text);
@@ -742,7 +743,8 @@ function conversationListPreview(chat: Conversation): string {
         : ru.miniApp.community.sharedQuestionnaireMessage
       : telegramProfile || chat.last_message_type === 'profile'
         ? ru.miniApp.community.sharedProfileMessage
-        : chat.last_message_text;
+        : // A one-line preview cannot draw a glyph, so the token becomes a mark.
+          stripCustomEmojiTokens(chat.last_message_text);
   }
   if (
     chat.last_message_type === 'audio' &&
@@ -888,7 +890,10 @@ function chatMessageDisplayText(message: ConversationMessage): string {
   if (message.message_type === 'profile' || parseTelegramProfileShare(message.text_content)) {
     return ru.miniApp.community.sharedProfileMessage;
   }
-  return message.text_content || chatMessagePreview(message);
+  // Plain text: a custom emoji cannot be drawn here, and its token must not be
+  // read by anyone as leaked machinery.
+  const text = message.text_content ? stripCustomEmojiTokens(message.text_content) : '';
+  return text || chatMessagePreview(message);
 }
 
 /**
@@ -1332,7 +1337,7 @@ function ConversationView({
   const control = useMutation({
     mutationFn: (input: {
       conversationId: string;
-      action: 'mute' | 'unmute' | 'pause' | 'resume' | 'close';
+      action: 'mute' | 'unmute' | 'pause' | 'resume';
     }) => api.controlConversation(input.conversationId, input.action),
     onSuccess: () => void queryClient.invalidateQueries({ queryKey: ['conversations'] }),
   });

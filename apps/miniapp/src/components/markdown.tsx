@@ -41,9 +41,12 @@ export function ProfileMarkdown({
   // A custom emoji is written in text as [ce:<id>]. Turning it into a link keeps
   // it inside the markdown pipeline that already sanitises everything, and the
   // link renderer below draws the glyph instead of an anchor.
+  // The link text is a zero-width space: markdown needs something between the
+  // brackets, but the glyph is what should be seen — a visible placeholder
+  // showed up as a stray dot whenever the picture had not arrived yet.
   const markdown = withMentions.replace(
     CUSTOM_EMOJI_TOKEN_PATTERN,
-    (_whole, id: string) => `[·](ce:${id})`,
+    (_whole, id: string) => `[\u200b](ce:${id})`,
   );
   return (
     <div ref={contentRef} className={`profile-markdown ${className}`}>

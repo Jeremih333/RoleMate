@@ -2902,7 +2902,7 @@ export async function buildServer(
     const session = await mutate(request);
     const params = z.object({ conversationId: z.string().uuid() }).parse(request.params);
     const body = z
-      .object({ action: z.enum(['mute', 'unmute', 'pause', 'resume', 'close']) })
+      .object({ action: z.enum(['mute', 'unmute', 'pause', 'resume']) })
       .parse(request.body);
     return dataApi.execute('conversations.control', {
       userId: session.userId,
@@ -3008,54 +3008,63 @@ export async function buildServer(
     const { packId } = z.object({ packId: z.string().uuid() }).parse(request.params);
     return dataApi.execute('customEmoji.packs.remove', { userId: session.userId, packId });
   });
-  app.get('/api/custom-emoji/:customEmojiId', async (request, reply) => {
-    await authenticate(request);
-    const { customEmojiId } = z
-      .object({ customEmojiId: z.string().regex(/^[0-9]{1,32}$/) })
-      .parse(request.params);
-    const { thumbnail } = z
-      .object({ thumbnail: z.enum(['0', '1']).optional() })
-      .parse(request.query);
-    const kind = thumbnail === '0' ? 'animation' : 'thumbnail';
-    const cached = await dataApi.execute<{ content_type: string; data_base64: string } | null>(
-      'customEmoji.assets.get',
-      { customEmojiId, kind },
-    );
-    if (cached) {
-      reply.header('Content-Type', cached.content_type);
-      // Packs are public, immutable Telegram content addressed by a stable id.
-      // A year of browser caching is what keeps a picker of hundreds of glyphs
-      // from costing hundreds of requests every time it opens.
+  // Emoji artwork is public pack content addressed by a Telegram id, and it is
+  // fetched as an ordinary image: a picker paints hundreds of them at once.
+  // Requiring a session made every glyph cost a session lookup in the database,
+  // and the shared per-route rate limit — a hundred and twenty requests — cut the
+  // pictures off partway through, which is exactly what "they stop loading"
+  // looked like. There is nothing private behind these bytes.
+  app.get(
+    '/api/custom-emoji/:customEmojiId',
+    { config: { rateLimit: false } },
+    async (request, reply) => {
+      const { customEmojiId } = z
+        .object({ customEmojiId: z.string().regex(/^[0-9]{1,32}$/) })
+        .parse(request.params);
+      const { thumbnail } = z
+        .object({ thumbnail: z.enum(['0', '1']).optional() })
+        .parse(request.query);
+      const kind = thumbnail === '0' ? 'animation' : 'thumbnail';
+      const cached = await dataApi.execute<{ content_type: string; data_base64: string } | null>(
+        'customEmoji.assets.get',
+        { customEmojiId, kind },
+      );
+      if (cached) {
+        reply.header('Content-Type', cached.content_type);
+        // Packs are public, immutable Telegram content addressed by a stable id.
+        // A year of browser caching is what keeps a picker of hundreds of glyphs
+        // from costing hundreds of requests every time it opens.
+        reply.header('Cache-Control', 'public, max-age=31536000, immutable');
+        return reply.send(Buffer.from(cached.data_base64, 'base64'));
+      }
+      // Not cached yet: fetch it once, hand it to the caller, and keep it. This is
+      // the only path that touches Telegram, and it runs at most once per emoji.
+      const emoji = await dataApi.execute<{
+        file_id: string;
+        thumbnail_file_id: string | null;
+        render_kind: 'static' | 'video' | 'lottie';
+      }>('customEmoji.resolve', { customEmojiId });
+      const stored = await cacheCustomEmojiAsset({
+        bot,
+        dataApi,
+        token: env.TELEGRAM_BOT_TOKEN,
+        customEmojiId,
+        kind,
+        emoji,
+        requestInit: telegramFileRequestInit(request),
+      });
+      if (!stored) {
+        // Telegram is throttling or the file is gone. Say so without caching the
+        // failure, so the picture appears on the next attempt.
+        reply.header('Cache-Control', 'no-store');
+        reply.code(503);
+        return reply.send({ error: { code: 'CUSTOM_EMOJI_UNAVAILABLE' } });
+      }
+      reply.header('Content-Type', stored.contentType);
       reply.header('Cache-Control', 'public, max-age=31536000, immutable');
-      return reply.send(Buffer.from(cached.data_base64, 'base64'));
-    }
-    // Not cached yet: fetch it once, hand it to the caller, and keep it. This is
-    // the only path that touches Telegram, and it runs at most once per emoji.
-    const emoji = await dataApi.execute<{
-      file_id: string;
-      thumbnail_file_id: string | null;
-      render_kind: 'static' | 'video' | 'lottie';
-    }>('customEmoji.resolve', { customEmojiId });
-    const stored = await cacheCustomEmojiAsset({
-      bot,
-      dataApi,
-      token: env.TELEGRAM_BOT_TOKEN,
-      customEmojiId,
-      kind,
-      emoji,
-      requestInit: telegramFileRequestInit(request),
-    });
-    if (!stored) {
-      // Telegram is throttling or the file is gone. Say so without caching the
-      // failure, so the picture appears on the next attempt.
-      reply.header('Cache-Control', 'no-store');
-      reply.code(503);
-      return reply.send({ error: { code: 'CUSTOM_EMOJI_UNAVAILABLE' } });
-    }
-    reply.header('Content-Type', stored.contentType);
-    reply.header('Cache-Control', 'public, max-age=31536000, immutable');
-    return reply.send(Buffer.from(stored.dataBase64, 'base64'));
-  });
+      return reply.send(Buffer.from(stored.dataBase64, 'base64'));
+    },
+  );
   app.get('/api/post-comments/:commentId/voice', async (request, reply) => {
     const session = await authenticate(request);
     const { commentId } = z.object({ commentId: z.string().uuid() }).parse(request.params);

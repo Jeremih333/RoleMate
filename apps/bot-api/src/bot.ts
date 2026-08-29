@@ -1502,8 +1502,6 @@ export function createBot(
           `chatctl:${conversation.status === 'paused' ? 'resume' : 'pause'}:${conversationId}`,
         )
         .row()
-        .text(ru.bot.buttons.closeChat, `chatclose:${conversationId}`)
-        .row()
         .text(ru.bot.buttons.blockChat, `chatblock:${conversationId}`)
         .text(ru.bot.buttons.reportChat, `chatreport:${conversationId}`),
     });
@@ -1527,30 +1525,6 @@ export function createBot(
     await context.answerCallbackQuery(answer);
     await context.editMessageReplyMarkup();
     await context.reply(answer);
-  });
-  bot.callbackQuery(/^chatclose:([0-9a-f-]{36})$/, async (context) => {
-    const conversationId = context.match?.[1] ?? '';
-    await context.answerCallbackQuery();
-    await context.reply(ru.bot.chatCloseConfirm, {
-      reply_markup: new InlineKeyboard()
-        .text(ru.bot.buttons.confirmCloseChat, `chatcloseconfirm:${conversationId}`)
-        .row()
-        .text(ru.bot.buttons.continueChat, 'chatclosecancel'),
-    });
-  });
-  bot.callbackQuery(/^chatcloseconfirm:([0-9a-f-]{36})$/, async (context) => {
-    const user = await upsertUser(context, dataApi);
-    await dataApi.execute('conversations.control', {
-      userId: user.userId,
-      conversationId: context.match?.[1] ?? '',
-      action: 'close',
-    });
-    await context.answerCallbackQuery(ru.bot.chatClosed);
-    await context.editMessageText(ru.bot.chatClosed);
-  });
-  bot.callbackQuery('chatclosecancel', async (context) => {
-    await context.answerCallbackQuery(ru.bot.cancelled);
-    await context.editMessageReplyMarkup();
   });
   bot.callbackQuery(/^chatblock:([0-9a-f-]{36})$/, async (context) => {
     const user = await upsertUser(context, dataApi);

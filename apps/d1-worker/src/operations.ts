@@ -6724,7 +6724,9 @@ const handlers: { [K in WorkerOperation]: Handler<K> } = {
   },
   'conversations.endGently': async (env, input) => {
     // Leaving without a word is what makes people avoid ending a chat at all, so
-    // closing one archives it for both sides after a courteous note is sent.
+    // a courteous note is sent and the conversation is archived for both sides.
+    // It is not closed: closing removed the composer with no way back, and the
+    // way to actually stop someone contacting you is the blacklist.
     const participant = await env.DB.prepare(
       `SELECT c.id FROM conversations c
        JOIN conversation_participants me
@@ -6737,11 +6739,9 @@ const handlers: { [K in WorkerOperation]: Handler<K> } = {
       throw new ApiError(404, 'CONVERSATION_NOT_FOUND', 'Conversation not found');
     }
     await env.DB.batch([
-      env.DB.prepare(
-        `UPDATE conversations
-         SET status = 'closed', closed_at = CURRENT_TIMESTAMP, closed_reason = 'ended_by_user'
-         WHERE id = ?1`,
-      ).bind(input.conversationId),
+      env.DB.prepare(`UPDATE conversations SET closed_reason = 'ended_by_user' WHERE id = ?1`).bind(
+        input.conversationId,
+      ),
       env.DB.prepare(
         `UPDATE conversation_participants
          SET archived_at = CURRENT_TIMESTAMP, pinned_order = NULL
@@ -6751,15 +6751,19 @@ const handlers: { [K in WorkerOperation]: Handler<K> } = {
     return { closed: true };
   },
   'conversations.sweepDeadMatches': async (env, input) => {
-    // A match where neither side ever wrote is dead weight in the chat list. It is
-    // closed after the configured window and marked, so the sweep never revisits it
-    // and a chat the user closed by hand is never mistaken for its work.
+    // A match where neither side ever wrote is dead weight in the chat list, so it
+    // is moved to the archive after the configured window. It is never closed:
+    // closing takes the composer away with no way back, and an untouched match is
+    // not a reason to make a conversation unusable.
     const days = await configInt(env, 'dead_match_days', 7, 1, 90);
     const limit = Math.min(Math.max(input.limit ?? 50, 1), 200);
     const stale = await env.DB.prepare(
       `SELECT c.id FROM conversations c
        WHERE c.status = 'active'
          AND c.last_message_at IS NULL
+         -- Marked ones are already dealt with; without this the sweep archived
+         -- the same rows again every hour and paid for the writes each time.
+         AND c.closed_reason IS NULL
          AND c.created_at <= datetime('now', printf('-%d day', ?1))
          AND NOT EXISTS (
            SELECT 1 FROM conversation_messages m
@@ -6775,8 +6779,7 @@ const handlers: { [K in WorkerOperation]: Handler<K> } = {
     const placeholders = ids.map((_, index) => `?${index + 1}`).join(', ');
     await env.DB.batch([
       env.DB.prepare(
-        `UPDATE conversations
-         SET status = 'closed', closed_at = CURRENT_TIMESTAMP, closed_reason = 'dead_match'
+        `UPDATE conversations SET closed_reason = 'dead_match'
          WHERE id IN (${placeholders})`,
       ).bind(...ids),
       env.DB.prepare(
@@ -8057,34 +8060,20 @@ const handlers: { [K in WorkerOperation]: Handler<K> } = {
         .run();
       return { status: participant.status, muted: input.action === 'mute' };
     }
-    if (input.action === 'resume' && participant.status === 'closed') {
-      throw new ApiError(
-        409,
-        'CONVERSATION_CLOSED',
-        'Closed conversation cannot be restored automatically',
-      );
-    }
-    const nextStatus =
-      input.action === 'pause' ? 'paused' : input.action === 'resume' ? 'active' : 'closed';
-    await env.DB.batch([
-      env.DB.prepare(
-        `UPDATE conversations SET status = ?3,
-           closed_at = CASE WHEN ?3 = 'closed' THEN CURRENT_TIMESTAMP ELSE closed_at END
-         WHERE id = ?1 AND EXISTS (
-           SELECT 1 FROM conversation_participants
-           WHERE conversation_id = ?1 AND user_id = ?2 AND left_at IS NULL
-         )`,
-      ).bind(input.conversationId, input.userId, nextStatus),
-      ...(input.action === 'close'
-        ? [
-            env.DB.prepare(
-              `UPDATE matches SET status = 'closed', closed_at = CURRENT_TIMESTAMP,
-                 closed_by_user_id = ?2, close_reason = 'user_request'
-               WHERE id = (SELECT match_id FROM conversations WHERE id = ?1)`,
-            ).bind(input.conversationId, input.userId),
-          ]
-        : []),
-    ]);
+    // Closing a conversation is gone. It took away the composer with no way back
+    // and duplicated what blocking already does properly — a block stops contact
+    // and is undone from the blacklist. A close request now simply pauses, which
+    // is reversible, and nothing else in the product closes a chat any more.
+    const nextStatus = input.action === 'resume' ? 'active' : 'paused';
+    await env.DB.prepare(
+      `UPDATE conversations SET status = ?3, closed_at = NULL
+       WHERE id = ?1 AND EXISTS (
+         SELECT 1 FROM conversation_participants
+         WHERE conversation_id = ?1 AND user_id = ?2 AND left_at IS NULL
+       )`,
+    )
+      .bind(input.conversationId, input.userId, nextStatus)
+      .run();
     return { status: nextStatus, muted: Boolean(participant.is_muted) };
   },
   'calls.start': async (env, input) => {
@@ -10244,9 +10233,36 @@ const handlers: { [K in WorkerOperation]: Handler<K> } = {
     return { blocked: true };
   },
   'blocks.remove': async (env, input) => {
-    await env.DB.prepare(`DELETE FROM blocks WHERE blocker_user_id = ?1 AND blocked_user_id = ?2`)
-      .bind(input.blockerUserId, input.blockedUserId)
-      .run();
+    // Blocking is the one thing that closes a chat, so unblocking has to give it
+    // back — otherwise the blacklist is a one-way door and the conversation stays
+    // unusable with nothing on screen explaining why.
+    await env.DB.batch([
+      env.DB.prepare(`DELETE FROM blocks WHERE blocker_user_id = ?1 AND blocked_user_id = ?2`).bind(
+        input.blockerUserId,
+        input.blockedUserId,
+      ),
+      env.DB.prepare(
+        `UPDATE conversation_participants SET left_at = NULL
+         WHERE user_id IN (?1, ?2) AND conversation_id IN (
+           SELECT cp1.conversation_id FROM conversation_participants cp1
+           JOIN conversation_participants cp2 ON cp2.conversation_id = cp1.conversation_id
+           WHERE cp1.user_id = ?1 AND cp2.user_id = ?2
+         )`,
+      ).bind(input.blockerUserId, input.blockedUserId),
+      env.DB.prepare(
+        `UPDATE conversations SET status = 'active', closed_at = NULL
+         WHERE status = 'closed' AND id IN (
+           SELECT cp1.conversation_id FROM conversation_participants cp1
+           JOIN conversation_participants cp2 ON cp2.conversation_id = cp1.conversation_id
+           WHERE cp1.user_id = ?1 AND cp2.user_id = ?2
+         )
+         AND NOT EXISTS (
+           SELECT 1 FROM blocks b
+           WHERE (b.blocker_user_id = ?1 AND b.blocked_user_id = ?2)
+              OR (b.blocker_user_id = ?2 AND b.blocked_user_id = ?1)
+         )`,
+      ).bind(input.blockerUserId, input.blockedUserId),
+    ]);
     return { blocked: false };
   },
   'reports.create': async (env, input) => {

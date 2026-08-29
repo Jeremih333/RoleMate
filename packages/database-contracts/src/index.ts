@@ -934,7 +934,8 @@ export const workerOperations = {
   'conversations.control': z.object({
     userId: z.string().uuid(),
     conversationId: z.string().uuid(),
-    action: z.enum(['mute', 'unmute', 'pause', 'resume', 'close']),
+    // Closing is gone: blocking is what stops contact, and it can be undone.
+    action: z.enum(['mute', 'unmute', 'pause', 'resume']),
   }),
   // Kept only for backward compatibility with the immutable call tables.
   // No bot-api or MiniApp route exposes these operations.

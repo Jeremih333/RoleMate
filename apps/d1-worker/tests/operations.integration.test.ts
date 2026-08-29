@@ -163,6 +163,91 @@ async function onboard(id: number): Promise<string> {
 }
 
 describe('D1 domain operations', () => {
+  it('never closes a conversation except by blocking, and unblocking gives it back', async () => {
+    const first = await onboard(2_801);
+    const second = await onboard(2_802);
+    const conversation = (await executeOperation(
+      env,
+      'conversations.startDirect',
+      { userId: first, targetUserId: second },
+      crypto.randomUUID(),
+    )) as { conversationId: string };
+    const status = () =>
+      sqlite
+        .prepare('SELECT status FROM conversations WHERE id = ?')
+        .pluck()
+        .get(conversation.conversationId);
+
+    // Pausing is reversible and leaves the conversation usable again.
+    await executeOperation(
+      env,
+      'conversations.control',
+      { userId: first, conversationId: conversation.conversationId, action: 'pause' },
+      crypto.randomUUID(),
+    );
+    expect(status()).toBe('paused');
+    await executeOperation(
+      env,
+      'conversations.control',
+      { userId: first, conversationId: conversation.conversationId, action: 'resume' },
+      crypto.randomUUID(),
+    );
+    expect(status()).toBe('active');
+
+    // A courteous ending archives the chat for both sides without closing it.
+    await executeOperation(
+      env,
+      'conversations.endGently',
+      { userId: first, conversationId: conversation.conversationId },
+      crypto.randomUUID(),
+    );
+    expect(status()).toBe('active');
+    expect(
+      sqlite
+        .prepare(
+          'SELECT COUNT(*) AS archived FROM conversation_participants WHERE conversation_id = ? AND archived_at IS NOT NULL',
+        )
+        .get(conversation.conversationId),
+    ).toEqual({ archived: 2 });
+
+    // A match that goes stale is archived, never closed.
+    sqlite
+      .prepare(
+        "UPDATE conversations SET created_at = datetime('now', '-30 day'), closed_reason = NULL WHERE id = ?",
+      )
+      .run(conversation.conversationId);
+    await executeOperation(
+      env,
+      'conversations.sweepDeadMatches',
+      { limit: 50 },
+      crypto.randomUUID(),
+    );
+    expect(status()).toBe('active');
+
+    // Blocking is the one thing that stops a conversation — and it is undone.
+    await executeOperation(
+      env,
+      'blocks.create',
+      { blockerUserId: first, blockedUserId: second, reason: 'no closing test' },
+      crypto.randomUUID(),
+    );
+    expect(status()).toBe('closed');
+    await executeOperation(
+      env,
+      'blocks.remove',
+      { blockerUserId: first, blockedUserId: second },
+      crypto.randomUUID(),
+    );
+    expect(status()).toBe('active');
+    expect(
+      sqlite
+        .prepare(
+          'SELECT COUNT(*) AS present FROM conversation_participants WHERE conversation_id = ? AND left_at IS NULL',
+        )
+        .get(conversation.conversationId),
+    ).toEqual({ present: 2 });
+  });
+
   it('caches emoji bytes once and stops offering them for hydration', async () => {
     const userId = await onboard(2_711);
     await executeOperation(
@@ -6350,7 +6435,7 @@ describe('D1 domain operations', () => {
     ).toEqual({ status: 'completed', sent_count: 2 });
   });
 
-  it('expires the ready-to-chat window and closes matches nobody wrote in', async () => {
+  it('expires the ready-to-chat window and archives matches nobody wrote in', async () => {
     const userId = await onboard(2_410);
 
     await executeOperation(
@@ -6406,10 +6491,19 @@ describe('D1 domain operations', () => {
       crypto.randomUUID(),
     );
 
-    const closed = sqlite
+    // Swept, not closed: an untouched match leaves the chat list but stays a
+    // usable conversation, because closing one removes the composer for good.
+    const swept = sqlite
       .prepare('SELECT status, closed_reason FROM conversations WHERE id = ?')
       .get(conversationId) as { status: string; closed_reason: string };
-    expect(closed).toEqual({ status: 'closed', closed_reason: 'dead_match' });
+    expect(swept).toEqual({ status: 'active', closed_reason: 'dead_match' });
+    expect(
+      sqlite
+        .prepare(
+          'SELECT COUNT(*) AS archived FROM conversation_participants WHERE conversation_id = ? AND archived_at IS NOT NULL',
+        )
+        .get(conversationId),
+    ).toEqual({ archived: 2 });
 
     // The sweep must not pick the same conversation up again.
     const again = (await executeOperation(

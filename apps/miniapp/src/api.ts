@@ -767,7 +767,7 @@ export const api = {
     }),
   controlConversation: (
     conversationId: string,
-    action: 'mute' | 'unmute' | 'pause' | 'resume' | 'close',
+    action: 'mute' | 'unmute' | 'pause' | 'resume',
   ) =>
     request<{ status: string; muted: boolean }>(`/conversations/${conversationId}/control`, {
       method: 'POST',

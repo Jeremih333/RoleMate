@@ -1473,6 +1473,8 @@ export interface ConversationMessage {
   reply_has_media?: number;
   reply_is_own?: number;
   reply_sender_name?: string | null;
+  reply_accent_color?: number | null;
+  reply_header_custom_emoji_id?: string | null;
   forwarded_from_message_id?: string | null;
   forwarded_author_user_id?: string | null;
   forwarded_author_name?: string | null;

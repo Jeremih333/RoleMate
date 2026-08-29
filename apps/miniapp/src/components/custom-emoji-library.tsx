@@ -152,3 +152,12 @@ export function useGlyphSource(): (customEmojiId: string) => {
     };
   };
 }
+
+/**
+ * The character a custom emoji falls back to — what a client without the pack
+ * would see, and what stands in for it while the text is being written.
+ */
+export function useCustomEmojiBase(): (customEmojiId: string) => string | undefined {
+  const lookup = useContext(LibraryContext).lookup;
+  return (customEmojiId) => lookup(customEmojiId)?.emoji || undefined;
+}

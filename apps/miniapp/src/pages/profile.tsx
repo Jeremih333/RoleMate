@@ -13,7 +13,7 @@ import {
   UserRound,
   X,
 } from 'lucide-react';
-import { useEffect, useRef, useState, type ReactNode } from 'react';
+import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
 import { useForm, type FieldErrors, type Resolver } from 'react-hook-form';
 import { Link, useLocation } from 'wouter';
 import { profileSchema, ru, type ProfileInput } from '@rolemate/shared';
@@ -22,6 +22,8 @@ import type { ProfileMedia } from '../api.js';
 import { ProfileMarkdown } from '../components/markdown.js';
 import { CustomEmojiInsertButton } from '../components/custom-emoji-insert.js';
 import { CustomEmojiField } from '../components/custom-emoji-field.js';
+import { draftToStored, mapDraftText, storedToDraft } from '../components/custom-emoji-draft.js';
+import { useCustomEmojiBase } from '../components/custom-emoji-library.js';
 import { ProfileAvatar } from '../components/profile-avatar.js';
 import { VerificationBadge } from '../components/verification-badge.js';
 import {
@@ -767,11 +769,18 @@ export function ProfileEditorPage() {
     defaultValues: defaults,
   });
   const resetForm = form.reset;
+  // Stored text holds `[ce:…]`; a field holds one character standing for it.
+  const emojiBase = useCustomEmojiBase();
+  // Held still on purpose: the lookup behind it is rebuilt on every render of
+  // the library, and the effects below must not restart every time it is.
+  const emojiBaseRef = useRef(emojiBase);
+  emojiBaseRef.current = emojiBase;
+  const toDraft = useCallback((text: string) => storedToDraft(text, emojiBaseRef.current), []);
   const draftKey = `rolemate:questionnaire-draft:${questionnaireId ?? 'new'}`;
   const [draftSavedAt, setDraftSavedAt] = useState(0);
   useEffect(() => {
     if (profile.data) {
-      resetForm(existingProfile(profile.data));
+      resetForm(mapDraftText(existingProfile(profile.data), toDraft));
       if (questionnaireId && 'title' in profile.data) {
         setQuestionnaireTitle(String(profile.data.title));
       }
@@ -848,7 +857,9 @@ export function ProfileEditorPage() {
     return () => window.clearTimeout(timeout);
   }, [telegramHandoffNotice]);
   const save = useMutation({
-    mutationFn: async (submittedProfile: ProfileInput) => {
+    mutationFn: async (draftProfile: ProfileInput) => {
+      // In the fields an emoji was one character; stored it is its token.
+      const submittedProfile = mapDraftText(draftProfile, draftToStored);
       if (questionnaireId) {
         await api.saveQuestionnaire(
           questionnaireId,
@@ -930,7 +941,7 @@ export function ProfileEditorPage() {
     );
   };
   const cancelEditing = () => {
-    form.reset(profile.data ? existingProfile(profile.data) : defaults);
+    form.reset(profile.data ? mapDraftText(existingProfile(profile.data), toDraft) : defaults);
     setQuestionnaireTitle(
       questionnaireId && profile.data && 'title' in profile.data ? String(profile.data.title) : '',
     );
@@ -1074,7 +1085,12 @@ export function ProfileEditorPage() {
         </label>
         <label>
           <span>{ru.miniApp.profile.about}</span>
-          <CustomEmojiField value={form.watch('about') ?? ''}>
+          <CustomEmojiField
+            value={form.watch('about') ?? ''}
+            onChange={(next) =>
+              form.setValue('about', next, { shouldDirty: true, shouldValidate: true })
+            }
+          >
             <textarea
               className={`${field} min-h-36`}
               placeholder={ru.miniApp.profile.aboutPlaceholder}

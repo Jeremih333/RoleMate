@@ -1,4 +1,12 @@
-import { Fragment, useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
+import {
+  Fragment,
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+  type CSSProperties,
+  type ReactNode,
+} from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { ru } from '@rolemate/shared';
 import {
@@ -76,9 +84,11 @@ import { DoubleHeartIcon } from '../components/double-heart-icon.js';
 import { useViewerTime } from '../components/viewer-time.js';
 import { parseMessageReactions } from '../components/chat-reactions.js';
 import { CustomEmojiGlyph } from '../components/custom-emoji-glyph.js';
-import { useGlyphSource } from '../components/custom-emoji-library.js';
+import { useCustomEmojiBase, useGlyphSource } from '../components/custom-emoji-library.js';
 import { CustomEmojiInsertButton } from '../components/custom-emoji-insert.js';
 import { CustomEmojiField } from '../components/custom-emoji-field.js';
+import { PROFILE_ACCENTS } from './social.js';
+import { draftToStored, storedToDraft } from '../components/custom-emoji-draft.js';
 import { stripCustomEmojiTokens } from '../components/custom-emoji-token.js';
 import { CustomEmojiPickerDialog } from '../components/custom-emoji-picker.js';
 
@@ -2215,12 +2225,16 @@ function ConversationMessageContent({
   const queryClient = useQueryClient();
   const settings = useQuery({ queryKey: ['settings'], queryFn: api.settings });
   const [editing, setEditing] = useState(false);
-  const [editText, setEditText] = useState(message.text_content ?? '');
+  const emojiBase = useCustomEmojiBase();
+  const [editText, setEditText] = useState(() =>
+    storedToDraft(message.text_content ?? '', emojiBase),
+  );
   const [telegramAvatarFailed, setTelegramAvatarFailed] = useState(false);
   const lastTapRef = useRef(0);
   const react = useMessageReaction(conversationId, message.id);
   const updateText = useMutation({
-    mutationFn: () => api.updateConversationMessageText(conversationId, message.id, editText),
+    mutationFn: () =>
+      api.updateConversationMessageText(conversationId, message.id, draftToStored(editText)),
     onSuccess: () => {
       setEditing(false);
       void queryClient.invalidateQueries({ queryKey: ['conversation-messages', conversationId] });
@@ -2396,7 +2410,11 @@ function ConversationMessageContent({
             if (editText.trim()) updateText.mutate();
           }}
         >
-          <CustomEmojiField value={editText} className="chat-message-editor-field">
+          <CustomEmojiField
+            value={editText}
+            onChange={setEditText}
+            className="chat-message-editor-field"
+          >
             <textarea
               value={editText}
               maxLength={4_000}
@@ -2634,11 +2652,26 @@ function repliedMessageSummary(message: ConversationMessage): string {
   return ru.miniApp.community.messageUnavailable;
 }
 
+/**
+ * The quote above a reply, painted the way Telegram paints one: a line and a
+ * name in the colour the person being answered chose for their profile, and
+ * their header emoji as a quiet wash behind the text. Somebody without that
+ * decoration keeps the plain quote, which is what it looked like before.
+ */
 function ConversationReplyQuote({ message }: { message: ConversationMessage }) {
+  const accent = message.reply_accent_color;
+  const headerEmoji = message.reply_header_custom_emoji_id;
+  const tint =
+    accent === null || accent === undefined
+      ? {}
+      : ({
+          style: { '--reply-tint': `var(--profile-accent-${accent % PROFILE_ACCENTS})` },
+        } as { style: CSSProperties });
   return (
     <button
       type="button"
-      className="chat-reply-quote"
+      className={`chat-reply-quote${accent === null || accent === undefined ? '' : ' is-tinted'}`}
+      {...tint}
       onClick={() => {
         if (message.reply_to_message_id) {
           window.dispatchEvent(
@@ -2649,6 +2682,17 @@ function ConversationReplyQuote({ message }: { message: ConversationMessage }) {
         }
       }}
     >
+      {headerEmoji ? (
+        <span
+          className="chat-reply-quote-wash"
+          aria-hidden
+          style={
+            {
+              '--reply-wash-src': `url('/api/custom-emoji/${headerEmoji}?thumbnail=1')`,
+            } as CSSProperties
+          }
+        />
+      ) : null}
       <strong>
         {message.reply_is_own
           ? ru.miniApp.community.you
@@ -3468,7 +3512,8 @@ function ChatComposer({
   }, [text]);
   const send = useMutation({
     mutationFn: (message: string) =>
-      api.sendConversationMessage(conversationId, message, replyTarget?.id),
+      // The emoji travel as tokens; in the field they were one character each.
+      api.sendConversationMessage(conversationId, draftToStored(message), replyTarget?.id),
     onMutate: (message) => onSending(message),
     onSuccess: async () => {
       stopTyping();
@@ -3521,7 +3566,7 @@ function ChatComposer({
             onCancelReply();
           }}
         />
-        <CustomEmojiField value={text} className="telegram-composer-field">
+        <CustomEmojiField value={text} onChange={setText} className="telegram-composer-field">
           <textarea
             ref={textareaRef}
             value={text}

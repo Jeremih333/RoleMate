@@ -7554,6 +7554,25 @@ const handlers: { [K in WorkerOperation]: Handler<K> } = {
               CASE WHEN reply.telegram_file_id IS NULL THEN 0 ELSE 1 END AS reply_has_media,
               CASE WHEN reply.sender_user_id = ?2 THEN 1 ELSE 0 END AS reply_is_own,
               reply_profile.display_name AS reply_sender_name,
+              -- The quote takes the colour and the emoji its author chose, the
+              -- way Telegram paints a reply, and only while that author has the
+              -- subscription the decoration belongs to.
+              CASE
+                WHEN EXISTS (
+                  SELECT 1 FROM premium_entitlements reply_premium
+                  WHERE reply_premium.user_id = reply.sender_user_id
+                    AND reply_premium.status = 'active'
+                    AND reply_premium.ends_at > CURRENT_TIMESTAMP
+                ) THEN reply_profile.accent_color
+              END AS reply_accent_color,
+              CASE
+                WHEN EXISTS (
+                  SELECT 1 FROM premium_entitlements reply_premium
+                  WHERE reply_premium.user_id = reply.sender_user_id
+                    AND reply_premium.status = 'active'
+                    AND reply_premium.ends_at > CURRENT_TIMESTAMP
+                ) THEN reply_profile.header_custom_emoji_id
+              END AS reply_header_custom_emoji_id,
               (SELECT COUNT(*) FROM conversation_messages response
                WHERE response.reply_to_message_id = message.id
                  AND response.conversation_id = message.conversation_id
@@ -7643,6 +7662,25 @@ const handlers: { [K in WorkerOperation]: Handler<K> } = {
               CASE WHEN reply.telegram_file_id IS NULL THEN 0 ELSE 1 END AS reply_has_media,
               CASE WHEN reply.sender_user_id = ?2 THEN 1 ELSE 0 END AS reply_is_own,
               reply_profile.display_name AS reply_sender_name,
+              -- The quote takes the colour and the emoji its author chose, the
+              -- way Telegram paints a reply, and only while that author has the
+              -- subscription the decoration belongs to.
+              CASE
+                WHEN EXISTS (
+                  SELECT 1 FROM premium_entitlements reply_premium
+                  WHERE reply_premium.user_id = reply.sender_user_id
+                    AND reply_premium.status = 'active'
+                    AND reply_premium.ends_at > CURRENT_TIMESTAMP
+                ) THEN reply_profile.accent_color
+              END AS reply_accent_color,
+              CASE
+                WHEN EXISTS (
+                  SELECT 1 FROM premium_entitlements reply_premium
+                  WHERE reply_premium.user_id = reply.sender_user_id
+                    AND reply_premium.status = 'active'
+                    AND reply_premium.ends_at > CURRENT_TIMESTAMP
+                ) THEN reply_profile.header_custom_emoji_id
+              END AS reply_header_custom_emoji_id,
               (SELECT COUNT(*) FROM conversation_messages response
                WHERE response.reply_to_message_id = message.id
                  AND response.conversation_id = message.conversation_id

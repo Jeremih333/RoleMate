@@ -7346,6 +7346,43 @@ body {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+
+/* The colour and the emoji the person being answered chose for their own
+   profile, the way Telegram paints a reply: the line and the name take the
+   colour, and the emoji is a quiet wash across the right of the quote rather
+   than one large picture. */
+.chat-reply-quote.is-tinted {
+  position: relative;
+  overflow: hidden;
+  border-left-color: var(--reply-tint);
+  background: color-mix(in srgb, var(--reply-tint) 16%, transparent);
+}
+
+.chat-reply-quote.is-tinted strong {
+  color: var(--reply-tint);
+}
+
+.chat-reply-quote-wash {
+  position: absolute;
+  inset: 0 0 0 auto;
+  width: 96px;
+  opacity: 0.22;
+  background-color: var(--reply-tint, var(--accent-strong));
+  mask-image: var(--reply-wash-src);
+  mask-size: 17px 17px;
+  mask-repeat: space;
+  mask-position: right -4px top -3px;
+  -webkit-mask-image: var(--reply-wash-src);
+  -webkit-mask-size: 17px 17px;
+  -webkit-mask-repeat: space;
+  -webkit-mask-position: right -4px top -3px;
+  pointer-events: none;
+}
+
+.chat-reply-quote strong,
+.chat-reply-quote span {
+  position: relative;
+}
 /* Telegram states it in one quiet line above the bubble content rather than in a
    boxed card with its own avatar. */
 .chat-forwarded-author {
@@ -10034,11 +10071,20 @@ body {
 
 .custom-emoji-field-picture {
   position: absolute;
-  top: 50%;
-  left: 0;
+  inset: 0;
   display: inline-flex;
   align-items: center;
-  transform: translateY(-50%);
+  justify-content: center;
+}
+
+/* The picture takes the box of the character it covers, whatever that character
+   is worth in this field's font: an emoji drawn at a fixed size would leave a
+   gap on one side of it, which is exactly what the empty space beside them was. */
+.custom-emoji-field-picture .custom-emoji-glyph,
+.custom-emoji-field-picture .custom-emoji-glyph-holder {
+  width: 100% !important;
+  height: 100% !important;
+  object-fit: contain;
 }
 
 /* The chat composer lays its parts out in a row, so the wrapper has to take the

@@ -54,6 +54,8 @@ import { CompactAudio } from '../components/compact-audio.js';
 import { CustomEmojiPickerDialog } from '../components/custom-emoji-picker.js';
 import { CustomEmojiInsertButton } from '../components/custom-emoji-insert.js';
 import { CustomEmojiField } from '../components/custom-emoji-field.js';
+import { draftLength, draftToStored, storedToDraft } from '../components/custom-emoji-draft.js';
+import { useCustomEmojiBase } from '../components/custom-emoji-library.js';
 import { FeedVideo } from '../components/feed-video.js';
 import {
   blobBase64,
@@ -1898,7 +1900,10 @@ export function PostCard({
   const [playlistShareTrackIds, setPlaylistShareTrackIds] = useState<string[]>([]);
   const [postTitle, setPostTitle] = useState(post.title ?? '');
   const [postPlaylistTitle, setPostPlaylistTitle] = useState(post.playlist_title ?? '');
-  const [postBody, setPostBody] = useState(post.body_markdown || post.text_preview);
+  const emojiBase = useCustomEmojiBase();
+  const [postBody, setPostBody] = useState(() =>
+    storedToDraft(post.body_markdown || post.text_preview, emojiBase),
+  );
   const [postTags, setPostTags] = useState(parseStringArray(post.tags || '[]').join(', '));
   const [postFandoms, setPostFandoms] = useState(parseStringArray(post.fandoms || '[]').join(', '));
   const [postHashtags, setPostHashtags] = useState(
@@ -2004,7 +2009,8 @@ export function PostCard({
     }) =>
       api.addPostComment(
         post.id,
-        text,
+        // One character while it was written; the stored token on its way out.
+        draftToStored(text),
         parentCommentId,
         voice
           ? {
@@ -2041,7 +2047,7 @@ export function PostCard({
   const updateComment = useMutation({
     mutationFn: () => {
       if (!editingCommentId) throw new Error(ru.miniApp.social.commentNotSelected);
-      return api.updatePostComment(editingCommentId, editingCommentBody.trim());
+      return api.updatePostComment(editingCommentId, draftToStored(editingCommentBody).trim());
     },
     onSuccess: () => {
       setEditingCommentId(null);
@@ -2082,7 +2088,7 @@ export function PostCard({
     mutationFn: () =>
       api.updateOwnPost(post.id, {
         title: postTitle.trim(),
-        bodyMarkdown: postBody.trim(),
+        bodyMarkdown: draftToStored(postBody).trim(),
         tags: parseCommaList(postTags),
         fandoms: parseCommaList(postFandoms),
         hashtags: parseCommaList(postHashtags),
@@ -2134,7 +2140,7 @@ export function PostCard({
   const resetPostDraft = () => {
     setPostTitle(post.title ?? '');
     setPostPlaylistTitle(post.playlist_title ?? '');
-    setPostBody(post.body_markdown || post.text_preview);
+    setPostBody(storedToDraft(post.body_markdown || post.text_preview, emojiBase));
     setPostTags(parseStringArray(post.tags || '[]').join(', '));
     setPostFandoms(parseStringArray(post.fandoms || '[]').join(', '));
     setPostHashtags(
@@ -2788,7 +2794,7 @@ export function PostCard({
           <label className="field-label mt-4" htmlFor={`post-body-${post.id}`}>
             {ru.miniApp.social.postBody}
           </label>
-          <CustomEmojiField value={postBody}>
+          <CustomEmojiField value={postBody} onChange={setPostBody}>
             <textarea
               id={`post-body-${post.id}`}
               className="input min-h-48"
@@ -2960,7 +2966,7 @@ export function PostCard({
               composerOpen || body ? 'is-open' : ''
             }`}
           >
-            <CustomEmojiField value={body}>
+            <CustomEmojiField value={body} onChange={setBody}>
               <textarea
                 className="comment-textarea"
                 maxLength={1000}
@@ -2973,7 +2979,7 @@ export function PostCard({
             </CustomEmojiField>
             {composerOpen || body ? (
               <div className="comment-composer-footer">
-                <span>{body.length}/1000</span>
+                <span>{draftLength(body)}/1000</span>
                 <div className="flex flex-wrap items-center gap-2">
                   <CommentVoiceRecorder
                     value={voiceDraft}
@@ -3073,7 +3079,10 @@ export function PostCard({
                     ) : null}
                     {editingCommentId === item.id ? (
                       <div className="comment-composer mt-2">
-                        <CustomEmojiField value={editingCommentBody}>
+                        <CustomEmojiField
+                          value={editingCommentBody}
+                          onChange={setEditingCommentBody}
+                        >
                           <textarea
                             className="comment-textarea"
                             maxLength={1000}
@@ -3082,7 +3091,7 @@ export function PostCard({
                           />
                         </CustomEmojiField>
                         <div className="comment-composer-footer">
-                          <span>{editingCommentBody.length}/1000</span>
+                          <span>{draftLength(editingCommentBody)}/1000</span>
                           <div className="flex flex-wrap gap-2">
                             <CustomEmojiInsertButton
                               onInsert={(token) =>
@@ -3167,7 +3176,7 @@ export function PostCard({
                           variant="ghost"
                           onClick={() => {
                             setEditingCommentId(item.id);
-                            setEditingCommentBody(item.body);
+                            setEditingCommentBody(storedToDraft(item.body, emojiBase));
                             updateComment.reset();
                           }}
                         >
@@ -3203,7 +3212,7 @@ export function PostCard({
                     </div>
                     {replyTo?.id === (item.parent_comment_id ?? item.id) ? (
                       <div className="comment-composer comment-composer-reply is-open">
-                        <CustomEmojiField value={replyBody}>
+                        <CustomEmojiField value={replyBody} onChange={setReplyBody}>
                           <textarea
                             className="comment-textarea"
                             maxLength={1000}
@@ -3215,7 +3224,7 @@ export function PostCard({
                           />
                         </CustomEmojiField>
                         <div className="comment-composer-footer">
-                          <span>{replyBody.length}/1000</span>
+                          <span>{draftLength(replyBody)}/1000</span>
                           <div className="flex flex-wrap gap-2">
                             <CustomEmojiInsertButton
                               onInsert={(token) => setReplyBody((current) => `${current}${token}`)}

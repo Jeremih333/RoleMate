@@ -5,13 +5,14 @@ import { useLocation } from 'wouter';
 import { ru } from '@rolemate/shared';
 import { api } from '../api.js';
 import { CustomEmojiPickerDialog } from './custom-emoji-picker.js';
-import { customEmojiToken } from './custom-emoji-token.js';
+import { draftPlaceholder } from './custom-emoji-draft.js';
 import { InfoDialog } from './ui.js';
 
 /**
- * Appends a custom emoji to whatever text is being written. The token is plain
- * text, so it survives the field, the database and every later edit, and the
- * renderer draws the glyph wherever that text is shown.
+ * Appends a custom emoji to whatever text is being written. In the field it is
+ * one character; on its way to the database it becomes a plain `[ce:…]` token,
+ * which survives every later edit, and the renderer draws the glyph wherever
+ * that text is shown.
  *
  * Using one is a Premium feature. Without a subscription the button says so and
  * offers the way to it rather than disappearing, because a control that vanishes
@@ -46,8 +47,10 @@ export function CustomEmojiInsertButton({
       </button>
       {open ? (
         <CustomEmojiPickerDialog
-          onPick={(customEmojiId) => {
-            if (customEmojiId) onInsert(customEmojiToken(customEmojiId));
+          onPick={(customEmojiId, baseEmoji) => {
+            // One visible character, the way Telegram writes one: the id rides
+            // along invisibly and becomes the stored token only when sent.
+            if (customEmojiId) onInsert(draftPlaceholder(customEmojiId, baseEmoji));
             setOpen(false);
           }}
           onClose={() => setOpen(false)}

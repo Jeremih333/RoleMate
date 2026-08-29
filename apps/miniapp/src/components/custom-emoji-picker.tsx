@@ -29,7 +29,7 @@ export function CustomEmojiPickerDialog({
   selectedId?: string | null;
   monochromeOnly?: boolean;
   focusPackOfEmojiId?: string | null;
-  onPick?: (customEmojiId: string | null) => void;
+  onPick?: (customEmojiId: string | null, baseEmoji?: string) => void;
   onClose: () => void;
 }) {
   const queryClient = useQueryClient();
@@ -173,7 +173,7 @@ export function CustomEmojiPickerDialog({
                       aria-pressed={selectedId === item.custom_emoji_id}
                       aria-label={item.emoji || pack.title}
                       disabled={!onPick}
-                      onClick={() => onPick?.(item.custom_emoji_id)}
+                      onClick={() => onPick?.(item.custom_emoji_id, item.emoji)}
                     >
                       <CustomEmojiGlyph
                         customEmojiId={item.custom_emoji_id}

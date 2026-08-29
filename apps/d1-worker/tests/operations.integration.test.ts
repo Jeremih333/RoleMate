@@ -975,6 +975,74 @@ describe('D1 domain operations', () => {
     expect(stored.about).toBe(`${profile.about} ${token}`);
   });
 
+  it('paints a reply with the colour and emoji its author chose, while they have Premium', async () => {
+    const author = await onboard(2_631);
+    const reader = await onboard(2_632);
+    const conversation = (await executeOperation(
+      env,
+      'conversations.startDirect',
+      { userId: reader, targetUserId: author },
+      crypto.randomUUID(),
+    )) as { conversationId: string };
+    const answered = (await executeOperation(
+      env,
+      'conversations.recordMiniAppMessage',
+      {
+        userId: author,
+        conversationId: conversation.conversationId,
+        destinationMessageId: 4_201,
+        messageType: 'text',
+        encryptedContent: 'encrypted.answered.payload',
+      },
+      crypto.randomUUID(),
+    )) as { messageId: string };
+    await executeOperation(
+      env,
+      'conversations.recordMiniAppMessage',
+      {
+        userId: reader,
+        conversationId: conversation.conversationId,
+        destinationMessageId: 4_202,
+        messageType: 'text',
+        encryptedContent: 'encrypted.reply.payload',
+        replyToMessageId: answered.messageId,
+      },
+      crypto.randomUUID(),
+    );
+    sqlite
+      .prepare(
+        'UPDATE user_profiles SET accent_color = 3, header_custom_emoji_id = ? WHERE user_id = ?',
+      )
+      .run('5301', author);
+
+    const quote = async () => {
+      const listed = (await executeOperation(
+        env,
+        'conversations.messages.list',
+        { userId: reader, conversationId: conversation.conversationId, limit: 20 },
+        crypto.randomUUID(),
+      )) as Array<{
+        reply_to_message_id: string | null;
+        reply_accent_color: number | null;
+        reply_header_custom_emoji_id: string | null;
+      }>;
+      return listed.find((row) => row.reply_to_message_id === answered.messageId);
+    };
+
+    // Appearance is a Premium thing, and a quote must not show what the profile
+    // itself would not: without the subscription the reply stays plain.
+    expect(await quote()).toMatchObject({
+      reply_accent_color: null,
+      reply_header_custom_emoji_id: null,
+    });
+
+    grantPremium(author);
+    expect(await quote()).toMatchObject({
+      reply_accent_color: 3,
+      reply_header_custom_emoji_id: '5301',
+    });
+  });
+
   it('adopts an emoji met in the wild, shows its set and lets somebody add it', async () => {
     const readerId = await onboard(2_611);
     grantPremium(readerId);

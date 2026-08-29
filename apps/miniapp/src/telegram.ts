@@ -105,25 +105,50 @@ export function trackViewportHeight(): () => void {
 }
 
 /**
- * Publishes the header's real height as `--topbar-height`. The chat sizes itself
- * from the viewport minus this value; hard-coding a number here is what pushed
- * the composer off the bottom of the screen on clients whose header is taller.
+ * Publishes an element's real height as a CSS variable. Hard-coding these
+ * numbers is what pushed the composer off the bottom of the screen on clients
+ * with a taller header, and what left a gap under the music strip.
  */
-export function trackTopbarHeight(element: HTMLElement | null): () => void {
+function trackElementHeight(
+  element: HTMLElement | null,
+  variable: string,
+  fallbackToZeroOnUnmount = false,
+): () => void {
   if (typeof window === 'undefined' || !element) return () => {};
   const root = document.documentElement;
+  const clear = () => {
+    if (fallbackToZeroOnUnmount) root.style.setProperty(variable, '0px');
+  };
   const apply = () => {
     const height = Math.round(element.getBoundingClientRect().height);
-    if (height > 0) root.style.setProperty('--topbar-height', `${height}px`);
+    if (height > 0) root.style.setProperty(variable, `${height}px`);
   };
   apply();
   if (typeof ResizeObserver === 'undefined') {
     window.addEventListener('resize', apply);
-    return () => window.removeEventListener('resize', apply);
+    return () => {
+      window.removeEventListener('resize', apply);
+      clear();
+    };
   }
   const observer = new ResizeObserver(apply);
   observer.observe(element);
-  return () => observer.disconnect();
+  return () => {
+    observer.disconnect();
+    clear();
+  };
+}
+
+export function trackTopbarHeight(element: HTMLElement | null): () => void {
+  return trackElementHeight(element, '--topbar-height');
+}
+
+/**
+ * The music strip is fixed above the shell, so the layout has to inset itself by
+ * exactly its height — and drop back to nothing the moment the strip goes away.
+ */
+export function trackMusicPlayerHeight(element: HTMLElement | null): () => void {
+  return trackElementHeight(element, '--music-player-height', true);
 }
 
 /**

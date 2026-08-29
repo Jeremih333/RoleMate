@@ -5130,8 +5130,11 @@ audio {
   width: 100%;
   height: 100%;
   /* A ceiling of its own: even if the surrounding layout fails to constrain it,
-     the message list scrolls inside this and the composer stays on screen. */
-  max-height: calc(var(--app-vh, 100dvh) - var(--topbar-height, 64px));
+     the message list scrolls inside this and the composer stays on screen. The
+     music strip, when it is up, takes its share of the viewport too. */
+  max-height: calc(
+    var(--app-vh, 100dvh) - var(--topbar-height, 64px) - var(--music-player-height, 0px)
+  );
   min-height: 0;
   flex-direction: column;
   overflow: hidden;
@@ -6294,15 +6297,16 @@ body.chat-open .page > * {
   min-height: 0;
   flex: 1 1 auto;
 }
-/* The music player is a fixed strip above the shell. */
+/* The music player is a fixed strip above the shell, and its height is measured
+   rather than guessed: sixty pixels was wrong on some clients, which left a gap
+   under the strip. The shell is inset by exactly that height, and because the
+   inset is padding the shell keeps the full viewport height — subtracting the
+   strip as well is what pushed the chat down and opened a hole above it. */
 body.music-open .app-shell {
-  padding-top: 60px;
+  padding-top: var(--music-player-height, 60px);
 }
 body.music-open .topbar {
-  top: 60px;
-}
-body.music-open.chat-open .app-shell {
-  height: calc(var(--app-vh, 100dvh) - 60px);
+  top: var(--music-player-height, 60px);
 }
 /* The player is a fixed strip above the shell, and the shell already accounts
    for it with padding, so the chat needs no arithmetic of its own here. */

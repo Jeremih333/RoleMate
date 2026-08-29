@@ -23,6 +23,7 @@ import {
   X,
 } from 'lucide-react';
 import { ru } from '@rolemate/shared';
+import { trackMusicPlayerHeight } from '../telegram.js';
 
 export type PlaylistTrack = {
   id: string;
@@ -236,17 +237,20 @@ export function MusicPlayerProvider({ children }: { children: ReactNode }) {
 
   // The player is a fixed strip above everything, so the layout has to know it is
   // there. A class says so plainly instead of a :has() selector the WebView in
-  // some Telegram clients ignores.
+  // some Telegram clients ignores, and the strip's measured height is what the
+  // layout insets itself by — a guessed number left a gap beneath it.
+  const playerRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
     document.body.classList.toggle('music-open', Boolean(currentTrack));
     return () => document.body.classList.remove('music-open');
   }, [currentTrack]);
+  useEffect(() => trackMusicPlayerHeight(playerRef.current), [currentTrack]);
 
   return (
     <MusicPlayerContext.Provider value={value}>
       {children}
       {currentTrack ? (
-        <div className="global-music-player" data-no-section-swipe>
+        <div className="global-music-player" data-no-section-swipe ref={playerRef}>
           <audio
             ref={audioRef}
             src={currentTrack.src}

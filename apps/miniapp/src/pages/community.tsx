@@ -2692,7 +2692,7 @@ function ConversationReplyQuote({ message }: { message: ConversationMessage }) {
         // rather than showing one large picture. A custom one is painted as a
         // mask so it takes the colour; a plain one is simply the character.
         <span className="chat-reply-quote-wash" aria-hidden>
-          {Array.from({ length: 18 }, (_, index) =>
+          {Array.from({ length: 24 }, (_, index) =>
             headerCustomEmoji ? (
               <i
                 key={index}

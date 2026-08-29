@@ -1011,9 +1011,11 @@ describe('D1 domain operations', () => {
     );
     sqlite
       .prepare(
-        'UPDATE user_profiles SET accent_color = 3, header_custom_emoji_id = ? WHERE user_id = ?',
+        `UPDATE user_profiles
+         SET accent_color = 3, header_custom_emoji_id = ?, header_emoji = ?
+         WHERE user_id = ?`,
       )
-      .run('5301', author);
+      .run('5301', '✨', author);
 
     const quote = async () => {
       const listed = (await executeOperation(
@@ -1025,6 +1027,7 @@ describe('D1 domain operations', () => {
         reply_to_message_id: string | null;
         reply_accent_color: number | null;
         reply_header_custom_emoji_id: string | null;
+        reply_header_emoji: string | null;
       }>;
       return listed.find((row) => row.reply_to_message_id === answered.messageId);
     };
@@ -1034,12 +1037,14 @@ describe('D1 domain operations', () => {
     expect(await quote()).toMatchObject({
       reply_accent_color: null,
       reply_header_custom_emoji_id: null,
+      reply_header_emoji: null,
     });
 
     grantPremium(author);
     expect(await quote()).toMatchObject({
       reply_accent_color: 3,
       reply_header_custom_emoji_id: '5301',
+      reply_header_emoji: '✨',
     });
   });
 

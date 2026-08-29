@@ -7365,18 +7365,41 @@ body {
 .chat-reply-quote-wash {
   position: absolute;
   inset: 0 0 0 auto;
-  width: 96px;
-  opacity: 0.22;
+  display: flex;
+  width: 104px;
+  flex-wrap: wrap;
+  align-content: flex-start;
+  justify-content: flex-end;
+  gap: 3px;
+  overflow: hidden;
+  padding: 2px;
+  opacity: 0.2;
+  pointer-events: none;
+  mask-image: linear-gradient(to left, rgb(0 0 0 / 100%), transparent);
+  -webkit-mask-image: linear-gradient(to left, rgb(0 0 0 / 100%), transparent);
+}
+
+.chat-reply-quote-wash i {
+  display: block;
+  width: 13px;
+  height: 13px;
+  flex: none;
+  font-size: 11px;
+  font-style: normal;
+  line-height: 13px;
+  text-align: center;
+}
+
+/* A custom emoji is painted rather than shown: the wash has to take the colour
+   of the quote, the way Telegram tints a profile's background emoji. */
+.chat-reply-quote-wash i[style] {
   background-color: var(--reply-tint, var(--accent-strong));
   mask-image: var(--reply-wash-src);
-  mask-size: 17px 17px;
-  mask-repeat: space;
-  mask-position: right -4px top -3px;
+  mask-size: contain;
+  mask-repeat: no-repeat;
   -webkit-mask-image: var(--reply-wash-src);
-  -webkit-mask-size: 17px 17px;
-  -webkit-mask-repeat: space;
-  -webkit-mask-position: right -4px top -3px;
-  pointer-events: none;
+  -webkit-mask-size: contain;
+  -webkit-mask-repeat: no-repeat;
 }
 
 .chat-reply-quote strong,

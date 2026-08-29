@@ -1475,6 +1475,7 @@ export interface ConversationMessage {
   reply_sender_name?: string | null;
   reply_accent_color?: number | null;
   reply_header_custom_emoji_id?: string | null;
+  reply_header_emoji?: string | null;
   forwarded_from_message_id?: string | null;
   forwarded_author_user_id?: string | null;
   forwarded_author_name?: string | null;

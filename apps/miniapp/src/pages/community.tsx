@@ -90,6 +90,7 @@ import { CustomEmojiField } from '../components/custom-emoji-field.js';
 import { PROFILE_ACCENTS } from './social.js';
 import { draftToStored, storedToDraft } from '../components/custom-emoji-draft.js';
 import { CustomEmojiInline } from '../components/custom-emoji-inline.js';
+import { useDismiss } from '../components/use-dismiss.js';
 import { CustomEmojiPickerDialog } from '../components/custom-emoji-picker.js';
 
 export function MatchesPage() {
@@ -1231,6 +1232,11 @@ function ConversationView({
   const queryClient = useQueryClient();
   const [, navigate] = useLocation();
   const [menuOpen, setMenuOpen] = useState(false);
+  const closeMenu = useCallback(() => setMenuOpen(false), []);
+  const { ref: menuRef, trigger: menuTrigger } = useDismiss<HTMLDivElement, HTMLButtonElement>(
+    menuOpen,
+    closeMenu,
+  );
   const { confirm, dialog: confirmDialog } = useConfirmPrompt();
   const { ask, dialog: promptDialog } = useTextPrompt();
   // The layout of an open chat is driven by this class rather than by :has():
@@ -1515,21 +1521,17 @@ function ConversationView({
           </span>
         </Link>
         <button
+          ref={menuTrigger}
           type="button"
           className="chat-icon-button"
           aria-label={ru.miniApp.community.chatMenu}
+          aria-expanded={menuOpen}
           onClick={() => setMenuOpen((value) => !value)}
         >
           <MoreVertical />
         </button>
         {menuOpen ? (
-          <>
-            <button
-              type="button"
-              className="chat-menu-backdrop"
-              aria-label={ru.miniApp.community.cancelAction}
-              onClick={() => setMenuOpen(false)}
-            />
+          <div ref={menuRef}>
             <Card className="chat-service-menu">
               <button
                 type="button"
@@ -1652,7 +1654,7 @@ function ConversationView({
                 <Trash2 /> <span>{ru.miniApp.community.deleteChat}</span>
               </button>
             </Card>
-          </>
+          </div>
         ) : null}
       </header>
 
@@ -2662,7 +2664,8 @@ function repliedMessageSummary(message: ConversationMessage): string {
  */
 function ConversationReplyQuote({ message }: { message: ConversationMessage }) {
   const accent = message.reply_accent_color;
-  const headerEmoji = message.reply_header_custom_emoji_id;
+  const headerCustomEmoji = message.reply_header_custom_emoji_id;
+  const headerEmoji = message.reply_header_emoji;
   const tint =
     accent === null || accent === undefined
       ? {}
@@ -2684,16 +2687,26 @@ function ConversationReplyQuote({ message }: { message: ConversationMessage }) {
         }
       }}
     >
-      {headerEmoji ? (
-        <span
-          className="chat-reply-quote-wash"
-          aria-hidden
-          style={
-            {
-              '--reply-wash-src': `url('/api/custom-emoji/${headerEmoji}?thumbnail=1')`,
-            } as CSSProperties
-          }
-        />
+      {headerCustomEmoji || headerEmoji ? (
+        // Telegram tiles the chosen emoji across the quote, small and faint,
+        // rather than showing one large picture. A custom one is painted as a
+        // mask so it takes the colour; a plain one is simply the character.
+        <span className="chat-reply-quote-wash" aria-hidden>
+          {Array.from({ length: 18 }, (_, index) =>
+            headerCustomEmoji ? (
+              <i
+                key={index}
+                style={
+                  {
+                    '--reply-wash-src': `url('/api/custom-emoji/${headerCustomEmoji}?thumbnail=1')`,
+                  } as CSSProperties
+                }
+              />
+            ) : (
+              <i key={index}>{headerEmoji}</i>
+            ),
+          )}
+        </span>
       ) : null}
       <strong>
         {message.reply_is_own
@@ -3460,16 +3473,45 @@ function ChatComposer({
     );
     draftHydratedRef.current = true;
   }, [draft.data?.text, draft.isSuccess]);
+  // A draft is kept the way Telegram keeps one: it stays until it is sent or
+  // cleared, and leaving the chat is not either of those. The last thing typed
+  // used to be lost exactly then — the pending save was cancelled on the way
+  // out and never happened — so it is written immediately when the composer
+  // goes away, and when the app is hidden or closed, which is when a phone
+  // takes the page away without warning.
+  const pendingDraftRef = useRef('');
+  pendingDraftRef.current = draftToStored(text);
+  const savedDraftRef = useRef<string | null>(null);
+  const flushDraft = useCallback(() => {
+    if (!draftHydratedRef.current) return;
+    const value = pendingDraftRef.current;
+    if (savedDraftRef.current === value) return;
+    savedDraftRef.current = value;
+    void api
+      .saveConversationDraft(conversationId, value)
+      .then(() => queryClient.invalidateQueries({ queryKey: ['conversations'] }))
+      .catch(() => {
+        // Let the next attempt try again rather than believing it was written.
+        savedDraftRef.current = null;
+      });
+  }, [conversationId, queryClient]);
   useEffect(() => {
     if (!draftHydratedRef.current) return;
-    const timeout = window.setTimeout(() => {
-      void api
-        .saveConversationDraft(conversationId, draftToStored(text))
-        .then(() => queryClient.invalidateQueries({ queryKey: ['conversations'] }))
-        .catch(() => undefined);
-    }, 550);
+    const timeout = window.setTimeout(flushDraft, 550);
     return () => window.clearTimeout(timeout);
-  }, [conversationId, queryClient, text]);
+  }, [flushDraft, text]);
+  useEffect(() => {
+    const onHidden = () => {
+      if (document.visibilityState === 'hidden') flushDraft();
+    };
+    document.addEventListener('visibilitychange', onHidden);
+    window.addEventListener('pagehide', flushDraft);
+    return () => {
+      document.removeEventListener('visibilitychange', onHidden);
+      window.removeEventListener('pagehide', flushDraft);
+      flushDraft();
+    };
+  }, [flushDraft]);
   const startTyping = () => {
     if (!stopTypingRef.current) {
       let stopped = false;

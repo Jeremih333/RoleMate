@@ -7573,6 +7573,14 @@ const handlers: { [K in WorkerOperation]: Handler<K> } = {
                     AND reply_premium.ends_at > CURRENT_TIMESTAMP
                 ) THEN reply_profile.header_custom_emoji_id
               END AS reply_header_custom_emoji_id,
+              CASE
+                WHEN EXISTS (
+                  SELECT 1 FROM premium_entitlements reply_premium
+                  WHERE reply_premium.user_id = reply.sender_user_id
+                    AND reply_premium.status = 'active'
+                    AND reply_premium.ends_at > CURRENT_TIMESTAMP
+                ) THEN reply_profile.header_emoji
+              END AS reply_header_emoji,
               (SELECT COUNT(*) FROM conversation_messages response
                WHERE response.reply_to_message_id = message.id
                  AND response.conversation_id = message.conversation_id
@@ -7681,6 +7689,14 @@ const handlers: { [K in WorkerOperation]: Handler<K> } = {
                     AND reply_premium.ends_at > CURRENT_TIMESTAMP
                 ) THEN reply_profile.header_custom_emoji_id
               END AS reply_header_custom_emoji_id,
+              CASE
+                WHEN EXISTS (
+                  SELECT 1 FROM premium_entitlements reply_premium
+                  WHERE reply_premium.user_id = reply.sender_user_id
+                    AND reply_premium.status = 'active'
+                    AND reply_premium.ends_at > CURRENT_TIMESTAMP
+                ) THEN reply_profile.header_emoji
+              END AS reply_header_emoji,
               (SELECT COUNT(*) FROM conversation_messages response
                WHERE response.reply_to_message_id = message.id
                  AND response.conversation_id = message.conversation_id

@@ -54,6 +54,7 @@ import { CompactAudio } from '../components/compact-audio.js';
 import { CustomEmojiPickerDialog } from '../components/custom-emoji-picker.js';
 import { CustomEmojiInsertButton } from '../components/custom-emoji-insert.js';
 import { CustomEmojiField } from '../components/custom-emoji-field.js';
+import { CustomEmojiInline } from '../components/custom-emoji-inline.js';
 import { draftLength, draftToStored, storedToDraft } from '../components/custom-emoji-draft.js';
 import { useCustomEmojiBase } from '../components/custom-emoji-library.js';
 import { FeedVideo } from '../components/feed-video.js';
@@ -2718,7 +2719,9 @@ export function PostCard({
             <span>
               <small>{ru.miniApp.social.interestingComment}</small>
               <strong>{topComment.displayName}</strong>
-              <span>{topComment.body}</span>
+              <span>
+                <CustomEmojiInline text={topComment.body} />
+              </span>
             </span>
             <MessageCircle aria-hidden />
           </button>

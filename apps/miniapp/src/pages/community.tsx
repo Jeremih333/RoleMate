@@ -89,7 +89,7 @@ import { CustomEmojiInsertButton } from '../components/custom-emoji-insert.js';
 import { CustomEmojiField } from '../components/custom-emoji-field.js';
 import { PROFILE_ACCENTS } from './social.js';
 import { draftToStored, storedToDraft } from '../components/custom-emoji-draft.js';
-import { stripCustomEmojiTokens } from '../components/custom-emoji-token.js';
+import { CustomEmojiInline } from '../components/custom-emoji-inline.js';
 import { CustomEmojiPickerDialog } from '../components/custom-emoji-picker.js';
 
 export function MatchesPage() {
@@ -680,7 +680,7 @@ function ChatListRow({
             ) : chat.last_sender_user_id && ownUserId === chat.last_sender_user_id ? (
               <b className="chat-preview-own-prefix">{ru.miniApp.community.youPrefix} </b>
             ) : null}
-            {preview}
+            <CustomEmojiInline text={preview} />
           </span>
         </span>
         <span className="telegram-chat-meta">
@@ -714,7 +714,7 @@ function ChatListRow({
             {previewMessages.data?.slice(-6).map((message) => (
               <p className={message.is_own ? 'is-own' : ''} key={message.id}>
                 {message.is_own ? `${ru.miniApp.community.youPrefix} ` : ''}
-                {chatMessageDisplayText(message)}
+                <CustomEmojiInline text={chatMessageDisplayText(message)} />
               </p>
             ))}
           </div>
@@ -745,7 +745,7 @@ function ChatListRow({
 }
 
 function conversationListPreview(chat: Conversation): string {
-  if (chat.draft_text?.trim()) return stripCustomEmojiTokens(chat.draft_text);
+  if (chat.draft_text?.trim()) return chat.draft_text;
   if (chat.last_message_text) {
     const shared = parseSharedEntity(chat.last_message_text);
     const telegramProfile = parseTelegramProfileShare(chat.last_message_text);
@@ -755,8 +755,8 @@ function conversationListPreview(chat: Conversation): string {
         : ru.miniApp.community.sharedQuestionnaireMessage
       : telegramProfile || chat.last_message_type === 'profile'
         ? ru.miniApp.community.sharedProfileMessage
-        : // A one-line preview cannot draw a glyph, so the token becomes a mark.
-          stripCustomEmojiTokens(chat.last_message_text);
+        : // The tokens stay: whoever shows this line draws the emoji in it.
+          chat.last_message_text;
   }
   if (
     chat.last_message_type === 'audio' &&
@@ -902,9 +902,9 @@ function chatMessageDisplayText(message: ConversationMessage): string {
   if (message.message_type === 'profile' || parseTelegramProfileShare(message.text_content)) {
     return ru.miniApp.community.sharedProfileMessage;
   }
-  // Plain text: a custom emoji cannot be drawn here, and its token must not be
-  // read by anyone as leaked machinery.
-  const text = message.text_content ? stripCustomEmojiTokens(message.text_content) : '';
+  // The tokens stay in the text: every place that shows this line draws the
+  // emoji, the way Telegram shows the real one in a preview and a quote.
+  const text = message.text_content ?? '';
   return text || chatMessagePreview(message);
 }
 
@@ -953,7 +953,9 @@ function ChatPinnedBar({
             ? ru.miniApp.community.pinnedNumbered(index + 1, pins.length)
             : ru.miniApp.community.pinnedMessage}
         </strong>
-        <small>{preview}</small>
+        <small>
+          <CustomEmojiInline text={preview} />
+        </small>
       </button>
       <button
         type="button"
@@ -2698,7 +2700,9 @@ function ConversationReplyQuote({ message }: { message: ConversationMessage }) {
           ? ru.miniApp.community.you
           : message.reply_sender_name || ru.miniApp.community.roleplayer}
       </strong>
-      <span>{repliedMessageSummary(message)}</span>
+      <span>
+        <CustomEmojiInline text={repliedMessageSummary(message)} />
+      </span>
     </button>
   );
 }
@@ -3433,6 +3437,7 @@ function ChatComposer({
 }) {
   const queryClient = useQueryClient();
   const [text, setText] = useState('');
+  const composerEmojiBase = useCustomEmojiBase();
   const draftHydratedRef = useRef(false);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const stopTypingRef = useRef<(() => void) | null>(null);
@@ -3448,14 +3453,18 @@ function ChatComposer({
   }, [conversationId]);
   useEffect(() => {
     if (!draft.isSuccess || draftHydratedRef.current) return;
-    setText(typeof draft.data?.text === 'string' ? draft.data.text : '');
+    // A saved draft holds tokens like any stored text; in the field an emoji is
+    // one character again.
+    setText(
+      typeof draft.data?.text === 'string' ? storedToDraft(draft.data.text, composerEmojiBase) : '',
+    );
     draftHydratedRef.current = true;
   }, [draft.data?.text, draft.isSuccess]);
   useEffect(() => {
     if (!draftHydratedRef.current) return;
     const timeout = window.setTimeout(() => {
       void api
-        .saveConversationDraft(conversationId, text)
+        .saveConversationDraft(conversationId, draftToStored(text))
         .then(() => queryClient.invalidateQueries({ queryKey: ['conversations'] }))
         .catch(() => undefined);
     }, 550);
@@ -3538,7 +3547,9 @@ function ChatComposer({
           <Reply aria-hidden />
           <span>
             <strong>{ru.miniApp.community.replyingTo}</strong>
-            <small>{chatMessageDisplayText(replyTarget)}</small>
+            <small>
+              <CustomEmojiInline text={chatMessageDisplayText(replyTarget)} />
+            </small>
           </span>
           <button
             type="button"

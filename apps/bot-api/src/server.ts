@@ -2322,6 +2322,12 @@ export async function buildServer(
       const premium = await dataApi.execute<{ premium: boolean }>('premium.status', {
         userId: session.userId,
       });
+      // Sending a custom emoji is a Premium feature. The picker is hidden without
+      // a subscription, but the rule belongs on the server as well; a message
+      // written while subscribed keeps its emoji for everybody afterwards.
+      if (!premium.premium && /\[ce:[0-9]{1,32}\]/.test(text)) {
+        throw new DataApiError('PREMIUM_REQUIRED', ru.api.customEmojiPremiumRequired, 403);
+      }
       const policy = await validateUserContentLinks(text, {
         premium: premium.premium,
         dataApi,
@@ -3014,6 +3020,64 @@ export async function buildServer(
   // and the shared per-route rate limit — a hundred and twenty requests — cut the
   // pictures off partway through, which is exactly what "they stop loading"
   // looked like. There is nothing private behind these bytes.
+  // One pack as a single archive: a small JSON index of where each glyph sits,
+  // then all their bytes end to end. A picker that used to cost two hundred
+  // requests costs one, and nothing extra is stored — the archive is assembled
+  // from the same rows that already back the individual pictures.
+  app.get(
+    '/api/custom-emoji/packs/:packId/archive',
+    { config: { rateLimit: false } },
+    async (request, reply) => {
+      const { packId } = z.object({ packId: z.string().uuid() }).parse(request.params);
+      const entries: Array<{
+        id: string;
+        emoji: string;
+        renderKind: string;
+        needsRepainting: number;
+        contentType: string;
+        offset: number;
+        length: number;
+      }> = [];
+      const chunks: Buffer[] = [];
+      let offset = 0;
+      for (let page = 0; page < 8; page += 1) {
+        const rows = await dataApi.execute<
+          Array<{
+            custom_emoji_id: string;
+            emoji: string;
+            render_kind: string;
+            needs_repainting: number;
+            content_type: string;
+            data_base64: string;
+          }>
+        >('customEmoji.assets.pack', { packId, limit: 50, offset: page * 50 });
+        for (const row of rows) {
+          const bytes = Buffer.from(row.data_base64, 'base64');
+          entries.push({
+            id: row.custom_emoji_id,
+            emoji: row.emoji,
+            renderKind: row.render_kind,
+            needsRepainting: row.needs_repainting,
+            contentType: row.content_type,
+            offset,
+            length: bytes.byteLength,
+          });
+          chunks.push(bytes);
+          offset += bytes.byteLength;
+        }
+        if (rows.length < 50) break;
+      }
+      if (!entries.length) {
+        throw new DataApiError('CUSTOM_EMOJI_PACK_EMPTY', ru.api.mediaUnavailable, 404);
+      }
+      const index = Buffer.from(JSON.stringify({ version: 1, entries }), 'utf8');
+      const header = Buffer.alloc(4);
+      header.writeUInt32BE(index.byteLength, 0);
+      reply.header('Content-Type', 'application/octet-stream');
+      reply.header('Cache-Control', 'public, max-age=3600');
+      return reply.send(Buffer.concat([header, index, ...chunks]));
+    },
+  );
   app.get(
     '/api/custom-emoji/:customEmojiId',
     { config: { rateLimit: false } },

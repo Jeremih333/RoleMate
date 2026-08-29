@@ -17,12 +17,15 @@ export function CustomEmojiGlyph({
   label = '',
   size = 22,
   animate = false,
+  srcOverride,
 }: {
   customEmojiId: string;
   renderKind?: CustomEmojiRenderKind;
   label?: string;
   size?: number;
   animate?: boolean;
+  /** Bytes already in hand — from a pack archive — instead of a request of its own. */
+  srcOverride?: string;
 }) {
   const holderRef = useRef<HTMLSpanElement>(null);
   const [playing, setPlaying] = useState(false);
@@ -115,7 +118,7 @@ export function CustomEmojiGlyph({
         <img
           className="custom-emoji-glyph"
           style={dimensions}
-          src={`/api/custom-emoji/${customEmojiId}?thumbnail=1`}
+          src={srcOverride ?? `/api/custom-emoji/${customEmojiId}?thumbnail=1`}
           alt={label}
           loading="lazy"
           decoding="async"

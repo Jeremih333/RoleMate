@@ -446,6 +446,11 @@ export const workerOperations = {
     kind: z.enum(['thumbnail', 'animation']),
     limit: z.number().int().min(1).max(50).default(12),
   }),
+  'customEmoji.assets.pack': z.object({
+    packId: z.string().uuid(),
+    limit: z.number().int().min(1).max(100).default(50),
+    offset: z.number().int().min(0).default(0),
+  }),
   'customEmoji.assets.store': z.object({
     customEmojiId: z
       .string()

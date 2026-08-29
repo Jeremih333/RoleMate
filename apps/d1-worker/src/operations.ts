@@ -372,6 +372,26 @@ async function requirePremium(env: Env, userId: string): Promise<string> {
   return endsAt;
 }
 
+/**
+ * Custom emoji are written into text as `[ce:<id>]`. Using one is a Premium
+ * feature, so any text a person submits is checked here — the picker is hidden
+ * without a subscription, but the rule has to hold on the server too. Text that
+ * was written while subscribed keeps rendering for everybody; this only governs
+ * what somebody may send now.
+ */
+const CUSTOM_EMOJI_TOKEN = /\[ce:[0-9]{1,32}\]/;
+
+async function assertCustomEmojiAllowed(
+  env: Env,
+  userId: string,
+  ...texts: Array<string | null | undefined>
+): Promise<void> {
+  if (!texts.some((text) => text && CUSTOM_EMOJI_TOKEN.test(text))) return;
+  if (!(await premiumEnd(env, userId))) {
+    throw new ApiError(403, 'PREMIUM_REQUIRED', 'Custom emoji require Premium');
+  }
+}
+
 async function configInt(
   env: Env,
   key: string,
@@ -1047,6 +1067,15 @@ const handlers: { [K in WorkerOperation]: Handler<K> } = {
     };
   },
   'profiles.upsert': async (env, input) => {
+    await assertCustomEmojiAllowed(
+      env,
+      input.userId,
+      input.profile.about,
+      input.profile.plots,
+      input.profile.settings,
+      input.profile.boundaries,
+      input.profile.shortHeadline,
+    );
     const isPremium = Boolean(await premiumEnd(env, input.userId));
     const profileText = [
       input.profile.displayName,
@@ -2576,13 +2605,17 @@ const handlers: { [K in WorkerOperation]: Handler<K> } = {
         ).bind(input.userId, mediaId, sortOrder),
       ),
       env.DB.prepare(
-        // Appearance is Premium-only; a lapsed subscription clears it rather than
-        // leaving a decorated profile nobody can change back.
+        // Appearance is Premium-only, and it is *kept* rather than erased when a
+        // subscription lapses: presentation hides it while there is no
+        // entitlement, so buying again brings the same decoration straight back.
+        // Only a subscriber can change these, which is what the CASE enforces.
         `UPDATE user_profiles SET display_name = ?2, bio = ?3, avatar_media_id = ?4,
            avatar_render_mode = ?5, visibility_mode = ?6,
            show_followers = ?7, show_following = ?8, show_questionnaires = ?9,
            show_posts = ?10, direct_message_policy = ?11, show_last_seen = ?12,
-           accent_color = ?13, header_emoji = ?14, header_custom_emoji_id = ?15,
+           accent_color = CASE WHEN ?16 = 1 THEN ?13 ELSE accent_color END,
+           header_emoji = CASE WHEN ?16 = 1 THEN ?14 ELSE header_emoji END,
+           header_custom_emoji_id = CASE WHEN ?16 = 1 THEN ?15 ELSE header_custom_emoji_id END,
            configured_at = COALESCE(configured_at, CURRENT_TIMESTAMP),
            updated_at = CURRENT_TIMESTAMP WHERE user_id = ?1`,
       ).bind(
@@ -2598,9 +2631,10 @@ const handlers: { [K in WorkerOperation]: Handler<K> } = {
         input.showPosts ? 1 : 0,
         input.directMessagePolicy,
         input.showLastSeen ? 1 : 0,
-        premium ? (input.accentColor ?? null) : null,
-        premium ? (input.headerEmoji ?? null) : null,
+        input.accentColor ?? null,
+        input.headerEmoji ?? null,
         headerCustomEmojiId,
+        premium ? 1 : 0,
       ),
     ]);
     return { updated: true };
@@ -3515,6 +3549,9 @@ const handlers: { [K in WorkerOperation]: Handler<K> } = {
    * hits the same cached assets. Re-importing refreshes the pack in place.
    */
   'customEmoji.import': async (env, input) => {
+    // Bringing a pack in is part of using premium emoji, so it needs the
+    // subscription. Packs already imported stay in the shared library.
+    await requirePremium(env, input.userId);
     const existing = await env.DB.prepare('SELECT id FROM custom_emoji_packs WHERE set_name = ?1')
       .bind(input.setName)
       .first<{ id: string }>();
@@ -3666,6 +3703,31 @@ const handlers: { [K in WorkerOperation]: Handler<K> } = {
         .bind(input.kind, input.limit)
         .all()
     ).results;
+  },
+  /**
+   * The cached bytes of one pack, in grid order, a page at a time.
+   *
+   * A picker paints hundreds of glyphs, and asking for each of them separately
+   * is hundreds of requests against a daily allowance of a hundred thousand.
+   * Served as one archive instead, a whole pack costs a handful. Paging keeps
+   * each response inside D1's result size while the archive is assembled.
+   */
+  'customEmoji.assets.pack': async (env, input) => {
+    const rows = (
+      await env.DB.prepare(
+        `SELECT ce.custom_emoji_id, ce.position, ce.emoji, ce.render_kind,
+                ce.needs_repainting, a.content_type, a.data_base64
+         FROM custom_emoji ce
+         JOIN custom_emoji_assets a
+           ON a.custom_emoji_id = ce.custom_emoji_id AND a.kind = 'thumbnail'
+         WHERE ce.pack_id = ?1
+         ORDER BY ce.position
+         LIMIT ?2 OFFSET ?3`,
+      )
+        .bind(input.packId, input.limit, input.offset)
+        .all()
+    ).results;
+    return rows;
   },
   'customEmoji.assets.store': async (env, input) => {
     await env.DB.prepare(
@@ -7588,6 +7650,9 @@ const handlers: { [K in WorkerOperation]: Handler<K> } = {
     // their short keys, so both live in the same row without widening the CHECK.
     const customEmojiId = input.customEmojiId ?? null;
     if (customEmojiId) {
+      // Reacting with a premium emoji is a Premium feature; reactions already
+      // placed stay visible to everyone.
+      await requirePremium(env, input.userId);
       const known = await env.DB.prepare(
         'SELECT 1 AS found FROM custom_emoji WHERE custom_emoji_id = ?1',
       )
@@ -9737,6 +9802,9 @@ const handlers: { [K in WorkerOperation]: Handler<K> } = {
       .first<{ author_user_id: string }>();
     if (!post) throw new ApiError(404, 'POST_NOT_FOUND', 'Post not found');
     const premium = Boolean(await premiumEnd(env, input.userId));
+    if (!premium && CUSTOM_EMOJI_TOKEN.test(input.body)) {
+      throw new ApiError(403, 'PREMIUM_REQUIRED', 'Custom emoji require Premium');
+    }
     const policy = checkContentLinkPolicy(input.body, premium);
     if (!policy.allowed) throw new ApiError(403, 'LINK_POLICY_VIOLATION', policy.reason);
     const parent = input.parentCommentId

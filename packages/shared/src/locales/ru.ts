@@ -531,6 +531,8 @@ export const ru = {
     internalError: 'Внутренняя ошибка сервиса',
     premiumRequired:
       'Эта возможность доступна только с RoleMate Premium. Откройте раздел «Premium», выберите свой тариф и оплатите его Telegram Stars.',
+    customEmojiPremiumRequired:
+      'Премиум-эмодзи доступны с RoleMate Premium. Уже отправленные эмодзи остаются видны всем, а ваше оформление вернётся сразу после продления подписки.',
     unsupportedChatMedia: 'Этот формат файла нельзя отправить в анонимный чат.',
     chatMediaTooLarge: 'Файл слишком большой: фото — до 8 МБ, остальные медиа — до 20 МБ.',
     callsNotConfigured: 'Звонки подготовлены, но безопасный TURN-канал ещё не подключён.',
@@ -726,6 +728,9 @@ export const ru = {
       customEmojiPickerTitle: 'Загруженные премиум-эмодзи',
       customEmojiOpenPack: 'Показать набор эмодзи',
       customEmojiInsert: 'Вставить премиум-эмодзи',
+      customEmojiPremiumTitle: 'Премиум-эмодзи',
+      customEmojiPremiumHint:
+        'Отправлять премиум-эмодзи и ставить их в шапку профиля можно с RoleMate Premium. Всё, что вы уже отправили, останется видимым, а оформление профиля вернётся сразу после продления.',
       customEmojiRemovePack: 'Удалить набор',
       customEmojiRemovePackConfirm:
         'Удалить набор для всех? Его эмодзи исчезнут из реакций, шапок профилей и текстов.',

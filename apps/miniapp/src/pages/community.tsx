@@ -2735,12 +2735,20 @@ function ChatReactionMenu({
   onReact: (reaction: ChatReaction) => void;
   onClose?: () => void;
 }) {
+  // Reacting with a premium emoji needs a subscription, so the shelf offers them
+  // only to subscribers — and only then is the library worth fetching at all.
+  const premium = useQuery({
+    queryKey: ['premium-status'],
+    queryFn: api.premiumStatus,
+    staleTime: 60_000,
+  });
   // Imported packs are shared by everyone and change rarely, so the library is
   // fetched once and reused by every reaction menu on the screen.
   const library = useQuery({
     queryKey: ['custom-emoji-packs'],
     queryFn: api.customEmojiPacks,
     staleTime: 5 * 60_000,
+    enabled: premium.data?.premium === true,
   });
   // The library can hold hundreds of glyphs — the two test packs alone are 360 —
   // so the inline row stays a short shelf rather than a mile-long scroller.

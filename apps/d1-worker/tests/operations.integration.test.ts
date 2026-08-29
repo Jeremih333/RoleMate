@@ -144,6 +144,16 @@ async function upsert(id: number): Promise<string> {
   return result.userId;
 }
 
+/** Premium is required to use custom emoji, so tests about them start subscribed. */
+function grantPremium(userId: string): void {
+  sqlite
+    .prepare(
+      `INSERT INTO premium_entitlements (id, user_id, source, status, starts_at, ends_at)
+       VALUES (?, ?, 'admin', 'active', CURRENT_TIMESTAMP, datetime('now', '+7 days'))`,
+    )
+    .run(crypto.randomUUID(), userId);
+}
+
 async function onboard(id: number): Promise<string> {
   const userId = await upsert(id);
   await executeOperation(
@@ -163,6 +173,184 @@ async function onboard(id: number): Promise<string> {
 }
 
 describe('D1 domain operations', () => {
+  it('lets only subscribers use premium emoji, while what is already sent stays visible', async () => {
+    const freeUser = await onboard(2_911);
+    const subscriber = await onboard(2_912);
+    sqlite
+      .prepare(
+        `INSERT INTO premium_entitlements (id, user_id, source, status, starts_at, ends_at)
+         VALUES (?, ?, 'admin', 'active', CURRENT_TIMESTAMP, datetime('now', '+7 days'))`,
+      )
+      .run(crypto.randomUUID(), subscriber);
+
+    const importPack = (userId: string, setName: string) =>
+      executeOperation(
+        env,
+        'customEmoji.import',
+        {
+          userId,
+          setName,
+          title: setName,
+          emoji: [
+            {
+              customEmojiId: '9501',
+              fileId: 'file-premium',
+              renderKind: 'static',
+              needsRepainting: false,
+            },
+          ],
+        },
+        crypto.randomUUID(),
+      );
+
+    // Importing a pack is part of using the feature.
+    await expect(importPack(freeUser, 'FreeAttempt')).rejects.toMatchObject({
+      code: 'PREMIUM_REQUIRED',
+    });
+    await importPack(subscriber, 'PaidPack');
+
+    const conversation = (await executeOperation(
+      env,
+      'conversations.startDirect',
+      { userId: subscriber, targetUserId: freeUser },
+      crypto.randomUUID(),
+    )) as { conversationId: string };
+    const message = (await executeOperation(
+      env,
+      'conversations.recordMiniAppMessage',
+      {
+        userId: subscriber,
+        conversationId: conversation.conversationId,
+        destinationMessageId: 9_501,
+        messageType: 'text',
+        encryptedContent: 'encrypted.premium-emoji.payload',
+      },
+      crypto.randomUUID(),
+    )) as { messageId: string };
+
+    const react = (userId: string) =>
+      executeOperation(
+        env,
+        'conversations.messages.react',
+        {
+          userId,
+          conversationId: conversation.conversationId,
+          messageId: message.messageId,
+          reaction: 'custom',
+          customEmojiId: '9501',
+        },
+        crypto.randomUUID(),
+      );
+    await expect(react(freeUser)).rejects.toMatchObject({ code: 'PREMIUM_REQUIRED' });
+    await expect(react(subscriber)).resolves.toMatchObject({ reaction: '9501' });
+
+    // Everyone can still see it — a reaction already placed does not disappear
+    // for the person without a subscription.
+    const listed = (await executeOperation(
+      env,
+      'conversations.messages.list',
+      { userId: freeUser, conversationId: conversation.conversationId, limit: 20 },
+      crypto.randomUUID(),
+    )) as Array<{ id: string; reactions: string }>;
+    expect(
+      JSON.parse(listed.find((row) => row.id === message.messageId)?.reactions ?? '[]'),
+    ).toEqual([{ reaction: '9501', count: 1 }]);
+
+    // Writing one into a comment needs the subscription as well.
+    const postId = crypto.randomUUID();
+    sqlite
+      .prepare(
+        `INSERT INTO telegram_posts
+           (id, author_user_id, content_type, text_preview, status, published_at)
+         VALUES (?, ?, 'text', 'Premium emoji post', 'active', CURRENT_TIMESTAMP)`,
+      )
+      .run(postId, subscriber);
+    await expect(
+      executeOperation(
+        env,
+        'posts.comments.create',
+        { userId: freeUser, postId, body: 'nice [ce:9501]' },
+        crypto.randomUUID(),
+      ),
+    ).rejects.toMatchObject({ code: 'PREMIUM_REQUIRED' });
+    await expect(
+      executeOperation(
+        env,
+        'posts.comments.create',
+        { userId: freeUser, postId, body: 'plain words are fine' },
+        crypto.randomUUID(),
+      ),
+    ).resolves.toMatchObject({ created: true });
+  });
+
+  it('keeps profile decoration through a lapse and brings it back with the subscription', async () => {
+    const userId = await onboard(2_901);
+    const viewerId = await onboard(2_902);
+    const grantPremium = () =>
+      sqlite
+        .prepare(
+          `INSERT INTO premium_entitlements (id, user_id, source, status, starts_at, ends_at)
+           VALUES (?, ?, 'admin', 'active', CURRENT_TIMESTAMP, datetime('now', '+7 days'))`,
+        )
+        .run(crypto.randomUUID(), userId);
+    const expirePremium = () =>
+      sqlite
+        .prepare(
+          "UPDATE premium_entitlements SET ends_at = datetime('now', '-1 minute') WHERE user_id = ?",
+        )
+        .run(userId);
+    const profileInput = {
+      userId,
+      displayName: 'Decorated',
+      bio: 'Appearance has to survive a lapse and come back with the subscription.',
+      avatarMediaIds: [] as string[],
+      visibilityMode: 'public' as const,
+      showFollowers: true,
+      showFollowing: true,
+      showQuestionnaires: true,
+      showPosts: true,
+      showLastSeen: true,
+      directMessagePolicy: 'everyone' as const,
+    };
+    const save = (extra: Record<string, unknown>) =>
+      executeOperation(
+        env,
+        'publicProfiles.update',
+        { ...profileInput, ...extra },
+        crypto.randomUUID(),
+      );
+    const stored = () =>
+      sqlite
+        .prepare('SELECT accent_color, header_emoji FROM user_profiles WHERE user_id = ?')
+        .get(userId);
+    const presented = async () =>
+      (await executeOperation(
+        env,
+        'publicProfiles.get',
+        { requesterUserId: viewerId, profileUserId: userId },
+        crypto.randomUUID(),
+      )) as { accent_color: number | null; header_emoji: string | null };
+
+    grantPremium();
+    await save({ accentColor: 5, headerEmoji: '⭐' });
+    expect(stored()).toEqual({ accent_color: 5, header_emoji: '⭐' });
+    expect(await presented()).toMatchObject({ accent_color: 5 });
+
+    // Lapsed: the profile is presented plain, but the choice is remembered.
+    expirePremium();
+    expect(await presented()).toMatchObject({ accent_color: null, header_emoji: null });
+    expect(stored()).toEqual({ accent_color: 5, header_emoji: '⭐' });
+
+    // Saving while lapsed must not erase it either — that is what made the
+    // decoration unrecoverable after somebody edited their bio.
+    await save({ accentColor: 9, headerEmoji: null });
+    expect(stored()).toEqual({ accent_color: 5, header_emoji: '⭐' });
+
+    // Buying again brings the same decoration straight back.
+    grantPremium();
+    expect(await presented()).toMatchObject({ accent_color: 5, header_emoji: '⭐' });
+  });
+
   it('never closes a conversation except by blocking, and unblocking gives it back', async () => {
     const first = await onboard(2_801);
     const second = await onboard(2_802);
@@ -250,6 +438,7 @@ describe('D1 domain operations', () => {
 
   it('caches emoji bytes once and stops offering them for hydration', async () => {
     const userId = await onboard(2_711);
+    grantPremium(userId);
     await executeOperation(
       env,
       'customEmoji.import',
@@ -344,6 +533,7 @@ describe('D1 domain operations', () => {
 
   it('removes an emoji pack everywhere it was used, and only for people allowed to', async () => {
     const importerId = await onboard(2_701);
+    grantPremium(importerId);
     const strangerId = await onboard(2_702);
     const partnerId = await onboard(2_703);
     const pack = (await executeOperation(
@@ -487,6 +677,7 @@ describe('D1 domain operations', () => {
 
   it('caps how many packs one person can import into the shared library', async () => {
     const userId = await onboard(2_631);
+    grantPremium(userId);
     sqlite
       .prepare("INSERT INTO app_config (key, value) VALUES ('custom_emoji_packs_per_user', '2')")
       .run();
@@ -521,6 +712,7 @@ describe('D1 domain operations', () => {
 
   it('reacts with a custom emoji, groups it by id and refuses an unknown one', async () => {
     const first = await onboard(2_621);
+    grantPremium(first);
     const second = await onboard(2_622);
     const conversation = (await executeOperation(
       env,
@@ -598,6 +790,7 @@ describe('D1 domain operations', () => {
 
   it('keeps header decoration on Premium and monochrome emoji, and rolls it back when Premium ends', async () => {
     const userId = await onboard(2_611);
+    grantPremium(userId);
     const viewerId = await onboard(2_612);
     await executeOperation(
       env,
@@ -637,8 +830,13 @@ describe('D1 domain operations', () => {
       directMessagePolicy: 'everyone' as const,
     };
 
-    // Without Premium the decoration is dropped rather than refused, exactly as
-    // the accent colour already behaves.
+    // Without Premium a decoration simply does not take: the request is not
+    // refused, and whatever was there before is left exactly as it was.
+    sqlite
+      .prepare(
+        "UPDATE premium_entitlements SET ends_at = datetime('now', '-1 minute') WHERE user_id = ?",
+      )
+      .run(userId);
     await executeOperation(
       env,
       'publicProfiles.update',
@@ -651,12 +849,7 @@ describe('D1 domain operations', () => {
         .get(userId),
     ).toEqual({ accent_color: null, header_custom_emoji_id: null });
 
-    sqlite
-      .prepare(
-        `INSERT INTO premium_entitlements (id, user_id, source, status, starts_at, ends_at)
-         VALUES (?, ?, 'admin', 'active', CURRENT_TIMESTAMP, datetime('now', '+7 days'))`,
-      )
-      .run(crypto.randomUUID(), userId);
+    grantPremium(userId);
 
     // A full-colour emoji cannot decorate a header: it would ignore the tint.
     await expect(
@@ -711,7 +904,9 @@ describe('D1 domain operations', () => {
 
   it('imports a custom emoji pack, re-imports it in place and shares it with everyone', async () => {
     const importerId = await onboard(2_601);
+    grantPremium(importerId);
     const otherId = await onboard(2_602);
+    grantPremium(otherId);
     const emoji = (count: number, offset = 0) =>
       Array.from({ length: count }, (_, index) => ({
         customEmojiId: String(5_000 + offset + index),

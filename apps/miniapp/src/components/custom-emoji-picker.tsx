@@ -5,6 +5,13 @@ import { ru } from '@rolemate/shared';
 import { api } from '../api.js';
 import { Button, useConfirmPrompt } from './ui.js';
 import { CustomEmojiGlyph } from './custom-emoji-glyph.js';
+import { useCustomEmojiArchives } from './use-custom-emoji-archives.js';
+
+/** Bytes from the pack archive when they arrived, and nothing otherwise. */
+function archiveSource(urls: Map<string, string>, id: string): { srcOverride?: string } {
+  const url = urls.get(id);
+  return url ? { srcOverride: url } : {};
+}
 
 /**
  * The imported packs, in one sheet.
@@ -44,6 +51,9 @@ export function CustomEmojiPickerDialog({
     },
   });
 
+  // Every pack the sheet is about to show is fetched as a single archive: the
+  // grid then paints from bytes already in hand rather than a request per glyph.
+  const archiveUrls = useCustomEmojiArchives((library.data?.packs ?? []).map((pack) => pack.id));
   const packs = library.data?.packs ?? [];
   const emoji = (library.data?.emoji ?? []).filter(
     (item) => !monochromeOnly || item.needs_repainting === 1,
@@ -120,6 +130,7 @@ export function CustomEmojiPickerDialog({
                         renderKind={item.render_kind}
                         label={item.emoji}
                         size={30}
+                        {...archiveSource(archiveUrls, item.custom_emoji_id)}
                       />
                     </button>
                   ))}

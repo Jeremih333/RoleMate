@@ -693,6 +693,15 @@ export const api = {
       },
     ),
   customEmojiPacks: () => request<CustomEmojiLibrary>('/custom-emoji/packs'),
+  // A whole pack in one response: the index of where each glyph sits, then all
+  // their bytes. Painting a picker used to cost one request per glyph.
+  customEmojiPackArchive: async (packId: string): Promise<ArrayBuffer> => {
+    const response = await fetch(`/api/custom-emoji/packs/${packId}/archive`, {
+      credentials: 'include',
+    });
+    if (!response.ok) throw new Error(`archive request failed with ${response.status}`);
+    return response.arrayBuffer();
+  },
   removeCustomEmojiPack: (packId: string) =>
     request<{ removed: true }>(`/custom-emoji/packs/${packId}`, {
       method: 'DELETE',
@@ -765,10 +774,7 @@ export const api = {
       method: 'POST',
       body: JSON.stringify(input),
     }),
-  controlConversation: (
-    conversationId: string,
-    action: 'mute' | 'unmute' | 'pause' | 'resume',
-  ) =>
+  controlConversation: (conversationId: string, action: 'mute' | 'unmute' | 'pause' | 'resume') =>
     request<{ status: string; muted: boolean }>(`/conversations/${conversationId}/control`, {
       method: 'POST',
       body: JSON.stringify({ action }),

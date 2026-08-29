@@ -3686,7 +3686,7 @@ const handlers: { [K in WorkerOperation]: Handler<K> } = {
     return { removed: true };
   },
   'customEmoji.assets.pending': async (env, input) => {
-    return (
+    const rows = (
       await env.DB.prepare(
         `SELECT ce.custom_emoji_id, ce.file_id, ce.thumbnail_file_id, ce.render_kind
          FROM custom_emoji ce
@@ -3694,15 +3694,29 @@ const handlers: { [K in WorkerOperation]: Handler<K> } = {
            SELECT 1 FROM custom_emoji_assets a
            WHERE a.custom_emoji_id = ce.custom_emoji_id AND a.kind = ?1
          )
-         -- Random rather than ordered: a file Telegram will not give us would
-         -- otherwise sit at the head of the queue and hold up everything behind
-         -- it on every run.
-         ORDER BY RANDOM()
+         -- A file Telegram will not give us must not hold up the queue for ever:
+         -- what has never been tried goes first, and what keeps failing is left
+         -- alone for a day rather than costing a call every single minute.
+         AND (ce.hydration_attempts < 6 OR ce.hydration_attempted_at < datetime('now', '-1 day'))
+         ORDER BY ce.hydration_attempts ASC, RANDOM()
          LIMIT ?2`,
       )
         .bind(input.kind, input.limit)
-        .all()
+        .all<{ custom_emoji_id: string }>()
     ).results;
+    if (rows.length) {
+      // Counted before the download rather than after it: a run that dies
+      // halfway must not leave the same files at the head of the queue.
+      await env.DB.prepare(
+        `UPDATE custom_emoji
+         SET hydration_attempts = hydration_attempts + 1,
+             hydration_attempted_at = CURRENT_TIMESTAMP
+         WHERE custom_emoji_id IN (SELECT value FROM json_each(?1))`,
+      )
+        .bind(json(rows.map((row) => row.custom_emoji_id)))
+        .run();
+    }
+    return rows;
   },
   /**
    * The cached bytes of one pack, in grid order, a page at a time.
@@ -3777,6 +3791,144 @@ const handlers: { [K in WorkerOperation]: Handler<K> } = {
       ownerUserId: owner.id,
     };
   },
+  /**
+   * Records emoji met in the wild — sent by somebody else, or typed into a
+   * message to the bot — so they can be drawn and their set can be looked at.
+   *
+   * Telegram resolves any custom emoji by id regardless of whether the reader
+   * has the set, and this is the same idea: the set is written down, but it does
+   * not join the shared library until a person adds it, so a stranger's pack
+   * cannot fill the picker of everybody else.
+   */
+  'customEmoji.adopt': async (env, input) => {
+    if (!input.emoji.length) return { packId: null, added: 0 };
+    const existing = await env.DB.prepare('SELECT id FROM custom_emoji_packs WHERE set_name = ?1')
+      .bind(input.setName)
+      .first<{ id: string }>();
+    const packId = existing?.id ?? crypto.randomUUID();
+    const statements = [];
+    if (!existing) {
+      const total = await env.DB.prepare('SELECT COUNT(*) AS total FROM custom_emoji_packs').first<{
+        total: number;
+      }>();
+      const globalLimit = await configInt(env, 'custom_emoji_packs_total', 300, 1, 5000);
+      if (Number(total?.total ?? 0) >= globalLimit) {
+        throw new ApiError(429, 'CUSTOM_EMOJI_LIBRARY_FULL', 'Emoji library is full');
+      }
+      statements.push(
+        env.DB.prepare(
+          `INSERT INTO custom_emoji_packs
+             (id, set_name, title, emoji_count, monochrome_count, imported_by_user_id, discovered)
+           VALUES (?1, ?2, ?3, ?4, ?5, NULL, 1)`,
+        ).bind(
+          packId,
+          input.setName,
+          input.title,
+          input.emoji.length,
+          input.emoji.filter((item) => item.needsRepainting).length,
+        ),
+      );
+    }
+    for (const [position, item] of input.emoji.entries()) {
+      statements.push(
+        env.DB.prepare(
+          `INSERT INTO custom_emoji
+             (custom_emoji_id, pack_id, emoji, file_id, thumbnail_file_id, render_kind,
+              needs_repainting, file_size_bytes, position)
+           VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
+           ON CONFLICT(custom_emoji_id) DO UPDATE SET
+             file_id = excluded.file_id, thumbnail_file_id = excluded.thumbnail_file_id,
+             render_kind = excluded.render_kind, needs_repainting = excluded.needs_repainting`,
+        ).bind(
+          item.customEmojiId,
+          packId,
+          item.emoji ?? '',
+          item.fileId,
+          item.thumbnailFileId ?? null,
+          item.renderKind,
+          item.needsRepainting ? 1 : 0,
+          item.fileSizeBytes ?? null,
+          position,
+        ),
+      );
+    }
+    await env.DB.batch(statements);
+    return { packId, added: input.emoji.length };
+  },
+  /**
+   * What we already know about a handful of emoji ids. The miniapp asks for a
+   * whole screenful at once and draws what comes back; whatever is missing is
+   * looked up at Telegram and adopted, which is one call for many glyphs rather
+   * than one request each.
+   */
+  'customEmoji.describe': async (env, input) => {
+    if (!input.customEmojiIds.length) return [];
+    return (
+      await env.DB.prepare(
+        `SELECT ce.custom_emoji_id, ce.pack_id, ce.emoji, ce.render_kind, ce.needs_repainting,
+                p.set_name, p.title
+         FROM custom_emoji ce
+         JOIN custom_emoji_packs p ON p.id = ce.pack_id
+         WHERE ce.custom_emoji_id IN (SELECT value FROM json_each(?1))
+         LIMIT 200`,
+      )
+        .bind(json(input.customEmojiIds.slice(0, 200)))
+        .all()
+    ).results;
+  },
+  /** One set with its glyphs, for the sheet that opens when an emoji is tapped. */
+  'customEmoji.packs.get': async (env, input) => {
+    const pack = await env.DB.prepare(
+      `SELECT p.id, p.set_name, p.title, p.emoji_count, p.monochrome_count, p.discovered,
+              EXISTS (
+                SELECT 1 FROM user_custom_emoji_packs up
+                WHERE up.pack_id = p.id AND up.user_id = ?2
+              ) AS is_own
+       FROM custom_emoji_packs p WHERE p.id = ?1`,
+    )
+      .bind(input.packId, input.userId)
+      .first();
+    if (!pack) throw new ApiError(404, 'CUSTOM_EMOJI_PACK_NOT_FOUND', 'Pack not found');
+    const emoji = (
+      await env.DB.prepare(
+        `SELECT custom_emoji_id, pack_id, emoji, render_kind, needs_repainting
+         FROM custom_emoji WHERE pack_id = ?1 ORDER BY position LIMIT 200`,
+      )
+        .bind(input.packId)
+        .all()
+    ).results;
+    return { pack, emoji };
+  },
+  /**
+   * Adds a set somebody met to their own library. A set that was only recorded
+   * because it was seen becomes a real one at this point, so it takes the same
+   * subscription that importing a pack by link does.
+   */
+  'customEmoji.packs.install': async (env, input) => {
+    await requirePremium(env, input.userId);
+    const pack = await env.DB.prepare('SELECT id FROM custom_emoji_packs WHERE id = ?1')
+      .bind(input.packId)
+      .first<{ id: string }>();
+    if (!pack) throw new ApiError(404, 'CUSTOM_EMOJI_PACK_NOT_FOUND', 'Pack not found');
+    const own = await env.DB.prepare(
+      'SELECT COUNT(*) AS own FROM user_custom_emoji_packs WHERE user_id = ?1',
+    )
+      .bind(input.userId)
+      .first<{ own: number }>();
+    const perUserLimit = await configInt(env, 'custom_emoji_packs_per_user', 20, 1, 200);
+    if (Number(own?.own ?? 0) >= perUserLimit) {
+      throw new ApiError(429, 'CUSTOM_EMOJI_PACK_LIMIT', 'Too many imported packs');
+    }
+    await env.DB.batch([
+      env.DB.prepare(
+        'INSERT OR IGNORE INTO user_custom_emoji_packs (user_id, pack_id) VALUES (?1, ?2)',
+      ).bind(input.userId, input.packId),
+      env.DB.prepare('UPDATE custom_emoji_packs SET discovered = 0 WHERE id = ?1').bind(
+        input.packId,
+      ),
+    ]);
+    return { installed: true };
+  },
   'customEmoji.packs.list': async (env, input) => {
     const packs = (
       await env.DB.prepare(
@@ -3797,6 +3949,11 @@ const handlers: { [K in WorkerOperation]: Handler<K> } = {
                   ELSE 0
                 END AS can_remove
          FROM custom_emoji_packs p
+         WHERE p.discovered = 0
+            OR EXISTS (
+                 SELECT 1 FROM user_custom_emoji_packs up
+                 WHERE up.pack_id = p.id AND up.user_id = ?1
+               )
          ORDER BY is_own DESC, p.created_at ASC
          LIMIT ?2`,
       )
@@ -3808,12 +3965,19 @@ const handlers: { [K in WorkerOperation]: Handler<K> } = {
       await env.DB.prepare(
         // Bounded on purpose: this list is read by every reaction menu, and rows
         // read are the scarcest thing on the free plan.
+        // Joined to the pack list in the order it was built, so the cap can only
+        // ever cut into packs the reader does not own: an emoji of your own must
+        // never be the one missing from the grid.
         `SELECT ce.custom_emoji_id, ce.pack_id, ce.emoji, ce.render_kind, ce.needs_repainting
          FROM custom_emoji ce
-         ORDER BY ce.pack_id, ce.position
+         JOIN json_each(?2) j ON j.value = ce.pack_id
+         ORDER BY j.key, ce.position
          LIMIT ?1`,
       )
-        .bind(await configInt(env, 'custom_emoji_library_limit', 600, 50, 3000))
+        .bind(
+          await configInt(env, 'custom_emoji_library_limit', 600, 50, 3000),
+          json(packs.map((pack) => pack.id)),
+        )
         .all()
     ).results;
     return { packs, emoji };

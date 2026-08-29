@@ -18,6 +18,7 @@ export function CustomEmojiGlyph({
   size = 22,
   animate = false,
   srcOverride,
+  sourceType,
 }: {
   customEmojiId: string;
   renderKind?: CustomEmojiRenderKind;
@@ -26,10 +27,25 @@ export function CustomEmojiGlyph({
   animate?: boolean;
   /** Bytes already in hand — from a pack archive — instead of a request of its own. */
   srcOverride?: string;
+  /** What those bytes actually are, when the archive said so. */
+  sourceType?: string;
 }) {
   const holderRef = useRef<HTMLSpanElement>(null);
   const [playing, setPlaying] = useState(false);
-  const shouldAnimate = animate && renderKind !== 'static';
+  // A still picture is what a cell normally holds, but not every emoji has one:
+  // when Telegram offers no separate thumbnail we keep the emoji itself, which is
+  // a Lottie document or a small video. Drawing that in an <img> shows nothing at
+  // all — the empty cells in a pack were exactly this — so the kind of the bytes
+  // decides the element, and a picture that fails to decode falls back the same
+  // way rather than leaving a hole.
+  const [stillFailed, setStillFailed] = useState(false);
+  const stillIsPicture = !sourceType || sourceType.startsWith('image/');
+  const playInstead = renderKind !== 'static' && (!stillIsPicture || stillFailed);
+  const shouldAnimate = (animate || playInstead) && renderKind !== 'static';
+
+  useEffect(() => {
+    setStillFailed(false);
+  }, [customEmojiId, srcOverride]);
 
   useEffect(() => {
     if (!shouldAnimate) return;
@@ -49,7 +65,11 @@ export function CustomEmojiGlyph({
           // eval(), which our Content-Security-Policy refuses, and emoji have no
           // expressions in them anyway.
           import('lottie-web/build/player/lottie_light'),
-          fetch(`/api/custom-emoji/${customEmojiId}?thumbnail=0`),
+          fetch(
+            srcOverride && sourceType === 'application/json'
+              ? srcOverride
+              : `/api/custom-emoji/${customEmojiId}?thumbnail=0`,
+          ),
         ]);
         if (!response.ok || cancelled) return;
         const animationData: unknown = await response.json();
@@ -90,7 +110,7 @@ export function CustomEmojiGlyph({
       observer.disconnect();
       destroy?.();
     };
-  }, [customEmojiId, renderKind, shouldAnimate]);
+  }, [customEmojiId, renderKind, shouldAnimate, srcOverride, sourceType]);
 
   const dimensions = { width: size, height: size };
   if (shouldAnimate && renderKind === 'video' && playing) {
@@ -98,7 +118,11 @@ export function CustomEmojiGlyph({
       <video
         className="custom-emoji-glyph"
         style={dimensions}
-        src={`/api/custom-emoji/${customEmojiId}?thumbnail=0`}
+        src={
+          srcOverride && sourceType?.startsWith('video/')
+            ? srcOverride
+            : `/api/custom-emoji/${customEmojiId}?thumbnail=0`
+        }
         autoPlay
         loop
         muted
@@ -114,7 +138,7 @@ export function CustomEmojiGlyph({
       aria-label={label || undefined}
       role={label ? 'img' : undefined}
     >
-      {playing && renderKind === 'lottie' ? null : (
+      {(playing && renderKind === 'lottie') || playInstead ? null : (
         <img
           className="custom-emoji-glyph"
           style={dimensions}
@@ -122,6 +146,7 @@ export function CustomEmojiGlyph({
           alt={label}
           loading="lazy"
           decoding="async"
+          onError={() => setStillFailed(true)}
         />
       )}
     </span>

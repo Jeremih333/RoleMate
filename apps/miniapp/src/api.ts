@@ -702,6 +702,23 @@ export const api = {
     if (!response.ok) throw new Error(`archive request failed with ${response.status}`);
     return response.arrayBuffer();
   },
+  // One request for every emoji a screenful of text mentions. Ids nobody here
+  // has imported are looked up at Telegram once and written down, which is how
+  // an emoji from somebody else's set arrives at all.
+  describeCustomEmoji: (customEmojiIds: string[]) =>
+    request<CustomEmojiDescriptor[]>('/custom-emoji/resolve', {
+      method: 'POST',
+      body: JSON.stringify({ customEmojiIds }),
+    }),
+  customEmojiPack: (packId: string) =>
+    request<{ pack: CustomEmojiPackDetail; emoji: CustomEmojiItem[] }>(
+      `/custom-emoji/packs/${packId}`,
+    ),
+  installCustomEmojiPack: (packId: string) =>
+    request<{ installed: true }>(`/custom-emoji/packs/${packId}/install`, {
+      method: 'POST',
+      body: '{}',
+    }),
   removeCustomEmojiPack: (packId: string) =>
     request<{ removed: true }>(`/custom-emoji/packs/${packId}`, {
       method: 'DELETE',
@@ -1262,6 +1279,15 @@ export interface CustomEmojiItem {
   emoji: string;
   render_kind: 'static' | 'video' | 'lottie';
   needs_repainting: number;
+}
+
+export interface CustomEmojiDescriptor extends CustomEmojiItem {
+  set_name: string;
+  title: string;
+}
+
+export interface CustomEmojiPackDetail extends Omit<CustomEmojiPack, 'can_remove'> {
+  discovered: number;
 }
 
 export interface CustomEmojiLibrary {

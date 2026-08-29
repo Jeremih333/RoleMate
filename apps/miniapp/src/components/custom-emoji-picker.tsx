@@ -2,24 +2,21 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Trash2, X } from 'lucide-react';
 import { createPortal } from 'react-dom';
 import { ru } from '@rolemate/shared';
-import { api } from '../api.js';
+import { api, type CustomEmojiItem } from '../api.js';
 import { Button, useConfirmPrompt } from './ui.js';
 import { CustomEmojiGlyph } from './custom-emoji-glyph.js';
+import { useCustomEmojiSources } from './custom-emoji-library.js';
 import { useCustomEmojiArchives } from './use-custom-emoji-archives.js';
-
-/** Bytes from the pack archive when they arrived, and nothing otherwise. */
-function archiveSource(urls: Map<string, string>, id: string): { srcOverride?: string } {
-  const url = urls.get(id);
-  return url ? { srcOverride: url } : {};
-}
 
 /**
  * The imported packs, in one sheet.
  *
  * It is used to choose a header emoji (repaintable ones only — a full-colour
  * glyph cannot take the header's colour), to insert an emoji into text, and to
- * simply look at a pack when somebody taps one of its emoji. Removing a pack
- * takes it out everywhere, so it is offered only to whoever brought it in and to
+ * simply look at a pack when somebody taps one of its emoji. A pack nobody here
+ * has imported can be looked at the same way and added from the sheet, which is
+ * the whole path from meeting an emoji to owning its set. Removing a pack takes
+ * it out everywhere, so it is offered only to whoever brought it in and to
  * staff, and always behind a confirmation.
  */
 export function CustomEmojiPickerDialog({
@@ -40,7 +37,7 @@ export function CustomEmojiPickerDialog({
   const library = useQuery({
     queryKey: ['custom-emoji-packs'],
     queryFn: api.customEmojiPacks,
-    staleTime: 5 * 60_000,
+    staleTime: 30 * 60_000,
   });
   const remove = useMutation({
     mutationFn: (packId: string) => api.removeCustomEmojiPack(packId),
@@ -50,22 +47,64 @@ export function CustomEmojiPickerDialog({
       void queryClient.invalidateQueries({ queryKey: ['conversations'] });
     },
   });
+  const install = useMutation({
+    mutationFn: (packId: string) => api.installCustomEmojiPack(packId),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ['custom-emoji-packs'] });
+    },
+  });
 
-  // Every pack the sheet is about to show is fetched as a single archive: the
-  // grid then paints from bytes already in hand rather than a request per glyph.
-  const archiveUrls = useCustomEmojiArchives((library.data?.packs ?? []).map((pack) => pack.id));
+  // Bytes already in hand: the shared library keeps one archive per imported
+  // pack, so a grid of hundreds of glyphs costs nothing further to paint.
+  const lookup = useCustomEmojiSources();
   const packs = library.data?.packs ?? [];
-  const emoji = (library.data?.emoji ?? []).filter(
-    (item) => !monochromeOnly || item.needs_repainting === 1,
-  );
+  const emoji = library.data?.emoji ?? [];
+  // An emoji tapped in a message may belong to a set nobody here has. Its set is
+  // fetched on its own, exactly as Telegram opens a sticker set from a message.
+  const known = emoji.some((item) => item.custom_emoji_id === focusPackOfEmojiId);
+  const foreign = useQuery({
+    queryKey: ['custom-emoji-of', focusPackOfEmojiId],
+    queryFn: async () => {
+      const [described] = await api.describeCustomEmoji([focusPackOfEmojiId ?? '']);
+      return described ? await api.customEmojiPack(described.pack_id) : null;
+    },
+    enabled: Boolean(focusPackOfEmojiId) && !known && !library.isLoading,
+    staleTime: 30 * 60_000,
+  });
+  const foreignPackId = foreign.data?.pack.id;
+  const foreignSources = useCustomEmojiArchives(foreignPackId ? [foreignPackId] : []);
+
   const focusPackId = focusPackOfEmojiId
-    ? (library.data?.emoji.find((item) => item.custom_emoji_id === focusPackOfEmojiId)?.pack_id ??
-      null)
+    ? (emoji.find((item) => item.custom_emoji_id === focusPackOfEmojiId)?.pack_id ?? null)
     : null;
-  const groups = packs
-    .filter((pack) => !focusPackId || pack.id === focusPackId)
-    .map((pack) => ({ pack, items: emoji.filter((item) => item.pack_id === pack.id) }))
-    .filter((group) => group.items.length > 0);
+  const visible = (items: CustomEmojiItem[]) =>
+    items.filter((item) => !monochromeOnly || item.needs_repainting === 1);
+  const groups: Array<{
+    pack: { id: string; title: string; is_own: number; can_remove: number };
+    items: CustomEmojiItem[];
+  }> = foreign.data
+    ? [
+        {
+          pack: { ...foreign.data.pack, can_remove: 0 },
+          items: visible(foreign.data.emoji),
+        },
+      ]
+    : packs
+        .filter((pack) => !focusPackId || pack.id === focusPackId)
+        .map((pack) => ({ pack, items: visible(emoji.filter((item) => item.pack_id === pack.id)) }))
+        .filter((group) => group.items.length > 0);
+
+  const sourceFor = (customEmojiId: string): { srcOverride?: string; sourceType?: string } => {
+    const fromLibrary = lookup(customEmojiId);
+    if (fromLibrary?.src) {
+      return {
+        srcOverride: fromLibrary.src,
+        ...(fromLibrary.sourceType ? { sourceType: fromLibrary.sourceType } : {}),
+      };
+    }
+    const fromForeign = foreignSources.get(customEmojiId);
+    return fromForeign ? { srcOverride: fromForeign.url, sourceType: fromForeign.contentType } : {};
+  };
 
   return createPortal(
     <div className="custom-emoji-sheet-backdrop" role="presentation" onMouseDown={onClose}>
@@ -82,7 +121,7 @@ export function CustomEmojiPickerDialog({
             <X aria-hidden />
           </button>
         </header>
-        {library.isLoading ? (
+        {library.isLoading || foreign.isLoading ? (
           <p className="custom-emoji-sheet-note">{ru.miniApp.social.customEmojiLoading}</p>
         ) : groups.length ? (
           <div className="custom-emoji-sheet-body">
@@ -112,6 +151,17 @@ export function CustomEmojiPickerDialog({
                     </button>
                   ) : null}
                 </div>
+                {pack.is_own ? null : (
+                  <Button
+                    variant="secondary"
+                    disabled={install.isPending}
+                    onClick={() => install.mutate(pack.id)}
+                  >
+                    {install.isSuccess
+                      ? ru.miniApp.social.customEmojiPackAdded
+                      : ru.miniApp.social.customEmojiAddPack}
+                  </Button>
+                )}
                 <div className="custom-emoji-grid">
                   {items.map((item) => (
                     <button
@@ -130,7 +180,7 @@ export function CustomEmojiPickerDialog({
                         renderKind={item.render_kind}
                         label={item.emoji}
                         size={30}
-                        {...archiveSource(archiveUrls, item.custom_emoji_id)}
+                        {...sourceFor(item.custom_emoji_id)}
                       />
                     </button>
                   ))}
@@ -142,6 +192,7 @@ export function CustomEmojiPickerDialog({
           <p className="custom-emoji-sheet-note">{ru.miniApp.social.customEmojiEmptyHint}</p>
         )}
         {remove.isError ? <div className="error-box">{remove.error.message}</div> : null}
+        {install.isError ? <div className="error-box">{install.error.message}</div> : null}
         {dialog}
       </section>
     </div>,

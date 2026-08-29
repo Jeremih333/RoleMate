@@ -22,6 +22,12 @@ export interface ParsedArchive {
   bytes: Uint8Array;
 }
 
+/** One glyph's bytes, and what they are: a still, a video or a Lottie document. */
+export interface ArchiveSource {
+  url: string;
+  contentType: string;
+}
+
 export function parseCustomEmojiArchive(buffer: ArrayBuffer): ParsedArchive {
   const view = new DataView(buffer);
   if (buffer.byteLength < 4) throw new Error('archive is too short to hold an index');
@@ -39,26 +45,34 @@ export function parseCustomEmojiArchive(buffer: ArrayBuffer): ParsedArchive {
 }
 
 /**
- * Turns one archive into a URL per glyph. The caller must release them when the
- * picker closes: an object URL lives until it is revoked, and a few hundred of
- * them held for a session is a leak nobody would go looking for.
+ * Turns one archive into a source per glyph. The content type travels with the
+ * bytes because not every emoji has a still picture: where Telegram offers no
+ * separate thumbnail the archive carries the emoji itself, and whoever draws it
+ * has to know whether that is an image, a video or a Lottie document.
+ *
+ * The caller must release the sources when it is done: an object URL lives until
+ * it is revoked, and a few hundred of them held for a session is a leak nobody
+ * would go looking for.
  */
 export function createArchiveObjectUrls(archive: ParsedArchive): {
-  urls: Map<string, string>;
+  urls: Map<string, ArchiveSource>;
   release: () => void;
 } {
-  const urls = new Map<string, string>();
+  const urls = new Map<string, ArchiveSource>();
   for (const entry of archive.entries) {
     if (entry.offset + entry.length > archive.bytes.byteLength) continue;
     // Copied rather than viewed: a Blob wants its own buffer, and a subarray of
     // the archive would keep the whole thing alive for one glyph.
     const slice = archive.bytes.slice(entry.offset, entry.offset + entry.length);
-    urls.set(entry.id, URL.createObjectURL(new Blob([slice.buffer], { type: entry.contentType })));
+    urls.set(entry.id, {
+      url: URL.createObjectURL(new Blob([slice.buffer], { type: entry.contentType })),
+      contentType: entry.contentType,
+    });
   }
   return {
     urls,
     release: () => {
-      for (const url of urls.values()) URL.revokeObjectURL(url);
+      for (const source of urls.values()) URL.revokeObjectURL(source.url);
       urls.clear();
     },
   };

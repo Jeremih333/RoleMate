@@ -902,6 +902,132 @@ describe('D1 domain operations', () => {
     });
   });
 
+  it('adopts an emoji met in the wild, shows its set and lets somebody add it', async () => {
+    const readerId = await onboard(2_611);
+    grantPremium(readerId);
+    const seen = [
+      {
+        customEmojiId: '6001',
+        emoji: 'X',
+        fileId: 'wild-1',
+        thumbnailFileId: 'wild-thumb-1',
+        renderKind: 'static' as const,
+        needsRepainting: false,
+      },
+      {
+        customEmojiId: '6002',
+        emoji: 'Y',
+        fileId: 'wild-2',
+        renderKind: 'video' as const,
+        needsRepainting: true,
+      },
+    ];
+    const adopted = (await executeOperation(
+      env,
+      'customEmoji.adopt',
+      { setName: 'WildSet', title: 'Wild Set', emoji: seen },
+      crypto.randomUUID(),
+    )) as { packId: string; added: number };
+    expect(adopted.added).toBe(2);
+
+    // Described by id, the way a client asks about an emoji it has just met.
+    const described = (await executeOperation(
+      env,
+      'customEmoji.describe',
+      { customEmojiIds: ['6001', '6002', '6003'] },
+      crypto.randomUUID(),
+    )) as Array<{ custom_emoji_id: string; set_name: string }>;
+    expect(described.map((row) => row.custom_emoji_id).sort()).toEqual(['6001', '6002']);
+    expect(described[0]?.set_name).toBe('WildSet');
+
+    // A set nobody added stays out of the shared library, so meeting an emoji
+    // cannot fill everybody's picker with strangers' packs.
+    const before = (await executeOperation(
+      env,
+      'customEmoji.packs.list',
+      { userId: readerId, limit: 30 },
+      crypto.randomUUID(),
+    )) as { packs: Array<{ id: string }>; emoji: Array<{ custom_emoji_id: string }> };
+    expect(before.packs.some((pack) => pack.id === adopted.packId)).toBe(false);
+    expect(before.emoji.some((item) => item.custom_emoji_id === '6001')).toBe(false);
+
+    // It can still be looked at, which is what tapping the emoji opens.
+    const detail = (await executeOperation(
+      env,
+      'customEmoji.packs.get',
+      { userId: readerId, packId: adopted.packId },
+      crypto.randomUUID(),
+    )) as {
+      pack: { discovered: number; is_own: number };
+      emoji: Array<{ custom_emoji_id: string }>;
+    };
+    expect(detail.pack).toMatchObject({ discovered: 1, is_own: 0 });
+    expect(detail.emoji).toHaveLength(2);
+
+    await expect(
+      executeOperation(
+        env,
+        'customEmoji.packs.install',
+        { userId: readerId, packId: adopted.packId },
+        crypto.randomUUID(),
+      ),
+    ).resolves.toEqual({ installed: true });
+    const after = (await executeOperation(
+      env,
+      'customEmoji.packs.list',
+      { userId: readerId, limit: 30 },
+      crypto.randomUUID(),
+    )) as {
+      packs: Array<{ id: string; is_own: number }>;
+      emoji: Array<{ custom_emoji_id: string }>;
+    };
+    expect(after.packs.find((pack) => pack.id === adopted.packId)?.is_own).toBe(1);
+    expect(after.emoji.some((item) => item.custom_emoji_id === '6001')).toBe(true);
+  });
+
+  it('stops asking Telegram for a picture it will not give', async () => {
+    const ownerId = await onboard(2_612);
+    grantPremium(ownerId);
+    await executeOperation(
+      env,
+      'customEmoji.import',
+      {
+        userId: ownerId,
+        setName: 'StubbornSet',
+        title: 'Stubborn Set',
+        emoji: [
+          {
+            customEmojiId: '6101',
+            emoji: 'Z',
+            fileId: 'stubborn-1',
+            renderKind: 'static' as const,
+            needsRepainting: false,
+          },
+        ],
+      },
+      crypto.randomUUID(),
+    );
+    const pending = () =>
+      executeOperation(
+        env,
+        'customEmoji.assets.pending',
+        { kind: 'thumbnail', limit: 12 },
+        crypto.randomUUID(),
+      ) as Promise<Array<{ custom_emoji_id: string }>>;
+
+    for (let attempt = 0; attempt < 6; attempt += 1) {
+      expect((await pending()).some((row) => row.custom_emoji_id === '6101')).toBe(true);
+    }
+    // Six failures in, it rests for a day instead of costing a call every minute.
+    expect((await pending()).some((row) => row.custom_emoji_id === '6101')).toBe(false);
+    sqlite
+      .prepare(
+        "UPDATE custom_emoji SET hydration_attempted_at = datetime('now', '-2 days') WHERE custom_emoji_id = '6101'",
+      )
+      .run();
+    expect((await pending()).some((row) => row.custom_emoji_id === '6101')).toBe(true);
+  });
+
   it('imports a custom emoji pack, re-imports it in place and shares it with everyone', async () => {
     const importerId = await onboard(2_601);
     grantPremium(importerId);

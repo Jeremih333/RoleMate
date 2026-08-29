@@ -30,7 +30,7 @@ import { validateUserContentLinks } from './content-policy.js';
 import { InlineKeyboard, InputFile } from 'grammy';
 import { decryptChatContent, encryptChatContent } from './chat-crypto.js';
 import { telegramAudioMetadata } from './telegram-audio-metadata.js';
-import { cacheCustomEmojiAsset } from './custom-emoji.js';
+import { cacheCustomEmojiAsset, describeCustomEmoji } from './custom-emoji.js';
 import { isActionableTelegramUpdate } from './telegram-updates.js';
 import { dispatchTelegramNotificationBatch } from './telegram-notifications.js';
 
@@ -3008,6 +3008,27 @@ export async function buildServer(
   app.get('/api/custom-emoji/packs', async (request) => {
     const session = await authenticate(request);
     return dataApi.execute('customEmoji.packs.list', { userId: session.userId, limit: 30 });
+  });
+  // Everything a screenful of text needs to draw its emoji, in one request.
+  // An emoji nobody here has imported is looked up at Telegram by id and written
+  // down, which is how Telegram's own clients handle an unknown emoji, so a
+  // message from somebody with a different set still arrives whole.
+  app.post('/api/custom-emoji/resolve', async (request) => {
+    await authenticate(request);
+    const { customEmojiIds } = z
+      .object({ customEmojiIds: z.array(z.string().regex(/^[0-9]{1,32}$/)).max(200) })
+      .parse(request.body);
+    return describeCustomEmoji({ bot, dataApi, customEmojiIds });
+  });
+  app.get('/api/custom-emoji/packs/:packId', async (request) => {
+    const session = await authenticate(request);
+    const { packId } = z.object({ packId: z.string().uuid() }).parse(request.params);
+    return dataApi.execute('customEmoji.packs.get', { userId: session.userId, packId });
+  });
+  app.post('/api/custom-emoji/packs/:packId/install', async (request) => {
+    const session = await mutate(request);
+    const { packId } = z.object({ packId: z.string().uuid() }).parse(request.params);
+    return dataApi.execute('customEmoji.packs.install', { userId: session.userId, packId });
   });
   app.delete('/api/custom-emoji/packs/:packId', async (request) => {
     const session = await mutate(request);

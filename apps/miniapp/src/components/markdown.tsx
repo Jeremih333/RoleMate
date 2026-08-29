@@ -4,6 +4,7 @@ import { useQuery } from '@tanstack/react-query';
 import { api } from '../api.js';
 import { ru } from '@rolemate/shared';
 import { CustomEmojiGlyph } from './custom-emoji-glyph.js';
+import { useCustomEmoji } from './custom-emoji-library.js';
 import {
   CUSTOM_EMOJI_TOKEN_PATTERN,
   customEmojiHref,
@@ -76,20 +77,7 @@ export function ProfileMarkdown({
           ),
           a: ({ children: linkChildren, href }) =>
             customEmojiIdFromHref(href) ? (
-              <button
-                type="button"
-                className="custom-emoji-inline"
-                aria-label={ru.miniApp.social.customEmojiOpenPack}
-                title={ru.miniApp.social.customEmojiOpenPack}
-                onClick={() => openCustomEmojiPack(customEmojiIdFromHref(href) ?? '')}
-              >
-                <CustomEmojiGlyph
-                  customEmojiId={customEmojiIdFromHref(href) ?? ''}
-                  renderKind="lottie"
-                  size={20}
-                  animate
-                />
-              </button>
+              <InlineCustomEmoji customEmojiId={customEmojiIdFromHref(href) ?? ''} />
             ) : allowLinks && href ? (
               <a
                 href={href}
@@ -107,5 +95,36 @@ export function ProfileMarkdown({
         {markdown}
       </ReactMarkdown>
     </div>
+  );
+}
+
+/**
+ * A custom emoji inside a piece of text.
+ *
+ * What kind of picture it is comes from the shared library rather than a guess:
+ * assuming every one of them was animated meant fetching a Lottie document for
+ * a plain still, a request per glyph that both failed and cost us dearly. Bytes
+ * already in hand from the pack's archive are used when they are there, and
+ * tapping opens the set the emoji came from.
+ */
+function InlineCustomEmoji({ customEmojiId }: { customEmojiId: string }) {
+  const info = useCustomEmoji(customEmojiId);
+  return (
+    <button
+      type="button"
+      className="custom-emoji-inline"
+      aria-label={ru.miniApp.social.customEmojiOpenPack}
+      title={ru.miniApp.social.customEmojiOpenPack}
+      onClick={() => openCustomEmojiPack(customEmojiId)}
+    >
+      <CustomEmojiGlyph
+        customEmojiId={customEmojiId}
+        renderKind={info?.renderKind ?? 'static'}
+        label={info?.emoji ?? ''}
+        size={20}
+        {...(info?.src ? { srcOverride: info.src } : {})}
+        {...(info?.sourceType ? { sourceType: info.sourceType } : {})}
+      />
+    </button>
   );
 }

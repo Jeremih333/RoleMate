@@ -735,6 +735,9 @@ export const ru = {
       customEmojiRemovePackConfirm:
         'Удалить набор для всех? Его эмодзи исчезнут из реакций, шапок профилей и текстов.',
       customEmojiPackRemoved: 'Набор удалён.',
+      customEmojiAddPack: 'Добавить набор себе',
+      customEmojiPackAdded: 'Набор добавлен — его эмодзи теперь в твоём списке.',
+      customEmojiPackAlready: 'Набор уже у тебя.',
       customEmojiLoading: 'Загружаем наборы…',
       customEmojiClear: 'Убрать эмодзи из шапки',
       customEmojiEmptyHint:

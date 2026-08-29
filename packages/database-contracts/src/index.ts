@@ -438,6 +438,49 @@ export const workerOperations = {
       .min(1)
       .max(200),
   }),
+  'customEmoji.adopt': z.object({
+    setName: z
+      .string()
+      .trim()
+      .min(1)
+      .max(64)
+      .regex(/^[A-Za-z0-9_]+$/),
+    title: z.string().trim().min(1).max(120),
+    emoji: z
+      .array(
+        z.object({
+          customEmojiId: z
+            .string()
+            .trim()
+            .regex(/^[0-9]{1,32}$/),
+          emoji: z.string().max(16).optional(),
+          fileId: z.string().min(1).max(256),
+          thumbnailFileId: z.string().min(1).max(256).optional(),
+          renderKind: z.enum(['static', 'video', 'lottie']),
+          needsRepainting: z.boolean(),
+          fileSizeBytes: z.number().int().min(0).optional(),
+        }),
+      )
+      .max(200),
+  }),
+  'customEmoji.describe': z.object({
+    customEmojiIds: z
+      .array(
+        z
+          .string()
+          .trim()
+          .regex(/^[0-9]{1,32}$/),
+      )
+      .max(200),
+  }),
+  'customEmoji.packs.get': z.object({
+    userId: z.string().uuid(),
+    packId: z.string().uuid(),
+  }),
+  'customEmoji.packs.install': z.object({
+    userId: z.string().uuid(),
+    packId: z.string().uuid(),
+  }),
   'customEmoji.packs.remove': z.object({
     userId: z.string().uuid(),
     packId: z.string().uuid(),

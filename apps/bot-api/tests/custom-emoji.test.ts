@@ -6,8 +6,13 @@ import {
   collectCustomEmoji,
   CUSTOM_EMOJI_MAX_BYTES,
   CUSTOM_EMOJI_SET_LIMIT,
+  describeCustomEmoji,
+  inlineCustomEmojiTokens,
   parseAddEmojiSetName,
 } from '../src/custom-emoji.js';
+
+/** A custom emoji occupies two UTF-16 units in the text Telegram sends. */
+const FACE = String.fromCodePoint(0x1f642);
 
 // needs_repainting is missing from the installed type definitions even though
 // Telegram sends it, so the fixture is assembled as a record and handed over as
@@ -255,5 +260,75 @@ describe('caching a custom emoji', () => {
     });
     expect(getFile).toHaveBeenCalledWith('file-1');
     vi.unstubAllGlobals();
+  });
+});
+
+describe('keeping custom emoji that arrive in a message', () => {
+  // Telegram sends the emoji character in the text and the id only in an entity,
+  // so text stored as it arrives loses the emoji entirely.
+  it('writes each entity back into the text as a token', () => {
+    const text = `a ${FACE} b ${FACE}`;
+    expect(
+      inlineCustomEmojiTokens(text, [
+        { type: 'custom_emoji', offset: 2, length: 2, custom_emoji_id: '11' },
+        { type: 'custom_emoji', offset: 7, length: 2, custom_emoji_id: '22' },
+      ]),
+    ).toBe('a [ce:11] b [ce:22]');
+  });
+
+  it('leaves everything else alone', () => {
+    const text = `a ${FACE}`;
+    expect(inlineCustomEmojiTokens(text, [{ type: 'bold', offset: 0, length: 3 }])).toBe(text);
+    expect(inlineCustomEmojiTokens(text, undefined)).toBe(text);
+    expect(
+      inlineCustomEmojiTokens(text, [
+        { type: 'custom_emoji', offset: 0, length: 99, custom_emoji_id: '11' },
+        { type: 'custom_emoji', offset: 2, length: 2, custom_emoji_id: 'not-a-number' },
+      ]),
+    ).toBe(text);
+  });
+});
+
+describe('describing emoji nobody here has imported', () => {
+  const descriptor = {
+    custom_emoji_id: '77',
+    pack_id: 'pack-1',
+    emoji: '',
+    render_kind: 'static' as const,
+    needs_repainting: 0,
+    set_name: 'SomeSet',
+    title: 'SomeSet',
+  };
+
+  it('asks Telegram once for the unknown ids and writes down the set', async () => {
+    const execute = vi
+      .fn()
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce({ packId: 'pack-1', added: 1 })
+      .mockResolvedValueOnce([descriptor]);
+    const getCustomEmojiStickers = vi
+      .fn()
+      .mockResolvedValue([sticker({ custom_emoji_id: '77', set_name: 'SomeSet' })]);
+    const described = await describeCustomEmoji({
+      bot: { api: { getCustomEmojiStickers } },
+      dataApi: { execute } as never,
+      customEmojiIds: ['77', '77', 'nonsense'],
+    });
+    expect(getCustomEmojiStickers).toHaveBeenCalledWith(['77']);
+    expect(execute.mock.calls[1]?.[0]).toBe('customEmoji.adopt');
+    expect(described).toEqual([descriptor]);
+  });
+
+  it('does not go to Telegram when everything is already known', async () => {
+    const execute = vi.fn().mockResolvedValueOnce([descriptor]);
+    const getCustomEmojiStickers = vi.fn();
+    expect(
+      await describeCustomEmoji({
+        bot: { api: { getCustomEmojiStickers } },
+        dataApi: { execute } as never,
+        customEmojiIds: ['77'],
+      }),
+    ).toEqual([descriptor]);
+    expect(getCustomEmojiStickers).not.toHaveBeenCalled();
   });
 });

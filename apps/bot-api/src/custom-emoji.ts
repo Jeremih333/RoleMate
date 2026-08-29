@@ -142,3 +142,92 @@ export async function cacheCustomEmojiAsset(input: {
     return null;
   }
 }
+
+export interface CustomEmojiDescriptor {
+  custom_emoji_id: string;
+  pack_id: string;
+  emoji: string;
+  render_kind: 'static' | 'video' | 'lottie';
+  needs_repainting: number;
+  set_name: string;
+  title: string;
+}
+
+/**
+ * Describes any custom emoji by id, whether or not anybody here has its set.
+ *
+ * This is how Telegram itself works: a client that meets an unknown emoji asks
+ * the server about the id, draws what comes back, and can then offer the set.
+ * We do the same with getCustomEmojiStickers — one call for a whole screenful of
+ * ids — and write down what it returns, so the next reader costs nothing at all.
+ */
+export async function describeCustomEmoji(input: {
+  bot: {
+    api: { getCustomEmojiStickers: (ids: string[]) => Promise<readonly Sticker[]> };
+  };
+  dataApi: DataApiClient;
+  customEmojiIds: string[];
+}): Promise<CustomEmojiDescriptor[]> {
+  const wanted = [...new Set(input.customEmojiIds.filter((id) => /^[0-9]{1,32}$/.test(id)))].slice(
+    0,
+    200,
+  );
+  if (!wanted.length) return [];
+  const known = await input.dataApi.execute<CustomEmojiDescriptor[]>('customEmoji.describe', {
+    customEmojiIds: wanted,
+  });
+  const missing = wanted.filter((id) => !known.some((row) => row.custom_emoji_id === id));
+  if (!missing.length) return known;
+  try {
+    const stickers = await input.bot.api.getCustomEmojiStickers(missing);
+    const bySet = new Map<string, Sticker[]>();
+    for (const sticker of stickers) {
+      const setName = sticker.set_name;
+      if (!setName) continue;
+      bySet.set(setName, [...(bySet.get(setName) ?? []), sticker]);
+    }
+    for (const [setName, members] of bySet) {
+      await input.dataApi.execute('customEmoji.adopt', {
+        setName,
+        title: (members[0]?.set_name ?? setName).slice(0, 120),
+        emoji: collectCustomEmoji(members),
+      });
+    }
+    if (!bySet.size) return known;
+    return await input.dataApi.execute<CustomEmojiDescriptor[]>('customEmoji.describe', {
+      customEmojiIds: wanted,
+    });
+  } catch {
+    // An emoji nobody can describe simply stays undrawn; it is never worth an
+    // error to the reader of a message that happens to contain one.
+    return known;
+  }
+}
+
+/**
+ * Rewrites a message the way we store text: a custom emoji sent to the bot
+ * arrives as an ordinary emoji character with an entity pointing at it, and only
+ * the entity carries the id. Replacing the character with our `[ce:<id>]` token
+ * is what keeps the emoji when the text later appears in the miniapp.
+ *
+ * Offsets from Telegram count UTF-16 units, which is what a JavaScript string
+ * counts too, so the entities are applied from the end backwards and no offset
+ * has to be adjusted.
+ */
+export function inlineCustomEmojiTokens(
+  text: string,
+  entities: readonly { type: string; offset: number; length: number }[] | undefined,
+): string {
+  const custom = (entities ?? [])
+    .filter((entity) => entity.type === 'custom_emoji')
+    .slice()
+    .sort((left, right) => right.offset - left.offset);
+  let result = text;
+  for (const entity of custom) {
+    const id: unknown = Reflect.get(entity, 'custom_emoji_id');
+    if (typeof id !== 'string' || !/^[0-9]{1,32}$/.test(id)) continue;
+    if (entity.offset < 0 || entity.offset + entity.length > result.length) continue;
+    result = `${result.slice(0, entity.offset)}[ce:${id}]${result.slice(entity.offset + entity.length)}`;
+  }
+  return result;
+}

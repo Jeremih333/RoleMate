@@ -20,6 +20,8 @@ import { telegramAudioMetadata } from './telegram-audio-metadata.js';
 import {
   collectCustomEmoji,
   CUSTOM_EMOJI_SET_LIMIT,
+  describeCustomEmoji,
+  inlineCustomEmojiTokens,
   parseAddEmojiSetName,
 } from './custom-emoji.js';
 
@@ -1655,7 +1657,21 @@ export function createBot(
   });
 
   bot.on('message:text', async (context) => {
-    const text = context.message.text;
+    // A custom emoji reaches the bot as an ordinary character with an entity
+    // pointing at it; written down as it arrives, the emoji would be lost by the
+    // time the text is read in the miniapp. The token keeps it, and the ids are
+    // looked up once so the glyphs can actually be drawn there.
+    const text = inlineCustomEmojiTokens(context.message.text, context.message.entities);
+    if (text !== context.message.text) {
+      await describeCustomEmoji({
+        bot,
+        dataApi,
+        customEmojiIds: (context.message.entities ?? [])
+          .filter((entity) => entity.type === 'custom_emoji')
+          .map((entity) => Reflect.get(entity, 'custom_emoji_id'))
+          .filter((id): id is string => typeof id === 'string'),
+      });
+    }
     const hiddenLinks = (context.message.entities ?? [])
       .filter(
         (entity): entity is typeof entity & { type: 'text_link'; url: string } =>
@@ -1940,7 +1956,28 @@ export function createBot(
         );
         return;
       }
-      const caption = 'caption' in context.message ? context.message.caption : undefined;
+      const rawCaption = 'caption' in context.message ? context.message.caption : undefined;
+      const caption =
+        rawCaption === undefined
+          ? undefined
+          : inlineCustomEmojiTokens(
+              rawCaption,
+              'caption_entities' in context.message ? context.message.caption_entities : undefined,
+            );
+      if (rawCaption !== undefined && caption !== rawCaption) {
+        await describeCustomEmoji({
+          bot,
+          dataApi,
+          customEmojiIds: (
+            ('caption_entities' in context.message
+              ? context.message.caption_entities
+              : undefined) ?? []
+          )
+            .filter((entity) => entity.type === 'custom_emoji')
+            .map((entity) => Reflect.get(entity, 'custom_emoji_id'))
+            .filter((id): id is string => typeof id === 'string'),
+        });
+      }
       const captionLinks =
         'caption_entities' in context.message
           ? (context.message.caption_entities ?? [])

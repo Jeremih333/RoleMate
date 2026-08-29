@@ -215,8 +215,12 @@ export class EdgeFastify {
     else if (name === 'onClose') this.closeHandlers.push(handler);
   }
 
-  get(path: string, handler: RouteHandler): void {
-    this.addRoute('GET', path, {}, handler);
+  // GET takes route options like every other verb. Without this overload a
+  // `get(path, { config }, handler)` call — the shape Fastify accepts and the
+  // types allow — passed the options object where the handler belonged, and the
+  // route answered every request with a 500.
+  get(path: string, options: RouteOptions | RouteHandler, handler?: RouteHandler): void {
+    this.addRoute('GET', path, options, handler);
   }
 
   post(path: string, options: RouteOptions | RouteHandler, handler?: RouteHandler): void {

@@ -75,3 +75,22 @@ describe('writing with custom emoji in a field', () => {
     expect(container.querySelector('.custom-emoji-field-mirror')).toBeNull();
   });
 });
+
+describe('the copy wrapping the same way the field does', () => {
+  it('keeps the emoji inside the flow instead of making a box of it', () => {
+    // A box cannot break across lines: the field wrapped in the middle of a
+    // token while the copy pushed the whole emoji to the next line, and
+    // everything after it stood in the wrong place.
+    render('a [ce:5301] b');
+    const slot = container.querySelector('.custom-emoji-field-slot');
+    expect(slot?.tagName).toBe('SPAN');
+    expect(slot?.getAttribute('style')).toBeNull();
+  });
+
+  it('draws the text around the emoji as the field holds it, spaces and all', () => {
+    render('  a\n[ce:1]  b  ');
+    expect(container.querySelector('.custom-emoji-field-mirror')?.textContent).toBe(
+      '  a\n[ce:1]  b  ',
+    );
+  });
+});

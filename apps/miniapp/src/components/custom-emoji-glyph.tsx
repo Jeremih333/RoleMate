@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
+import { claimAnimationSlot } from './animation-budget.js';
 
 export type CustomEmojiRenderKind = 'static' | 'video' | 'lottie';
 
@@ -53,10 +54,26 @@ export function CustomEmojiGlyph({
     if (!holder) return;
     let cancelled = false;
     let destroy: (() => void) | null = null;
+    let release: (() => void) | null = null;
+
+    const stop = () => {
+      destroy?.();
+      destroy = null;
+      release?.();
+      release = null;
+      setPlaying(false);
+    };
 
     const start = async () => {
+      if (destroy || cancelled) return;
+      // A place in the budget first: a page full of animated emoji must not ask
+      // a modest phone to run a player for every one of them at once.
+      const slot = claimAnimationSlot(stop);
+      if (!slot) return;
+      release = slot;
       try {
         if (renderKind === 'video') {
+          destroy = () => undefined;
           setPlaying(true);
           return;
         }
@@ -71,9 +88,17 @@ export function CustomEmojiGlyph({
               : `/api/custom-emoji/${customEmojiId}?thumbnail=0`,
           ),
         ]);
-        if (!response.ok || cancelled) return;
+        if (!response.ok || cancelled) {
+          release?.();
+          release = null;
+          return;
+        }
         const animationData: unknown = await response.json();
-        if (cancelled || !holderRef.current) return;
+        if (cancelled || !holderRef.current) {
+          release?.();
+          release = null;
+          return;
+        }
         const animation = lottie.loadAnimation({
           container: holderRef.current,
           renderer: 'svg',
@@ -85,6 +110,8 @@ export function CustomEmojiGlyph({
         setPlaying(true);
       } catch {
         // The still stays on screen; a glyph is never worth an error to the user.
+        release?.();
+        release = null;
       }
     };
 
@@ -92,15 +119,16 @@ export function CustomEmojiGlyph({
       void start();
       return () => {
         cancelled = true;
-        destroy?.();
+        stop();
       };
     }
+    // Kept watching rather than disconnected on the first sighting: a glyph
+    // scrolled away gives its player back, which is what lets a long page hand
+    // the budget to whatever the reader is actually looking at.
     const observer = new IntersectionObserver(
       (entries) => {
-        if (entries.some((entry) => entry.isIntersecting)) {
-          observer.disconnect();
-          void start();
-        }
+        if (entries.some((entry) => entry.isIntersecting)) void start();
+        else stop();
       },
       { rootMargin: '120px' },
     );
@@ -108,7 +136,7 @@ export function CustomEmojiGlyph({
     return () => {
       cancelled = true;
       observer.disconnect();
-      destroy?.();
+      stop();
     };
   }, [customEmojiId, renderKind, shouldAnimate, srcOverride, sourceType]);
 

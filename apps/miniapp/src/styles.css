@@ -10014,8 +10014,11 @@ body {
   inset: 0;
   overflow: hidden;
   color: var(--text, #fff);
+
+  /* Both are replaced from the field's own computed style; these are only what
+     applies until that runs, and they are what a textarea does by default. */
   white-space: pre-wrap;
-  overflow-wrap: anywhere;
+  overflow-wrap: break-word;
   pointer-events: none;
   border-style: solid;
   border-color: transparent;
@@ -10023,7 +10026,6 @@ body {
 
 .custom-emoji-field-slot {
   position: relative;
-  display: inline-block;
 }
 
 .custom-emoji-field-ghost {

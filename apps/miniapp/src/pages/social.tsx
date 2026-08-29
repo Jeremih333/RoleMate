@@ -54,6 +54,7 @@ import { CompactAudio } from '../components/compact-audio.js';
 import { CustomEmojiPickerDialog } from '../components/custom-emoji-picker.js';
 import { CustomEmojiInsertButton } from '../components/custom-emoji-insert.js';
 import { CustomEmojiField } from '../components/custom-emoji-field.js';
+import { FeedVideo } from '../components/feed-video.js';
 import {
   blobBase64,
   CommentVoiceRecorder,
@@ -2212,14 +2213,9 @@ export function PostCard({
       );
     }
     return (
-      <video
+      <FeedVideo
         className={className}
         src={url}
-        autoPlay
-        muted
-        loop
-        playsInline
-        preload="metadata"
         aria-label={`${ru.miniApp.search.openMediaFullscreen} ${itemIndex + 1}`}
         onError={() => setFailedMediaIds((current) => new Set(current).add(mediaKey))}
       />
@@ -2317,14 +2313,9 @@ export function PostCard({
               onError={() => setFailedMediaIds((current) => new Set(current).add(mediaKey))}
             />
           ) : (
-            <video
+            <FeedVideo
               className={mediaClass}
               src={currentMediaUrl}
-              autoPlay
-              loop
-              muted
-              playsInline
-              preload="metadata"
               onError={() => {
                 if (!currentMedia.mime_type) {
                   setLegacyAnimationImageIds((current) => new Set(current).add(mediaKey));

@@ -210,13 +210,9 @@ async function dispatchScheduledTasks(env: WorkerEnv, scheduledTime: number): Pr
       synchronizeBotCommands(bot),
       bot.api.setWebhook(`${runtime.PUBLIC_BASE_URL}/telegram/webhook`, {
         secret_token: runtime.TELEGRAM_WEBHOOK_SECRET,
-        allowed_updates: [
-          'message',
-          'edited_message',
-          'callback_query',
-          'pre_checkout_query',
-          'my_chat_member',
-        ],
+        // Nothing here acts on an edit, and every edit in every group the bot
+        // sits in would still cost a request to be told about it.
+        allowed_updates: ['message', 'callback_query', 'pre_checkout_query', 'my_chat_member'],
       }),
     ])
       .then(() => {

@@ -55,6 +55,12 @@ export function CustomEmojiField({
       'lineHeight',
       'letterSpacing',
       'textIndent',
+      'textAlign',
+      'whiteSpace',
+      'overflowWrap',
+      'wordBreak',
+      'wordSpacing',
+      'tabSize',
       'paddingTop',
       'paddingRight',
       'paddingBottom',
@@ -105,6 +111,11 @@ export function CustomEmojiField({
  *
  * The token text is kept in place but hidden, which is what gives the slot the
  * width of the characters it stands for; the picture is drawn over that slot.
+ *
+ * The slot stays inline rather than becoming a box of its own: a box cannot be
+ * broken across lines, so the field would wrap in the middle of a token while
+ * the copy above it moved the whole emoji down to the next line, and everything
+ * after that stood in the wrong place.
  */
 function FieldGlyph({ customEmojiId }: { customEmojiId: string }) {
   const info = useCustomEmoji(customEmojiId);

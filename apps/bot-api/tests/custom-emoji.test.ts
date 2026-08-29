@@ -5,6 +5,7 @@ import {
   cacheCustomEmojiAsset,
   collectCustomEmoji,
   CUSTOM_EMOJI_MAX_BYTES,
+  CUSTOM_EMOJI_MAX_STORED_BYTES,
   CUSTOM_EMOJI_SET_LIMIT,
   describeCustomEmoji,
   inlineCustomEmojiTokens,
@@ -330,5 +331,49 @@ describe('describing emoji nobody here has imported', () => {
       }),
     ).toEqual([descriptor]);
     expect(getCustomEmojiStickers).not.toHaveBeenCalled();
+  });
+});
+
+describe('a picture too large to keep', () => {
+  it('still reaches the reader, and is simply not stored', async () => {
+    // An unpacked Lottie can be bigger than what fits between the two workers.
+    // Failing the request there is what left animated emoji as stills.
+    const huge = new Uint8Array(CUSTOM_EMOJI_MAX_STORED_BYTES + 1_024);
+    const { bot, dataApi, stored, fetchMock } = harness({
+      filePath: 'stickers/one.json',
+      body: huge,
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    const result = await cacheCustomEmojiAsset({
+      bot,
+      dataApi,
+      token: 'test-token',
+      customEmojiId: '5401',
+      kind: 'animation',
+      emoji: { file_id: 'file-1', thumbnail_file_id: null },
+    });
+    expect(result?.contentType).toBe('application/json');
+    expect(Buffer.from(result?.dataBase64 ?? '', 'base64').byteLength).toBe(huge.byteLength);
+    expect(stored).toEqual([]);
+    vi.unstubAllGlobals();
+  });
+
+  it('hands the picture over even when keeping it fails', async () => {
+    const { bot, fetchMock } = harness({ filePath: 'stickers/one.webp' });
+    const failing = {
+      execute: () => Promise.reject(new Error('Payload is too large')),
+    } as unknown as Parameters<typeof cacheCustomEmojiAsset>[0]['dataApi'];
+    vi.stubGlobal('fetch', fetchMock);
+    await expect(
+      cacheCustomEmojiAsset({
+        bot,
+        dataApi: failing,
+        token: 'test-token',
+        customEmojiId: '5402',
+        kind: 'thumbnail',
+        emoji: { file_id: 'file-1', thumbnail_file_id: 'thumb-1' },
+      }),
+    ).resolves.toMatchObject({ contentType: 'image/webp' });
+    vi.unstubAllGlobals();
   });
 });

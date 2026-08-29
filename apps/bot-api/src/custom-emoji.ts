@@ -15,6 +15,15 @@ export interface ImportedCustomEmoji {
 export const CUSTOM_EMOJI_SET_LIMIT = 200;
 /** A custom emoji is a few dozen kilobytes; anything larger is not one and is skipped. */
 export const CUSTOM_EMOJI_MAX_BYTES = 512 * 1024;
+/**
+ * How large a picture may be to be worth keeping.
+ *
+ * The copy travels as JSON between the two workers, and that request is capped
+ * at 128 KiB; base64 adds a third on top of the bytes, so anything past about
+ * ninety kilobytes cannot be stored at all. An unpacked Lottie above this is
+ * served straight through instead of spending a call that is certain to fail.
+ */
+export const CUSTOM_EMOJI_MAX_STORED_BYTES = 88 * 1024;
 
 /**
  * Extracts the sticker set name from a t.me/addemoji link. Accepts the forms
@@ -130,15 +139,41 @@ export async function cacheCustomEmojiAsset(input: {
       contentType = 'application/json';
     }
     const dataBase64 = Buffer.from(bytes).toString('base64');
-    await input.dataApi.execute('customEmoji.assets.store', {
+    // Keeping a copy is an optimisation, not the point of the call: an unpacked
+    // Lottie can be larger than what fits between the two workers, and when it
+    // is, the emoji still has to reach the reader. It is handed over either way
+    // and the browser keeps it for a year, so the only cost of not storing one
+    // is a single fetch per person rather than a single fetch ever.
+    if (bytes.byteLength <= CUSTOM_EMOJI_MAX_STORED_BYTES) {
+      try {
+        await input.dataApi.execute('customEmoji.assets.store', {
+          customEmojiId: input.customEmojiId,
+          kind: input.kind,
+          contentType,
+          dataBase64,
+          byteSize: bytes.byteLength,
+        });
+      } catch (error) {
+        console.error({
+          event: 'custom_emoji_asset_store_failed',
+          customEmojiId: input.customEmojiId,
+          kind: input.kind,
+          byteSize: bytes.byteLength,
+          error: error instanceof Error ? error.message : 'unknown',
+        });
+      }
+    }
+    return { contentType, dataBase64 };
+  } catch (error) {
+    // Swallowing this silently is how an emoji that never appears becomes
+    // impossible to explain: the caller still degrades to the still picture,
+    // but the reason ends up in the log rather than nowhere.
+    console.error({
+      event: 'custom_emoji_asset_fetch_failed',
       customEmojiId: input.customEmojiId,
       kind: input.kind,
-      contentType,
-      dataBase64,
-      byteSize: bytes.byteLength,
+      error: error instanceof Error ? error.message : 'unknown',
     });
-    return { contentType, dataBase64 };
-  } catch {
     return null;
   }
 }

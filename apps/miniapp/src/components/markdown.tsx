@@ -122,6 +122,11 @@ function InlineCustomEmoji({ customEmojiId }: { customEmojiId: string }) {
         renderKind={info?.renderKind ?? 'static'}
         label={info?.emoji ?? ''}
         size={20}
+        // An emoji in text plays, the way it does in Telegram. Only a still is
+        // ever loaded for one that has nothing to play, and the animation is
+        // fetched once the glyph is actually on screen and then cached for a
+        // year, so a page of them does not turn into a burst of requests.
+        animate
         {...(info?.src ? { srcOverride: info.src } : {})}
         {...(info?.sourceType ? { sourceType: info.sourceType } : {})}
       />

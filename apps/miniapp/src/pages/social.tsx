@@ -2797,14 +2797,24 @@ export function PostCard({
           <label className="field-label mt-4" htmlFor={`post-body-${post.id}`}>
             {ru.miniApp.social.postBody}
           </label>
-          <textarea
-            id={`post-body-${post.id}`}
-            className="input min-h-48"
-            maxLength={8000}
-            value={postBody}
-            onChange={(event) => setPostBody(event.target.value)}
-          />
-          <p className="mt-2 text-xs text-muted">{ru.miniApp.social.postMarkdownHint}</p>
+          <CustomEmojiField value={postBody}>
+            <textarea
+              id={`post-body-${post.id}`}
+              className="input min-h-48"
+              maxLength={8000}
+              value={postBody}
+              onChange={(event) => setPostBody(event.target.value)}
+            />
+          </CustomEmojiField>
+          {/* Editing a post is writing, so it gets the same emoji button the
+              composers have; without it an emoji could only ever be added at
+              the moment a post was created. */}
+          <div className="mt-2 flex items-center gap-2">
+            <CustomEmojiInsertButton
+              onInsert={(token) => setPostBody((current) => `${current}${token}`)}
+            />
+            <p className="text-xs text-muted">{ru.miniApp.social.postMarkdownHint}</p>
+          </div>
           <label className="field-label mt-4" htmlFor={`post-playlist-title-${post.id}`}>
             {ru.miniApp.social.postPlaylistTitle}
           </label>
@@ -3072,15 +3082,22 @@ export function PostCard({
                     ) : null}
                     {editingCommentId === item.id ? (
                       <div className="comment-composer mt-2">
-                        <textarea
-                          className="comment-textarea"
-                          maxLength={1000}
-                          value={editingCommentBody}
-                          onChange={(event) => setEditingCommentBody(event.target.value)}
-                        />
+                        <CustomEmojiField value={editingCommentBody}>
+                          <textarea
+                            className="comment-textarea"
+                            maxLength={1000}
+                            value={editingCommentBody}
+                            onChange={(event) => setEditingCommentBody(event.target.value)}
+                          />
+                        </CustomEmojiField>
                         <div className="comment-composer-footer">
                           <span>{editingCommentBody.length}/1000</span>
                           <div className="flex flex-wrap gap-2">
+                            <CustomEmojiInsertButton
+                              onInsert={(token) =>
+                                setEditingCommentBody((current) => `${current}${token}`)
+                              }
+                            />
                             <Button
                               disabled={!editingCommentBody.trim()}
                               loading={updateComment.isPending}

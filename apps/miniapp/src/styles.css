@@ -10045,3 +10045,10 @@ body {
   flex: 1 1 auto;
   min-width: 0;
 }
+
+/* The message editor is a row like the composer, so the wrapper takes the place
+   its field used to hold. */
+.chat-message-editor .chat-message-editor-field {
+  flex: 1 1 auto;
+  min-width: 0;
+}

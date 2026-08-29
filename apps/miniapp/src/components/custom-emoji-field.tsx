@@ -117,6 +117,8 @@ function FieldGlyph({ customEmojiId }: { customEmojiId: string }) {
           renderKind={info?.renderKind ?? 'static'}
           label={info?.emoji ?? ''}
           size={20}
+          // It plays in the field as it will play in the message.
+          animate
           {...(info?.src ? { srcOverride: info.src } : {})}
           {...(info?.sourceType ? { sourceType: info.sourceType } : {})}
         />

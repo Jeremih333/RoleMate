@@ -76,6 +76,7 @@ import { DoubleHeartIcon } from '../components/double-heart-icon.js';
 import { useViewerTime } from '../components/viewer-time.js';
 import { parseMessageReactions } from '../components/chat-reactions.js';
 import { CustomEmojiGlyph } from '../components/custom-emoji-glyph.js';
+import { useGlyphSource } from '../components/custom-emoji-library.js';
 import { CustomEmojiInsertButton } from '../components/custom-emoji-insert.js';
 import { CustomEmojiField } from '../components/custom-emoji-field.js';
 import { stripCustomEmojiTokens } from '../components/custom-emoji-token.js';
@@ -2395,10 +2396,17 @@ function ConversationMessageContent({
             if (editText.trim()) updateText.mutate();
           }}
         >
-          <textarea
-            value={editText}
-            maxLength={4_000}
-            onChange={(event) => setEditText(event.target.value)}
+          <CustomEmojiField value={editText} className="chat-message-editor-field">
+            <textarea
+              value={editText}
+              maxLength={4_000}
+              onChange={(event) => setEditText(event.target.value)}
+            />
+          </CustomEmojiField>
+          {/* Editing a message is writing too, so the emoji button belongs here
+              exactly as it does in the composer below. */}
+          <CustomEmojiInsertButton
+            onInsert={(token) => setEditText((current) => `${current}${token}`)}
           />
           <button
             type="submit"
@@ -2751,6 +2759,8 @@ function ChatReactionMenu({
     staleTime: 5 * 60_000,
     enabled: premium.data?.premium === true,
   });
+  // Bytes the app already holds, so a shelf of dozens of glyphs costs nothing.
+  const glyphSource = useGlyphSource();
   // The library can hold hundreds of glyphs — the two test packs alone are 360 —
   // so the inline row stays a short shelf rather than a mile-long scroller.
   const customEmoji = (library.data?.emoji ?? []).slice(0, 40);
@@ -2805,6 +2815,7 @@ function ChatReactionMenu({
                 customEmojiId={item.custom_emoji_id}
                 renderKind={item.render_kind}
                 label={item.emoji}
+                {...glyphSource(item.custom_emoji_id)}
               />
             </button>
           ))}
@@ -2851,6 +2862,7 @@ export function ChatReactionSummary({
     staleTime: 5 * 60_000,
     enabled: counts.some((item) => isCustomEmojiKey(item.reaction)),
   });
+  const glyphSource = useGlyphSource();
   if (!counts.length) return null;
   return (
     <div className="chat-reaction-summary">
@@ -2876,6 +2888,7 @@ export function ChatReactionSummary({
               }
               size={16}
               animate
+              {...glyphSource(item.reaction)}
             />
           ) : (
             reactionEmoji(

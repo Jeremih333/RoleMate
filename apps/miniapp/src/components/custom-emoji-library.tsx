@@ -132,3 +132,23 @@ export function useCustomEmoji(customEmojiId: string): CustomEmojiInfo | undefin
 export function useCustomEmojiSources(): (customEmojiId: string) => CustomEmojiInfo | undefined {
   return useContext(LibraryContext).lookup;
 }
+
+/**
+ * The props that hand a glyph bytes the app already has. Anything not in an
+ * imported pack simply gets nothing back and fetches its own picture, which the
+ * browser then keeps for a year.
+ */
+export function useGlyphSource(): (customEmojiId: string) => {
+  srcOverride?: string;
+  sourceType?: string;
+} {
+  const lookup = useContext(LibraryContext).lookup;
+  return (customEmojiId) => {
+    const info = lookup(customEmojiId);
+    if (!info?.src) return {};
+    return {
+      srcOverride: info.src,
+      ...(info.sourceType ? { sourceType: info.sourceType } : {}),
+    };
+  };
+}

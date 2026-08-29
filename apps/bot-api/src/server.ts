@@ -31,6 +31,7 @@ import { InlineKeyboard, InputFile } from 'grammy';
 import { decryptChatContent, encryptChatContent } from './chat-crypto.js';
 import { telegramAudioMetadata } from './telegram-audio-metadata.js';
 import { cacheCustomEmojiAsset } from './custom-emoji.js';
+import { isActionableTelegramUpdate } from './telegram-updates.js';
 import { dispatchTelegramNotificationBatch } from './telegram-notifications.js';
 
 const authBodySchema = z.object({ initData: z.string().min(1).max(8_192) });
@@ -618,6 +619,12 @@ export async function buildServer(
     const update = request.body as Parameters<typeof bot.handleUpdate>[0];
     const updateId = (update as { update_id?: unknown }).update_id;
     if (!Number.isInteger(updateId)) return reply.code(400).send({ ok: false });
+    // Decided before anything is written: as an administrator in a public group
+    // the bot is sent every message posted there, and claiming each one cost two
+    // database writes and two worker requests for something it never acts on.
+    if (!isActionableTelegramUpdate(update)) {
+      return reply.code(200).send({ ok: true, ignored: true });
+    }
     const claimToken = crypto.randomUUID();
     const claim = await dataApi.execute<{
       claimed: boolean;

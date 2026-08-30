@@ -12,6 +12,26 @@ export class DataApiError extends Error {
   }
 }
 
+export function findDataApiError(error: unknown): DataApiError | undefined {
+  let current = error;
+  const seen = new Set<unknown>();
+  for (let depth = 0; depth < 5 && current && !seen.has(current); depth += 1) {
+    if (current instanceof DataApiError) return current;
+    seen.add(current);
+    if (typeof current !== 'object') return undefined;
+    if ('error' in current) {
+      current = current.error;
+      continue;
+    }
+    if ('cause' in current) {
+      current = current.cause;
+      continue;
+    }
+    return undefined;
+  }
+  return undefined;
+}
+
 export interface DataApiClientOptions {
   baseUrl: string;
   serviceId: string;

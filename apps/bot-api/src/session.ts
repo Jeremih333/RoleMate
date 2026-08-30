@@ -27,6 +27,22 @@ export async function createSession(
   return { token, csrfToken, expiresAt };
 }
 
+export async function refreshSession(
+  request: FastifyRequest,
+  dataApi: DataApiClient,
+): Promise<{ token: string; csrfToken: string; expiresAt: Date }> {
+  const token = request.cookies.rm_session;
+  if (!token) throw new Error('UNAUTHENTICATED');
+  const csrfToken = randomBytes(24).toString('base64url');
+  const expiresAt = new Date(Date.now() + 15 * 60_000);
+  await dataApi.execute('sessions.refresh', {
+    sessionHash: await sha256(token),
+    csrfHash: await sha256(csrfToken),
+    expiresAt: expiresAt.toISOString(),
+  });
+  return { token, csrfToken, expiresAt };
+}
+
 export async function getSession(
   request: FastifyRequest,
   dataApi: DataApiClient,

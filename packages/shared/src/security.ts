@@ -7,6 +7,70 @@ import {
 import { telegramUserSchema, type TelegramUser } from './schemas.js';
 
 const encoder = new TextEncoder();
+const decoder = new TextDecoder();
+
+export const menuLaunchRouteSchema = z.enum([
+  '/search',
+  '/profile',
+  '/questionnaires',
+  '/questionnaire-editor',
+  '/posts',
+  '/matches',
+  '/chats',
+  '/premium',
+  '/referrals',
+  '/settings',
+  '/admin',
+]);
+export type MenuLaunchRoute = z.infer<typeof menuLaunchRouteSchema>;
+
+const menuLaunchPayloadSchema = z.object({
+  version: z.literal(1),
+  telegramUserId: z.number().int().positive().safe(),
+  route: menuLaunchRouteSchema,
+  expiresAt: z.number().int().positive(),
+  nonce: z.string().regex(/^[a-f\d]{32}$/),
+});
+
+const menuLaunchRouteCodeSchema = z.enum(['s', 'p', 'q', 'e', 'o', 'm', 'c', 'u', 'r', 't', 'a']);
+type MenuLaunchRouteCode = z.infer<typeof menuLaunchRouteCodeSchema>;
+
+const menuLaunchRouteCodes: Record<MenuLaunchRoute, MenuLaunchRouteCode> = {
+  '/search': 's',
+  '/profile': 'p',
+  '/questionnaires': 'q',
+  '/questionnaire-editor': 'e',
+  '/posts': 'o',
+  '/matches': 'm',
+  '/chats': 'c',
+  '/premium': 'u',
+  '/referrals': 'r',
+  '/settings': 't',
+  '/admin': 'a',
+};
+
+const compactMenuLaunchPayloadSchema = z.object({
+  v: z.literal(2),
+  u: z.number().int().positive().safe(),
+  r: menuLaunchRouteCodeSchema,
+  e: z.number().int().positive(),
+  n: z.string().regex(/^[a-f\d]{16}$/),
+});
+
+export function parseMenuLaunchPath(
+  pathname: string,
+): { route: MenuLaunchRoute; token: string } | undefined {
+  const parts = pathname.split('/');
+  if (parts.length !== 4 || parts[0] !== '' || parts[2] !== '_rm') return undefined;
+  const route = menuLaunchRouteSchema.safeParse(`/${parts[1] ?? ''}`);
+  const token = parts[3] ?? '';
+  if (!route.success || !/^[A-Za-z\d_.-]{80,512}$/.test(token)) return undefined;
+  return { route: route.data, token };
+}
+
+export function createMenuLaunchPath(route: MenuLaunchRoute, token: string): string {
+  return `${route}/_rm/${token}`;
+}
 
 function bytesToHex(bytes: Uint8Array): string {
   return Array.from(bytes, (byte) => byte.toString(16).padStart(2, '0')).join('');
@@ -26,6 +90,25 @@ function constantTimeEqual(left: Uint8Array, right: Uint8Array): boolean {
   return difference === 0;
 }
 
+function bytesToBase64Url(bytes: Uint8Array): string {
+  let binary = '';
+  for (const byte of bytes) binary += String.fromCharCode(byte);
+  return btoa(binary).replaceAll('+', '-').replaceAll('/', '_').replace(/=+$/, '');
+}
+
+function base64UrlToBytes(value: string): Uint8Array {
+  if (!/^[A-Za-z\d_-]+$/.test(value)) return new Uint8Array();
+  const base64 = value
+    .replaceAll('-', '+')
+    .replaceAll('_', '/')
+    .padEnd(Math.ceil(value.length / 4) * 4, '=');
+  try {
+    return Uint8Array.from(atob(base64), (character) => character.charCodeAt(0));
+  } catch {
+    return new Uint8Array();
+  }
+}
+
 async function hmac(key: Uint8Array, data: string): Promise<Uint8Array> {
   const keyBuffer = key.buffer.slice(
     key.byteOffset,
@@ -43,6 +126,77 @@ async function hmac(key: Uint8Array, data: string): Promise<Uint8Array> {
 
 export async function sha256(value: string): Promise<string> {
   return bytesToHex(new Uint8Array(await crypto.subtle.digest('SHA-256', encoder.encode(value))));
+}
+
+export async function createMenuLaunchToken(input: {
+  telegramUserId: number;
+  route: MenuLaunchRoute;
+  secret: string;
+  now?: Date;
+  ttlSeconds?: number;
+}): Promise<string> {
+  const ttlSeconds = input.ttlSeconds ?? 30 * 24 * 60 * 60;
+  if (!Number.isInteger(ttlSeconds) || ttlSeconds < 30 || ttlSeconds > 31 * 24 * 60 * 60) {
+    throw new Error('Invalid menu launch TTL');
+  }
+  const payload = compactMenuLaunchPayloadSchema.parse({
+    v: 2,
+    u: input.telegramUserId,
+    r: menuLaunchRouteCodes[input.route],
+    e: Math.floor((input.now ?? new Date()).getTime() / 1_000) + ttlSeconds,
+    n: bytesToHex(crypto.getRandomValues(new Uint8Array(8))),
+  });
+  const encoded = bytesToBase64Url(encoder.encode(JSON.stringify(payload)));
+  const signature = bytesToHex((await hmac(encoder.encode(input.secret), encoded)).slice(0, 16));
+  return `${encoded}.${signature}`;
+}
+
+export async function verifyMenuLaunchToken(input: {
+  token: string;
+  route: MenuLaunchRoute;
+  secret: string;
+  now?: Date;
+}): Promise<{ telegramUserId: number; route: MenuLaunchRoute; expiresAt: number }> {
+  if (input.token.length > 1_024) throw new Error('Invalid menu launch token');
+  const parts = input.token.split('.');
+  const encoded = parts[0] ?? '';
+  const receivedSignature = parts[1] ?? '';
+  if (parts.length !== 2 || !/^(?:[a-f\d]{32}|[a-f\d]{64})$/i.test(receivedSignature)) {
+    throw new Error('Invalid menu launch token');
+  }
+  const expectedSignature = (await hmac(encoder.encode(input.secret), encoded)).slice(
+    0,
+    receivedSignature.length / 2,
+  );
+  if (!constantTimeEqual(expectedSignature, hexToBytes(receivedSignature))) {
+    throw new Error('Invalid menu launch signature');
+  }
+  let rawPayload: unknown;
+  try {
+    rawPayload = JSON.parse(decoder.decode(base64UrlToBytes(encoded)));
+  } catch {
+    throw new Error('Invalid menu launch payload');
+  }
+  const now = Math.floor((input.now ?? new Date()).getTime() / 1_000);
+  const compactPayload = compactMenuLaunchPayloadSchema.safeParse(rawPayload);
+  if (compactPayload.success) {
+    const route = menuLaunchRouteSchema.options.find(
+      (candidate) => menuLaunchRouteCodes[candidate] === compactPayload.data.r,
+    );
+    if (route !== input.route || compactPayload.data.e < now) {
+      throw new Error('Expired or mismatched menu launch token');
+    }
+    return {
+      telegramUserId: compactPayload.data.u,
+      route,
+      expiresAt: compactPayload.data.e,
+    };
+  }
+  const payload = menuLaunchPayloadSchema.parse(rawPayload);
+  if (payload.route !== input.route || payload.expiresAt < now) {
+    throw new Error('Expired or mismatched menu launch token');
+  }
+  return payload;
 }
 
 export async function signInternalRequest(input: {
@@ -93,7 +247,6 @@ export async function validateTelegramInitData(
   const receivedHash = parameters.get('hash') ?? '';
   if (!/^[a-f\d]{64}$/i.test(receivedHash)) throw new Error('Invalid initData hash');
   parameters.delete('hash');
-  parameters.delete('signature');
   const dataCheckString = [...parameters.entries()]
     .sort(([left], [right]) => left.localeCompare(right))
     .map(([key, value]) => `${key}=${value}`)

@@ -30,6 +30,9 @@ try {
     }
 
     Invoke-Step 'format check' { & corepack pnpm format:check }
+    Invoke-Step 'prepare workspace packages' {
+        & corepack pnpm --filter '@rolemate/shared' --filter '@rolemate/database-contracts' build
+    }
     Invoke-Step 'lint' { & corepack pnpm lint }
     Invoke-Step 'typecheck' { & corepack pnpm typecheck }
     Invoke-Step 'unit and integration tests' { & corepack pnpm test }
@@ -39,7 +42,8 @@ try {
         Invoke-Step 'dependency audit' { & corepack pnpm audit --prod }
     }
     if ($IncludeE2E) {
-        Invoke-Step 'end-to-end tests' { & corepack pnpm test:e2e }
+        # Serial execution avoids intermittent Playwright artifact-directory races on Windows.
+        Invoke-Step 'end-to-end tests' { & corepack pnpm exec playwright test --workers=1 }
     }
 } finally {
     Pop-Location

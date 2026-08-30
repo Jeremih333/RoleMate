@@ -26,7 +26,7 @@ YooKassa намеренно выключена для цифрового Premium
 Telegram / Mini App
         |
         v
-Fastify + grammY (Northflank)
+Cloudflare App Worker (Worker-native HTTP + grammY)
         |
         | HMAC + timestamp + one-time nonce
         v
@@ -42,8 +42,7 @@ Cloudflare D1
 
 - Node.js 22–24;
 - Corepack и pnpm 10;
-- Cloudflare-аккаунт для D1/Worker;
-- публичный HTTPS-сервис (production рассчитан на Northflank);
+- Cloudflare-аккаунт для D1, Workers и Static Assets;
 - Telegram bot token.
 
 ## Локальный запуск
@@ -79,18 +78,27 @@ powershell -ExecutionPolicy Bypass -File toolkit/verify.ps1
 ```
 
 `toolkit/` создан до реализации проекта и содержит повторяемые audit,
-secret-scan и verification-инструменты. Полная матрица: [TESTING.md](TESTING.md).
+secret-scan и verification-инструменты. Уровни проверок описаны в
+[TESTING.md](TESTING.md), а текущее соответствие Definition of Done — в
+[docs/COMPLETION_MATRIX.md](docs/COMPLETION_MATRIX.md).
 
 ## Развёртывание
 
 1. Выполните вход и создайте D1/Worker по [docs/CLOUDFLARE.md](docs/CLOUDFLARE.md).
 2. Примените миграции сначала к preview, выполните smoke test, затем к production.
-3. Соберите и разверните `Dockerfile` по [docs/NORTHFLANK.md](docs/NORTHFLANK.md).
-4. Добавьте runtime secrets в панели хостинга, а не в образ.
-5. После появления HTTPS URL выполните:
+3. Соберите Worker bundle командой `corepack pnpm build:cloudflare`.
+4. Задайте четыре runtime secret через `wrangler secret put`; они не входят в
+   bundle и репозиторий.
+5. Разверните единый App Worker с Telegram webhook, API, Cron и Mini App assets:
 
 ```powershell
-$env:PUBLIC_BASE_URL='https://<service>.northflank.app'
+corepack pnpm --filter @rolemate/bot-api deploy:cloudflare
+```
+
+6. После появления HTTPS URL выполните:
+
+```powershell
+$env:PUBLIC_BASE_URL='https://rolemate-app.<account>.workers.dev'
 $env:MINI_APP_URL=$env:PUBLIC_BASE_URL
 corepack pnpm tsx scripts/setup-telegram.ts
 corepack pnpm tsx scripts/check-webhook.ts

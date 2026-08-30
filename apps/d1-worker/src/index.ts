@@ -14,6 +14,44 @@ import type { Env, Variables } from './types.js';
 
 const app = new Hono<{ Bindings: Env; Variables: Variables }>();
 
+const domainIdempotentOperations = new Set([
+  'telegramUpdates.claim',
+  'telegramUpdates.complete',
+  'telegramUpdates.release',
+]);
+
+/**
+ * Suffixes that unambiguously denote a read. Replaying a read returns the same
+ * data and changes nothing, so it needs no nonce — and nonce rows were the single
+ * largest consumer of the D1 write budget, one row per internal call including
+ * the session check that runs on every request.
+ *
+ * The list is deliberately conservative: misjudging a read as a mutation only
+ * costs a write, while the reverse would drop replay protection.
+ */
+const readOnlyOperationSuffixes = [
+  '.list',
+  '.get',
+  '.getOwn',
+  '.search',
+  '.availability',
+  '.preview',
+  '.previewOwn',
+  '.status',
+  '.dashboard',
+];
+
+export function requiresApiNonce(operation: string): boolean {
+  if (domainIdempotentOperations.has(operation)) return false;
+  return !readOnlyOperationSuffixes.some((suffix) => operation.endsWith(suffix));
+}
+
+export function shouldCleanupExpiredApiNonces(nonceHash: string): boolean {
+  // Sampled cleanup: with far fewer nonce rows written, sweeping on 1/256 of
+  // calls still keeps the table small.
+  return nonceHash.startsWith('00');
+}
+
 app.use('*', secureHeaders());
 app.use('*', async (context, next) => {
   const requestId = context.req.header('X-Request-Id') ?? crypto.randomUUID();
@@ -56,24 +94,30 @@ app.post('/v1/execute', async (context) => {
   });
   if (!verified) throw new ApiError(401, 'INVALID_SIGNATURE', 'Unauthorized');
 
+  const envelope = workerEnvelopeSchema.parse(JSON.parse(body));
   const nonceHash = await sha256(`${serviceId}:${nonce}`);
-  try {
-    const inserted = await context.env.DB.prepare(
-      `INSERT OR IGNORE INTO api_nonces (nonce_hash, service_id, expires_at)
-       VALUES (?1, ?2, datetime('now', '+2 minutes'))`,
-    )
-      .bind(nonceHash, serviceId)
-      .run();
-    if (inserted.meta.changes !== 1) throw new ApiError(409, 'REPLAY_DETECTED', 'Replay detected');
-  } catch (error) {
-    if (error instanceof ApiError) throw error;
-    throw new ApiError(503, 'NONCE_STORE_UNAVAILABLE', 'Service temporarily unavailable');
+  if (requiresApiNonce(envelope.operation)) {
+    try {
+      const inserted = await context.env.DB.prepare(
+        `INSERT OR IGNORE INTO api_nonces (nonce_hash, service_id, expires_at)
+         VALUES (?1, ?2, datetime('now', '+2 minutes'))`,
+      )
+        .bind(nonceHash, serviceId)
+        .run();
+      if (inserted.meta.changes !== 1) {
+        throw new ApiError(409, 'REPLAY_DETECTED', 'Replay detected');
+      }
+    } catch (error) {
+      if (error instanceof ApiError) throw error;
+      throw new ApiError(503, 'NONCE_STORE_UNAVAILABLE', 'Service temporarily unavailable');
+    }
   }
 
-  context.executionCtx.waitUntil(
-    context.env.DB.prepare('DELETE FROM api_nonces WHERE expires_at < CURRENT_TIMESTAMP').run(),
-  );
-  const envelope = workerEnvelopeSchema.parse(JSON.parse(body));
+  if (shouldCleanupExpiredApiNonces(nonceHash)) {
+    context.executionCtx.waitUntil(
+      context.env.DB.prepare('DELETE FROM api_nonces WHERE expires_at < CURRENT_TIMESTAMP').run(),
+    );
+  }
   const data = await executeOperation(
     context.env,
     envelope.operation,
@@ -95,6 +139,16 @@ app.notFound((context) => {
 
 app.onError((error, context) => {
   const requestId = context.get('requestId') || crypto.randomUUID();
+  if (!(error instanceof ApiError) && !(error instanceof ZodError)) {
+    console.error(
+      JSON.stringify({
+        event: 'unhandled_operation_error',
+        requestId,
+        errorName: error instanceof Error ? error.name : 'UnknownError',
+        errorMessage: error instanceof Error ? error.message : 'Unknown operation error',
+      }),
+    );
+  }
   const status = error instanceof ApiError ? error.status : error instanceof ZodError ? 400 : 500;
   const code =
     error instanceof ApiError

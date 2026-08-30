@@ -7,6 +7,7 @@
 | Static     | `corepack pnpm lint`            | ESLint, React hooks, запрещённые конструкции             |
 | Types      | `corepack pnpm typecheck`       | строгий TypeScript во всех workspace                     |
 | Unit       | `corepack pnpm test`            | домен, HMAC, initData, контакты, платежи                 |
+| Bot/API    | bot-api Vitest suite            | init grammY, webhook secret, duplicate update, `/start`  |
 | Migrations | `corepack pnpm test:migrations` | все SQL migrations в настоящем SQLite                    |
 | E2E        | `corepack pnpm test:e2e`        | API mocks и Mini App на Android/iPhone/desktop           |
 | Build      | `corepack pnpm build`           | production bundles                                       |

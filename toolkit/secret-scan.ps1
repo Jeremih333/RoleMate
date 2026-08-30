@@ -7,7 +7,8 @@ $excluded = @(
     'dist',
     'coverage',
     'playwright-report',
-    'test-results'
+    'test-results',
+    'backups'
 )
 $patterns = @(
     '(?i)-----BEGIN (RSA |EC |OPENSSH )?PRIVATE KEY-----',
@@ -26,7 +27,12 @@ Get-ChildItem -LiteralPath $root -Recurse -File -Force |
         $relative = Get-RelativePath $_.FullName
         $parts = $relative -split '[\\/]'
         $isRuntimeEnv = $_.Name -like '.env*' -and $_.Name -ne '.env.example'
-        -not $isRuntimeEnv -and -not ($parts | Where-Object { $excluded -contains $_ })
+        $isToolkitRuntimeLog =
+            $relative -like 'toolkit\command-audit-*.log' -or
+            $relative -like 'toolkit/command-audit-*.log'
+        -not $isRuntimeEnv -and
+            -not $isToolkitRuntimeLog -and
+            -not ($parts | Where-Object { $excluded -contains $_ })
     } |
     ForEach-Object {
         $relative = Get-RelativePath $_.FullName

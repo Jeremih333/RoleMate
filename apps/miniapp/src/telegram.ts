@@ -1,3 +1,5 @@
+import { useEffect } from 'react';
+
 interface TelegramWebApp {
   initData: string;
   colorScheme: 'light' | 'dark';
@@ -31,13 +33,137 @@ export function getTelegram(): TelegramWebApp | undefined {
   return window.Telegram?.WebApp;
 }
 
+export function telegramInitDataFromUrl(url: string): string {
+  const parsed = new URL(url);
+  const hash = new URLSearchParams(parsed.hash.replace(/^#/, ''));
+  return hash.get('tgWebAppData') ?? parsed.searchParams.get('tgWebAppData') ?? '';
+}
+
+export function getTelegramInitData(): string {
+  return getTelegram()?.initData || telegramInitDataFromUrl(window.location.href);
+}
+
+export async function waitForTelegramInitData(timeoutMs = 10_000): Promise<string> {
+  const startedAt = Date.now();
+  do {
+    const initData = getTelegramInitData();
+    if (initData) {
+      initializeTelegram();
+      return initData;
+    }
+    await new Promise<void>((resolve) => window.setTimeout(resolve, 50));
+  } while (Date.now() - startedAt < timeoutMs);
+  return '';
+}
+
 export function initializeTelegram(): void {
   const telegram = getTelegram();
   telegram?.ready();
   telegram?.expand();
-  document.documentElement.dataset.theme = telegram?.colorScheme ?? 'dark';
+  applyThemePreference('telegram');
+}
+
+export type ThemePreference = 'telegram' | 'light' | 'dark';
+
+export function applyThemePreference(preference: ThemePreference): 'light' | 'dark' {
+  const resolved = preference === 'telegram' ? (getTelegram()?.colorScheme ?? 'dark') : preference;
+  document.documentElement.dataset.theme = resolved;
+  document.documentElement.dataset.themePreference = preference;
+  return resolved;
 }
 
 export function haptic(style: 'light' | 'medium' | 'heavy' = 'light'): void {
   getTelegram()?.HapticFeedback?.impactOccurred(style);
+}
+
+/**
+ * Telegram's iOS WebView keeps `100dvh` at its full height while the keyboard is
+ * open, so anything sized against it is pushed under the keyboard and cannot be
+ * scrolled back. Mirroring the visual viewport into `--app-vh` gives the layout a
+ * height that actually shrinks.
+ */
+export function trackViewportHeight(): () => void {
+  if (typeof window === 'undefined') return () => {};
+  const root = document.documentElement;
+  const apply = () => {
+    const height = window.visualViewport?.height ?? window.innerHeight;
+    if (!height) return;
+    root.style.setProperty('--app-vh', `${Math.round(height)}px`);
+  };
+  apply();
+  const viewport = window.visualViewport;
+  viewport?.addEventListener('resize', apply);
+  viewport?.addEventListener('scroll', apply);
+  window.addEventListener('resize', apply);
+  window.addEventListener('orientationchange', apply);
+  return () => {
+    viewport?.removeEventListener('resize', apply);
+    viewport?.removeEventListener('scroll', apply);
+    window.removeEventListener('resize', apply);
+    window.removeEventListener('orientationchange', apply);
+  };
+}
+
+/**
+ * Publishes an element's real height as a CSS variable. Hard-coding these
+ * numbers is what pushed the composer off the bottom of the screen on clients
+ * with a taller header, and what left a gap under the music strip.
+ */
+function trackElementHeight(
+  element: HTMLElement | null,
+  variable: string,
+  fallbackToZeroOnUnmount = false,
+): () => void {
+  if (typeof window === 'undefined' || !element) return () => {};
+  const root = document.documentElement;
+  const clear = () => {
+    if (fallbackToZeroOnUnmount) root.style.setProperty(variable, '0px');
+  };
+  const apply = () => {
+    const height = Math.round(element.getBoundingClientRect().height);
+    if (height > 0) root.style.setProperty(variable, `${height}px`);
+  };
+  apply();
+  if (typeof ResizeObserver === 'undefined') {
+    window.addEventListener('resize', apply);
+    return () => {
+      window.removeEventListener('resize', apply);
+      clear();
+    };
+  }
+  const observer = new ResizeObserver(apply);
+  observer.observe(element);
+  return () => {
+    observer.disconnect();
+    clear();
+  };
+}
+
+export function trackTopbarHeight(element: HTMLElement | null): () => void {
+  return trackElementHeight(element, '--topbar-height');
+}
+
+/**
+ * The music strip is fixed above the shell, so the layout has to inset itself by
+ * exactly its height — and drop back to nothing the moment the strip goes away.
+ */
+export function trackMusicPlayerHeight(element: HTMLElement | null): () => void {
+  return trackElementHeight(element, '--music-player-height', true);
+}
+
+/**
+ * Telegram's own back arrow in the header. Declared in the API surface but never
+ * wired, so the native control did nothing inside a conversation.
+ */
+export function useTelegramBackButton(onBack: () => void, active = true): void {
+  useEffect(() => {
+    const button = getTelegram()?.BackButton;
+    if (!button || !active) return;
+    button.onClick(onBack);
+    button.show();
+    return () => {
+      button.offClick(onBack);
+      button.hide();
+    };
+  }, [active, onBack]);
 }

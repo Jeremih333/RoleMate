@@ -67,38 +67,56 @@ const SCATTER: Array<{ x: number; y: number; scale: number; opacity: number; tur
 ];
 
 /**
- * The whistles of the Abyss, in rank order. A bell is a small round bell on a
- * cord; a red whistle is the plain pea whistle an apprentice is given; a blue
- * one carries a band; a moon one is marked with a crescent; a black one is
- * angular and heavy; and a white one is a carved relic, each of which is said to
- * be impossible to reproduce.
+ * The whistles of the Abyss.
+ *
+ * They are all the same object seen at the same angle — an upright body hanging
+ * from its cord, a shouldered cap with the eyelet the cord passes through, the
+ * round port cut into the face, ridges across the middle and a stepped foot —
+ * and what changes with the rank is the ornament and how heavy the thing is. A
+ * bell is the exception: a novice carries a bell, not a whistle, so it is a
+ * small round one with a slit.
+ *
+ * `crest` is drawn behind the body, which is what lets a white whistle grow
+ * wings out of its shoulders without them cutting across its face.
  */
-const MODELS: Record<string, { body: string; detail: string }> = {
+const MODELS: Record<string, { body: string; detail: string; crest?: string }> = {
   bell: {
-    body: 'M48 30 a13 13 0 0 1 13 13 v9 l4 6 h-34 l4 -6 v-9 a13 13 0 0 1 13 -13 z',
-    detail: 'M44 58 a4 4 0 0 0 8 0 M48 24 v6 M44 26 a4 4 0 0 1 8 0',
+    body: 'M48 32 a15 15 0 0 1 15 15 a15 15 0 0 1 -15 15 a15 15 0 0 1 -15 -15 a15 15 0 0 1 15 -15 z',
+    detail:
+      'M42 56 h12 M40 47 a8 8 0 0 1 5 -7 M48 62 v4 M44 66 h8 a2 2 0 0 1 0 4 h-8 a2 2 0 0 1 0 -4 z',
+    crest: 'M48 32 v-6 M43 26 a5 5 0 0 1 10 0 a5 5 0 0 1 -10 0 z',
   },
   red: {
-    body: 'M32 38 h22 a13 13 0 0 1 13 13 a13 13 0 0 1 -13 13 h-6 l-5 9 -5 -9 h-6 a13 13 0 0 1 -13 -13 a13 13 0 0 1 13 -13 z',
-    detail: 'M57 51 a4 4 0 1 0 0.1 0',
+    body: 'M37 27 h22 a5 5 0 0 1 5 5 v3 h1 a5 5 0 0 1 5 5 v27 a10 10 0 0 1 -10 10 h-24 a10 10 0 0 1 -10 -10 v-27 a5 5 0 0 1 5 -5 h1 v-3 a5 5 0 0 1 5 -5 z',
+    detail: 'M31 43 h34 M31 47 h34 M48 57 m-8 0 a8 8 0 1 0 16 0 a8 8 0 1 0 -16 0 M40 71 h16',
+    crest: 'M43 21 a5 5 0 0 1 10 0 a5 5 0 0 1 -10 0 z M44 26 h8',
   },
   blue: {
-    body: 'M30 36 h26 a14 14 0 0 1 14 14 a14 14 0 0 1 -14 14 h-7 l-5 10 -5 -10 h-9 a14 14 0 0 1 -14 -14 a14 14 0 0 1 14 -14 z',
-    detail: 'M38 36 v28 M58 50 a4 4 0 1 0 0.1 0',
+    body: 'M36 26 h24 a5 5 0 0 1 5 5 v4 h2 a5 5 0 0 1 5 5 v28 a10 10 0 0 1 -10 10 h-26 a10 10 0 0 1 -10 -10 v-28 a5 5 0 0 1 5 -5 h2 v-4 a5 5 0 0 1 5 -5 z',
+    detail:
+      'M30 44 h36 M30 48 h36 M48 58 m-8.5 0 a8.5 8.5 0 1 0 17 0 a8.5 8.5 0 1 0 -17 0 M48 31 l4 4 -4 4 -4 -4 z M39 71 h18',
+    crest: 'M43 20 a5 5 0 0 1 10 0 a5 5 0 0 1 -10 0 z M44 25 h8',
   },
   moon: {
-    body: 'M30 36 h26 a14 14 0 0 1 14 14 a14 14 0 0 1 -14 14 h-7 l-5 10 -5 -10 h-9 a14 14 0 0 1 -14 -14 a14 14 0 0 1 14 -14 z',
+    body: 'M36 26 h24 a5 5 0 0 1 5 5 v4 h2 a5 5 0 0 1 5 5 v28 a10 10 0 0 1 -10 10 h-26 a10 10 0 0 1 -10 -10 v-28 a5 5 0 0 1 5 -5 h2 v-4 a5 5 0 0 1 5 -5 z',
     detail:
-      'M44 44 a8 8 0 1 0 0 14 a10 10 0 0 1 0 -14 z M60 46 l2 4 4 1 -3 3 1 4 -4 -2 -4 2 1 -4 -3 -3 4 -1 z',
+      'M30 45 h36 M48 58 m-8.5 0 a8.5 8.5 0 1 0 17 0 a8.5 8.5 0 1 0 -17 0 M44 30 a6 6 0 1 0 0 10 a7.5 7.5 0 0 1 0 -10 z M56 33 l1.4 3 3 1.4 -3 1.4 -1.4 3 -1.4 -3 -3 -1.4 3 -1.4 z M39 71 h18',
+    crest: 'M43 20 a5 5 0 0 1 10 0 a5 5 0 0 1 -10 0 z M44 25 h8',
   },
   black: {
-    body: 'M30 34 l9 -7 h18 l9 7 v10 a15 15 0 0 1 -7 20 h-7 l-5 11 -5 -11 h-7 a15 15 0 0 1 -7 -20 z',
-    detail: 'M39 32 h18 M36 46 h24 M58 54 a4 4 0 1 0 0.1 0',
+    body: 'M34 25 h28 a6 6 0 0 1 6 6 v5 h1 a5 5 0 0 1 5 5 v27 a11 11 0 0 1 -11 11 h-30 a11 11 0 0 1 -11 -11 v-27 a5 5 0 0 1 5 -5 h1 v-5 a6 6 0 0 1 6 -6 z',
+    detail:
+      'M28 44 h40 M28 49 h40 M48 60 m-9 0 a9 9 0 1 0 18 0 a9 9 0 1 0 -18 0 M40 31 h16 M40 36 h16 M37 73 h22',
+    crest: 'M42 19 a6 6 0 0 1 12 0 a6 6 0 0 1 -12 0 z M44 25 h8',
   },
   white: {
-    body: 'M28 34 h32 a16 16 0 0 1 16 16 a16 16 0 0 1 -16 16 h-8 l-5 12 -5 -12 h-14 a16 16 0 0 1 -16 -16 a16 16 0 0 1 16 -16 z',
+    body: 'M35 25 h26 a6 6 0 0 1 6 6 v5 h2 a5 5 0 0 1 5 5 v27 a11 11 0 0 1 -11 11 h-28 a11 11 0 0 1 -11 -11 v-27 a5 5 0 0 1 5 -5 h2 v-5 a6 6 0 0 1 6 -6 z',
     detail:
-      'M48 20 l6 8 h-12 z M20 44 l-9 -7 M76 44 l9 -7 M34 44 c6 -6 20 -6 26 0 M62 52 a4 4 0 1 0 0.1 0',
+      'M28 44 h40 M48 59 m-9.5 0 a9.5 9.5 0 1 0 19 0 a9.5 9.5 0 1 0 -19 0 M48 59 m-4 0 a4 4 0 1 0 8 0 a4 4 0 1 0 -8 0 M41 31 c4 -4 10 -4 14 0 M38 73 h20',
+    // Carved wings off the shoulders and a horned crown: a white whistle is a
+    // relic, and no two of them are said to be alike.
+    crest:
+      'M43 18 a5 5 0 0 1 10 0 a5 5 0 0 1 -10 0 z M44 23 h8 M41 26 l-5 -8 M55 26 l5 -8 M33 38 c-9 -2 -14 2 -16 8 c7 1 12 -1 16 -4 z M63 38 c9 -2 14 2 16 8 c-7 1 -12 -1 -16 -4 z',
   },
 };
 
@@ -206,9 +224,21 @@ export function GiftCard({
             strokeWidth="3"
             fill="none"
           >
-            <path d="M30 22 C40 10 56 10 66 22" />
+            <path d="M48 6 C36 6 34 12 40 17 M48 6 C60 6 62 12 56 17" />
           </g>
           <g className="gift-card-body">
+            {/* Behind the body, so wings and a crown grow out of the shoulders
+                rather than across the face. */}
+            {shape.crest ? (
+              <path
+                d={shape.crest}
+                fill={model.body ?? '#cbb9a4'}
+                stroke={model.edge ?? '#9b8a76'}
+                strokeWidth="2.2"
+                strokeLinejoin="round"
+                strokeLinecap="round"
+              />
+            ) : null}
             <path
               d={shape.body}
               fill={model.body ?? '#cbb9a4'}
@@ -222,6 +252,7 @@ export function GiftCard({
               stroke={model.edge ?? '#9b8a76'}
               strokeWidth="2"
               strokeLinecap="round"
+              strokeLinejoin="round"
               opacity="0.85"
             />
           </g>

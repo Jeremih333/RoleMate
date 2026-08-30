@@ -112,6 +112,7 @@ describe('D1 migrations', () => {
       '0082_gift_purchases.sql',
       '0083_gift_names_english.sql',
       '0084_star_balance.sql',
+      '0085_gift_backdrop_palette.sql',
     ]);
     expect(() => applyMigrations()).not.toThrow();
     const postColumns = database.prepare('PRAGMA table_info(telegram_posts)').all() as Array<{

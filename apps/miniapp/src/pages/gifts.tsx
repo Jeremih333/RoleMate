@@ -561,7 +561,7 @@ function GiftSheet({
             </button>
           </div>
         ) : null}
-        <div className="editor-sheet-body">
+        <div className="editor-sheet-body is-bleeding">
           {item ? (
             <>
               <div className="gift-sheet-hero">
@@ -571,14 +571,18 @@ function GiftSheet({
                   seriesCode={item.series_code}
                   size={196}
                   playing
+                  bleed
                   label={item.series_title}
                 />
-                <h2>
-                  {item.series_title} <span>#{item.serial.toLocaleString('ru-RU')}</span>
-                </h2>
-                {item.subtitle ? <p className="text-muted">{item.subtitle}</p> : null}
+                <div className="gift-sheet-caption">
+                  <h2>
+                    {item.series_title} <span>#{item.serial.toLocaleString('en-US')}</span>
+                  </h2>
+                  {/* The model's name under the title, as a collectible states
+                      it — no description, only what the thing is. */}
+                  {item.model_title ? <p className="text-muted">{item.model_title}</p> : null}
+                </div>
               </div>
-              {item.lore ? <p className="gift-sheet-lore">{item.lore}</p> : null}
               {shelves.length ? (
                 <label className="gift-shelf-picker">
                   <span>{ru.miniApp.gifts.moveToShelf}</span>
@@ -694,47 +698,47 @@ export function GiftsHomeCard() {
  * How a series looks before any particular copy of it exists: the rank decides
  * how dark the card is, which is the rule the ranks of the Abyss already imply.
  */
-const RANK_LOOK: Record<
-  string,
-  { backdrop: GiftAppearance['backdrop']; model: GiftAppearance['model'] }
-> = {
+const RANK_LOOK: Record<string, GiftAppearance> = {
   white: {
-    backdrop: { from: '#05070d', to: '#101726', glow: '#c9d6ff' },
+    backdrop: { center: '#182238', edge: '#05070d', pattern: '#c9d6ff', text: '#eaf0ff' },
     model: { body: '#f4f1ea', edge: '#cfc7b4', cord: '#8d8574' },
+    pattern: { tile: 'relic' },
   },
   black: {
-    backdrop: { from: '#07080c', to: '#171a24', glow: '#e8ecff' },
+    backdrop: { center: '#20242f', edge: '#07080c', pattern: '#e8ecff', text: '#f4f6ff' },
     model: { body: '#1b1c22', edge: '#3c3f4c', cord: '#0e0f13' },
+    pattern: { tile: 'curse' },
   },
   moon: {
-    backdrop: { from: '#0f1420', to: '#25304a', glow: '#d5e2ff' },
-    model: { body: '#d8dee9', edge: '#9aa3b1', cord: '#5b6472' },
+    backdrop: { center: '#2c3a58', edge: '#0f1420', pattern: '#d5e2ff', text: '#f2f6ff' },
+    model: { body: '#c3a7ff', edge: '#7f63c6', cord: '#4a3a76' },
+    pattern: { tile: 'cradle' },
   },
   blue: {
-    backdrop: { from: '#0a1424', to: '#173154', glow: '#7fb2ff' },
+    backdrop: { center: '#1c3c66', edge: '#0a1424', pattern: '#7fb2ff', text: '#e8f1ff' },
     model: { body: '#7fb2ff', edge: '#4e79bd', cord: '#2f4a75' },
+    pattern: { tile: 'compass' },
   },
   red: {
-    backdrop: { from: '#160a0a', to: '#3a1414', glow: '#ff9b7a' },
+    backdrop: { center: '#4a1c18', edge: '#160a0a', pattern: '#ff9b7a', text: '#ffe8e0' },
     model: { body: '#ff8f80', edge: '#bc4f43', cord: '#742d26' },
+    pattern: { tile: 'rope' },
   },
   bell: {
-    backdrop: { from: '#1b1408', to: '#3d2f11', glow: '#ffcf80' },
-    model: { body: '#ffd479', edge: '#b8862c', cord: '#6d5019' },
+    backdrop: { center: '#4a3915', edge: '#1b1408', pattern: '#ffcf80', text: '#fff2da' },
+    model: { body: '#e2c489', edge: '#a8863f', cord: '#6b5126' },
+    pattern: { tile: 'lantern' },
   },
   plain: {
-    backdrop: { from: '#181320', to: '#3a2c46', glow: '#ffd9ec' },
+    backdrop: { center: '#453552', edge: '#181320', pattern: '#ffd9ec', text: '#fff0f8' },
     model: null,
+    pattern: { tile: 'starfall' },
   },
 };
 
+/** How a series looks before any particular copy of it exists. */
 function seriesAppearance(rank: string): GiftAppearance {
-  const look = RANK_LOOK[rank] ?? RANK_LOOK.plain!;
-  return {
-    backdrop: look.backdrop ?? null,
-    model: look.model ?? null,
-    pattern: { tile: 'echo' },
-  };
+  return RANK_LOOK[rank] ?? RANK_LOOK.plain!;
 }
 
 /**
@@ -780,7 +784,7 @@ function SeriesSheet({
             <X aria-hidden />
           </button>
         </header>
-        <div className="editor-sheet-body">
+        <div className="editor-sheet-body is-bleeding">
           <div className="gift-sheet-hero">
             <GiftCard
               appearance={seriesAppearance(series.rank)}
@@ -788,12 +792,14 @@ function SeriesSheet({
               seriesCode={series.code}
               size={196}
               playing
+              bleed
               label={series.title}
             />
-            <h2>{series.title}</h2>
-            {series.subtitle ? <p className="text-muted">{series.subtitle}</p> : null}
+            <div className="gift-sheet-caption">
+              <h2>{series.title}</h2>
+              {series.subtitle ? <p className="text-muted">{series.subtitle}</p> : null}
+            </div>
           </div>
-          {series.lore ? <p className="gift-sheet-lore">{series.lore}</p> : null}
           <table className="gift-attributes">
             <tbody>
               <tr>

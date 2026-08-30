@@ -10277,35 +10277,46 @@ body {
 /* A gift on its card: the backdrop it was issued with, the pattern tiled over
    it and the whistle itself, lit from behind by the backdrop's own colour. The
    whistle moves only when somebody has opened it. */
+/* Lit from the middle and falling away to the edges, the way a backdrop's own
+   centre and edge colours describe it. */
 .gift-card {
   position: relative;
   display: grid;
   overflow: hidden;
   border-radius: 14px;
-  background: radial-gradient(120% 90% at 50% 12%, var(--gift-to), var(--gift-from) 78%);
+  background: radial-gradient(88% 78% at 50% 44%, var(--gift-center), var(--gift-edge) 96%);
+  color: var(--gift-text);
   place-items: center;
   isolation: isolate;
+}
+
+/* A hero fills the width it is given rather than sitting in it as a square, so
+   the backdrop runs to the sides of the sheet as Telegram's does. */
+.gift-card.is-bleed {
+  width: 100%;
+  aspect-ratio: 1 / 0.82;
+  border-radius: 0;
 }
 
 .gift-card::after {
   position: absolute;
   z-index: 0;
-  width: 62%;
-  height: 62%;
+  width: 58%;
+  height: 58%;
   border-radius: 50%;
-  background: var(--gift-glow);
+  background: var(--gift-symbol);
   content: '';
-  filter: blur(26px);
-  opacity: 0.28;
+  filter: blur(30px);
+  opacity: 0.22;
 }
 
-.gift-card-pattern {
+.gift-card-scatter {
   position: absolute;
   z-index: 1;
   inset: 0;
   width: 100%;
   height: 100%;
-  opacity: 0.16;
+  opacity: 0.55;
 }
 
 .gift-card-whistle {
@@ -10346,7 +10357,7 @@ body {
 }
 
 .gift-card.is-playing[data-rank='white'] .gift-card-whistle {
-  filter: drop-shadow(0 6px 14px rgb(0 0 0 / 45%)) drop-shadow(0 0 10px var(--gift-glow));
+  filter: drop-shadow(0 6px 14px rgb(0 0 0 / 45%)) drop-shadow(0 0 10px var(--gift-symbol));
 }
 
 /* A standard gift is an emoji, and each one has a movement of its own. */
@@ -10880,4 +10891,29 @@ body {
   color: var(--muted);
   font-size: 12px;
   line-height: 1.55;
+}
+
+/* A gift sheet lets its hero run to the sides; everything else keeps the
+   padding it had. */
+.editor-sheet-body.is-bleeding {
+  padding: 0;
+}
+
+.editor-sheet-body.is-bleeding > * {
+  padding: 0 16px;
+}
+
+.editor-sheet-body.is-bleeding .gift-sheet-hero {
+  padding: 0;
+}
+
+.gift-sheet-caption {
+  display: grid;
+  gap: 2px;
+  padding: 12px 16px 4px;
+  text-align: center;
+}
+
+.gift-sheet-caption h2 {
+  font-size: 20px;
 }

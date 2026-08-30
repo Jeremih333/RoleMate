@@ -13,6 +13,7 @@ import {
 } from '@rolemate/database-contracts';
 import { ApiError } from './errors.js';
 import { GENESIS_HASH, hashMint, hashTransfer, rollAttribute } from './gifts.js';
+import { creditStars, moveGift } from './ledger.js';
 import type { Env } from './types.js';
 
 type Handler<T extends WorkerOperation> = (
@@ -6308,51 +6309,13 @@ const handlers: { [K in WorkerOperation]: Handler<K> } = {
       .bind(input.toUserId)
       .first<{ id: string }>();
     if (!recipient) throw new ApiError(404, 'USER_NOT_FOUND', 'No such user');
-    const last = await env.DB.prepare(
-      // By insertion order rather than by timestamp: two moves in the same
-      // second must still chain onto the right link.
-      'SELECT hash FROM gift_transfers WHERE item_id = ?1 ORDER BY rowid DESC LIMIT 1',
-    )
-      .bind(input.itemId)
-      .first<{ hash: string }>();
-    const createdAt = new Date().toISOString().slice(0, 19).replace('T', ' ');
-    const hash = await hashTransfer(
-      env,
-      {
-        itemId: input.itemId,
-        fromUserId: input.fromUserId,
-        toUserId: input.toUserId,
-        reason: input.reason,
-        starAmount: input.starAmount,
-        createdAt,
-      },
-      last?.hash ?? GENESIS_HASH,
-    );
-    await env.DB.batch([
-      env.DB.prepare(
-        `UPDATE gift_items
-         SET owner_user_id = ?2, pinned_order = NULL, user_collection_id = NULL
-         WHERE id = ?1`,
-      ).bind(input.itemId, input.toUserId),
-      env.DB.prepare(
-        `INSERT INTO gift_transfers
-           (id, item_id, from_user_id, to_user_id, reason, star_amount, created_at, prev_hash, hash)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)`,
-      ).bind(
-        crypto.randomUUID(),
-        input.itemId,
-        input.fromUserId,
-        input.toUserId,
-        input.reason,
-        input.starAmount,
-        createdAt,
-        last?.hash ?? GENESIS_HASH,
-        hash,
-      ),
-      env.DB.prepare(
-        "UPDATE gift_listings SET status = 'cancelled' WHERE item_id = ?1 AND status = 'active'",
-      ).bind(input.itemId),
-    ]);
+    const { hash } = await moveGift(env, {
+      itemId: input.itemId,
+      fromUserId: input.fromUserId,
+      toUserId: input.toUserId,
+      reason: input.reason,
+      starAmount: input.starAmount,
+    });
     return { transferred: true, hash };
   },
   /** Walks the chain of a series and says whether it still adds up. */
@@ -6555,7 +6518,12 @@ const handlers: { [K in WorkerOperation]: Handler<K> } = {
     )
       .bind(offer.id, input.action)
       .run();
-    return { status: input.action, itemId: offer.item_id, fromUserId: offer.from_user_id };
+    return {
+      status: input.action,
+      itemId: offer.item_id,
+      fromUserId: offer.from_user_id,
+      starAmount: offer.star_amount,
+    };
   },
   /** The shelves an owner arranges their copies on, and what sits where. */
   'gifts.shelves.create': async (env, input) => {
@@ -6683,6 +6651,246 @@ const handlers: { [K in WorkerOperation]: Handler<K> } = {
       ).bind(purchase.listing_id),
     ]);
     return { ...purchase, duplicate: false };
+  },
+  /** What somebody has, and where it came from. */
+  'stars.balance': async (env, input) => {
+    const [balance, ledger, refundable] = await Promise.all([
+      env.DB.prepare('SELECT balance FROM star_balances WHERE user_id = ?1')
+        .bind(input.userId)
+        .first<{ balance: number }>(),
+      env.DB.prepare(
+        `SELECT id, delta, reason, ref_id, created_at FROM star_ledger
+         WHERE user_id = ?1 ORDER BY created_at DESC, rowid DESC LIMIT 30`,
+      )
+        .bind(input.userId)
+        .all(),
+      env.DB.prepare(
+        `SELECT COALESCE(SUM(stars), 0) AS total FROM star_topups
+         WHERE user_id = ?1 AND status = 'paid'`,
+      )
+        .bind(input.userId)
+        .first<{ total: number }>(),
+    ]);
+    return {
+      balance: Number(balance?.balance ?? 0),
+      // Only a person's own top-ups can be returned to them, so this is the most
+      // that could ever be taken back out.
+      refundable: Number(refundable?.total ?? 0),
+      ledger: ledger.results,
+    };
+  },
+  /** Begins a top-up. Nothing is credited until Telegram reports the payment. */
+  'stars.topup.start': async (env, input) => {
+    const id = crypto.randomUUID();
+    const payload = `stars:${id}`;
+    await env.DB.prepare(
+      'INSERT INTO star_topups (id, user_id, stars, invoice_payload) VALUES (?1, ?2, ?3, ?4)',
+    )
+      .bind(id, input.userId, input.stars, payload)
+      .run();
+    return { topupId: id, invoicePayload: payload, stars: input.stars };
+  },
+  'stars.topup.get': async (env, input) => {
+    const topup = await env.DB.prepare(
+      'SELECT id, user_id, stars, status FROM star_topups WHERE invoice_payload = ?1',
+    )
+      .bind(input.invoicePayload)
+      .first();
+    if (!topup) throw new ApiError(404, 'STAR_TOPUP_NOT_FOUND', 'No such top-up');
+    return topup;
+  },
+  /**
+   * Credits a paid top-up, once. A payment delivered twice finds it already
+   * settled and changes nothing.
+   */
+  'stars.topup.settle': async (env, input) => {
+    const topup = await env.DB.prepare(
+      'SELECT id, user_id, stars, status FROM star_topups WHERE invoice_payload = ?1',
+    )
+      .bind(input.invoicePayload)
+      .first<{ id: string; user_id: string; stars: number; status: string }>();
+    if (!topup) throw new ApiError(404, 'STAR_TOPUP_NOT_FOUND', 'No such top-up');
+    if (topup.status === 'paid') return { ...topup, duplicate: true };
+    await creditStars(env, {
+      userId: topup.user_id,
+      delta: topup.stars,
+      reason: 'topup',
+      refId: topup.id,
+    });
+    await env.DB.prepare(
+      `UPDATE star_topups
+       SET status = 'paid', paid_at = CURRENT_TIMESTAMP, telegram_payment_charge_id = ?2
+       WHERE id = ?1`,
+    )
+      .bind(topup.id, input.telegramPaymentChargeId)
+      .run();
+    return { ...topup, duplicate: false };
+  },
+  /**
+   * Buys a listed gift out of the balance.
+   *
+   * Both sides move together with the gift: the buyer pays, the seller is
+   * credited, the copy changes hands through the same signed path as any other
+   * transfer, and the listing closes. A balance that cannot cover the price
+   * fails before anything moves.
+   */
+  'gifts.buy': async (env, input) => {
+    const listing = await env.DB.prepare(
+      `SELECT l.id, l.item_id, l.seller_user_id, l.star_price
+       FROM gift_listings l WHERE l.item_id = ?1 AND l.status = 'active'`,
+    )
+      .bind(input.itemId)
+      .first<{ id: string; item_id: string; seller_user_id: string; star_price: number }>();
+    if (!listing) throw new ApiError(404, 'GIFT_NOT_FOR_SALE', 'This gift is not for sale');
+    if (listing.seller_user_id === input.buyerUserId) {
+      throw new ApiError(400, 'GIFT_SAME_OWNER', 'It is already yours');
+    }
+    const balance = await env.DB.prepare('SELECT balance FROM star_balances WHERE user_id = ?1')
+      .bind(input.buyerUserId)
+      .first<{ balance: number }>();
+    if (Number(balance?.balance ?? 0) < listing.star_price) {
+      throw new ApiError(402, 'STAR_BALANCE_TOO_LOW', 'Not enough stars on the balance');
+    }
+    await creditStars(env, {
+      userId: input.buyerUserId,
+      delta: -listing.star_price,
+      reason: 'purchase',
+      refId: listing.item_id,
+    });
+    await creditStars(env, {
+      userId: listing.seller_user_id,
+      delta: listing.star_price,
+      reason: 'sale',
+      refId: listing.item_id,
+    });
+    await moveGift(env, {
+      itemId: listing.item_id,
+      fromUserId: listing.seller_user_id,
+      toUserId: input.buyerUserId,
+      reason: 'purchase',
+      starAmount: listing.star_price,
+    });
+    await env.DB.prepare(
+      "UPDATE gift_listings SET status = 'sold', updated_at = CURRENT_TIMESTAMP WHERE id = ?1",
+    )
+      .bind(listing.id)
+      .run();
+    return { bought: true, starAmount: listing.star_price };
+  },
+  /**
+   * Asks for stars back.
+   *
+   * Only a person's own top-ups can be returned to them — a bot cannot send
+   * stars to anybody, and paying out of a shared pot would let one person
+   * withdraw another's money. The request picks their paid top-ups until it has
+   * covered the amount, and hands the charge ids to whoever will ask Telegram to
+   * refund them.
+   */
+  /** The stars an accepted offer is worth, moving from the offerer to the owner. */
+  'stars.settleOffer': async (env, input) => {
+    await creditStars(env, {
+      userId: input.fromUserId,
+      delta: -input.starAmount,
+      reason: 'offer',
+      refId: input.offerId,
+    });
+    await creditStars(env, {
+      userId: input.toUserId,
+      delta: input.starAmount,
+      reason: 'offer',
+      refId: input.offerId,
+    });
+    return { settled: true };
+  },
+  'stars.withdraw.start': async (env, input) => {
+    const balance = await env.DB.prepare('SELECT balance FROM star_balances WHERE user_id = ?1')
+      .bind(input.userId)
+      .first<{ balance: number }>();
+    if (Number(balance?.balance ?? 0) < input.stars) {
+      throw new ApiError(402, 'STAR_BALANCE_TOO_LOW', 'Not enough stars on the balance');
+    }
+    const topups = (
+      await env.DB.prepare(
+        `SELECT id, stars, telegram_payment_charge_id FROM star_topups
+         WHERE user_id = ?1 AND status = 'paid' AND telegram_payment_charge_id IS NOT NULL
+         ORDER BY paid_at DESC`,
+      )
+        .bind(input.userId)
+        .all<{ id: string; stars: number; telegram_payment_charge_id: string }>()
+    ).results;
+    // A payment is returned whole or not at all, so a top-up can only go back
+    // while the balance still covers all of it: stars already spent are not
+    // there to return, and returning the payment anyway would take somebody
+    // else's money out with it.
+    const chosen: Array<{ id: string; stars: number; chargeId: string }> = [];
+    let collected = 0;
+    for (const topup of topups) {
+      if (collected >= input.stars) break;
+      if (collected + topup.stars > Number(balance?.balance ?? 0)) continue;
+      chosen.push({
+        id: topup.id,
+        stars: topup.stars,
+        chargeId: topup.telegram_payment_charge_id,
+      });
+      collected += topup.stars;
+    }
+    if (collected < input.stars) {
+      throw new ApiError(
+        409,
+        'STAR_WITHDRAWAL_UNAVAILABLE',
+        'Only whole top-ups you paid for yourself can be returned',
+      );
+    }
+    const id = crypto.randomUUID();
+    await env.DB.batch([
+      env.DB.prepare('INSERT INTO star_withdrawals (id, user_id, stars) VALUES (?1, ?2, ?3)').bind(
+        id,
+        input.userId,
+        collected,
+      ),
+      ...chosen.map((topup) =>
+        env.DB.prepare(
+          'INSERT INTO star_withdrawal_items (withdrawal_id, topup_id, stars) VALUES (?1, ?2, ?3)',
+        ).bind(id, topup.id, topup.stars),
+      ),
+    ]);
+    return { withdrawalId: id, stars: collected, charges: chosen.map((item) => item.chargeId) };
+  },
+  /**
+   * Finishes a withdrawal after Telegram has returned the payments: the balance
+   * goes down by what was actually sent back, and those top-ups can never be
+   * returned again.
+   */
+  'stars.withdraw.settle': async (env, input) => {
+    const withdrawal = await env.DB.prepare(
+      'SELECT id, user_id, stars, status FROM star_withdrawals WHERE id = ?1',
+    )
+      .bind(input.withdrawalId)
+      .first<{ id: string; user_id: string; stars: number; status: string }>();
+    if (!withdrawal) throw new ApiError(404, 'STAR_WITHDRAWAL_NOT_FOUND', 'No such withdrawal');
+    if (withdrawal.status !== 'pending') return { ...withdrawal, duplicate: true };
+    if (input.sent) {
+      await creditStars(env, {
+        userId: withdrawal.user_id,
+        delta: -withdrawal.stars,
+        reason: 'withdrawal',
+        refId: withdrawal.id,
+      });
+      await env.DB.batch([
+        env.DB.prepare(
+          "UPDATE star_withdrawals SET status = 'sent', completed_at = CURRENT_TIMESTAMP WHERE id = ?1",
+        ).bind(withdrawal.id),
+        env.DB.prepare(
+          `UPDATE star_topups SET status = 'refunded', refunded_at = CURRENT_TIMESTAMP
+           WHERE id IN (SELECT topup_id FROM star_withdrawal_items WHERE withdrawal_id = ?1)`,
+        ).bind(withdrawal.id),
+      ]);
+    } else {
+      await env.DB.prepare("UPDATE star_withdrawals SET status = 'failed' WHERE id = ?1")
+        .bind(withdrawal.id)
+        .run();
+    }
+    return { ...withdrawal, duplicate: false };
   },
   'gifts.showcase': async (env, input) => {
     return (

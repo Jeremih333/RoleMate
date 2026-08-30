@@ -423,7 +423,7 @@ export async function buildServer(
       ),
     );
   };
-  const stars = new TelegramStarsProvider(bot);
+  const starsProvider = new TelegramStarsProvider(bot);
   let broadcastTimer: NodeJS.Timeout | undefined;
   let broadcastDispatching = false;
   let runtimeCache: {
@@ -928,45 +928,94 @@ export async function buildServer(
     const { action } = z
       .object({ action: z.enum(['accepted', 'declined', 'cancelled']) })
       .parse(request.body);
-    const answer = await dataApi.execute<{ status: string; itemId: string; fromUserId: string }>(
-      'gifts.offers.respond',
-      { userId: session.userId, offerId, action },
-    );
+    const answer = await dataApi.execute<{
+      status: string;
+      itemId: string;
+      fromUserId: string;
+      starAmount: number;
+    }>('gifts.offers.respond', { userId: session.userId, offerId, action });
     // Accepting is what actually moves the gift, and the move goes through the
     // same signed path as any other, so the chain stays whole.
     if (answer.status === 'accepted') {
+      if (answer.starAmount > 0) {
+        await dataApi.execute('stars.settleOffer', {
+          offerId,
+          fromUserId: answer.fromUserId,
+          toUserId: session.userId,
+          starAmount: answer.starAmount,
+        });
+      }
       await dataApi.execute('gifts.transfer', {
         itemId: answer.itemId,
         fromUserId: session.userId,
         toUserId: answer.fromUserId,
         reason: 'trade',
-        starAmount: 0,
+        starAmount: answer.starAmount,
       });
     }
     return answer;
   });
-  // Buying a listed gift with Stars. The invoice carries a payload of its own,
-  // and nothing moves until Telegram says the payment went through.
-  app.post('/api/gifts/:itemId/invoice', async (request) => {
+  // Stars live on a balance inside the app: they arrive through Telegram's own
+  // payment, and everything after that — buying a gift, settling an offer — is a
+  // move from one balance to another.
+  app.get('/api/stars/balance', async (request) => {
+    const session = await authenticate(request);
+    return dataApi.execute('stars.balance', { userId: session.userId });
+  });
+  app.post('/api/stars/topup', async (request) => {
     const session = await mutateSafe(request);
-    const { itemId } = z.object({ itemId: z.string().uuid() }).parse(request.params);
-    const gift = await dataApi.execute<{ series_title: string; serial: number }>('gifts.item', {
-      itemId,
-    });
-    const purchase = await dataApi.execute<{ invoicePayload: string; starAmount: number }>(
-      'gifts.purchase.start',
-      { itemId, buyerUserId: session.userId },
+    const { stars } = z.object({ stars: z.number().int().min(1).max(100_000) }).parse(request.body);
+    const topup = await dataApi.execute<{ invoicePayload: string; stars: number }>(
+      'stars.topup.start',
+      { userId: session.userId, stars },
     );
-    return stars.createPayment({
+    return starsProvider.createPayment({
       userId: session.userId,
       telegramUserId: session.telegramUserId,
-      productId: itemId,
-      title: `${gift.series_title} #${gift.serial}`,
-      description: ru.miniApp.gifts.marketplaceTitle,
-      amount: purchase.starAmount,
+      productId: 'stars-topup',
+      title: ru.miniApp.gifts.topUpTitle,
+      description: ru.miniApp.gifts.topUpDescription,
+      amount: topup.stars,
       currency: 'XTR',
-      invoicePayload: purchase.invoicePayload,
+      invoicePayload: topup.invoicePayload,
     });
+  });
+  /**
+   * Taking stars back out. Only a person's own top-ups can be returned to them:
+   * a bot cannot send stars to anybody, and paying out of a shared pot would let
+   * one person withdraw another's money. Telegram returns the payments, and the
+   * balance goes down only for the ones it actually returned.
+   */
+  app.post('/api/stars/withdraw', async (request) => {
+    const session = await mutate(request);
+    const { stars } = z.object({ stars: z.number().int().min(1).max(100_000) }).parse(request.body);
+    const plan = await dataApi.execute<{
+      withdrawalId: string;
+      stars: number;
+      charges: string[];
+    }>('stars.withdraw.start', { userId: session.userId, stars });
+    let sent = true;
+    for (const chargeId of plan.charges) {
+      try {
+        await bot.api.refundStarPayment(session.telegramUserId, chargeId);
+      } catch (error) {
+        sent = false;
+        console.error({
+          event: 'star_withdrawal_refund_failed',
+          withdrawalId: plan.withdrawalId,
+          error: error instanceof Error ? error.message : 'unknown',
+        });
+        break;
+      }
+    }
+    await dataApi.execute('stars.withdraw.settle', { withdrawalId: plan.withdrawalId, sent });
+    if (!sent) throw new DataApiError('STAR_WITHDRAWAL_FAILED', ru.api.requestFailed, 502);
+    return { withdrawn: plan.stars };
+  });
+  app.post('/api/gifts/:itemId/buy', async (request) => {
+    const session = await mutate(request);
+    const { itemId } = z.object({ itemId: z.string().uuid() }).parse(request.params);
+    return dataApi.execute('gifts.buy', { itemId, buyerUserId: session.userId });
   });
   app.post('/api/gifts/shelves', async (request) => {
     const session = await mutate(request);
@@ -3745,7 +3794,7 @@ export async function buildServer(
         idempotencyKey: request.id,
       },
     );
-    return stars.createPayment({
+    return starsProvider.createPayment({
       userId: session.userId,
       telegramUserId: session.telegramUserId,
       productId: product.id,
@@ -3785,7 +3834,7 @@ export async function buildServer(
         idempotencyKey: request.id,
       },
     );
-    return stars.createPayment({
+    return starsProvider.createPayment({
       userId: session.userId,
       telegramUserId: session.telegramUserId,
       productId: product.id,
@@ -4536,7 +4585,7 @@ export async function buildServer(
       telegram_user_id: number;
       telegram_payment_charge_id: string;
     }>('payments.getForRefund', { orderId: params.orderId });
-    await stars.refundPayment({
+    await starsProvider.refundPayment({
       telegramUserId: order.telegram_user_id,
       paymentId: order.telegram_payment_charge_id,
       idempotencyKey: request.id,

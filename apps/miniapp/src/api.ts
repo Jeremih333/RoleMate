@@ -722,9 +722,20 @@ export const api = {
       body: JSON.stringify({ starAmount, ...(message ? { message } : {}) }),
     }),
   buyGift: (itemId: string) =>
-    request<{ invoiceLink: string }>(`/gifts/${itemId}/invoice`, {
+    request<{ bought: true; starAmount: number }>(`/gifts/${itemId}/buy`, {
       method: 'POST',
       body: '{}',
+    }),
+  starBalance: () => request<StarBalance>('/stars/balance'),
+  topUpStars: (stars: number) =>
+    request<{ invoiceLink: string }>('/stars/topup', {
+      method: 'POST',
+      body: JSON.stringify({ stars }),
+    }),
+  withdrawStars: (stars: number) =>
+    request<{ withdrawn: number }>('/stars/withdraw', {
+      method: 'POST',
+      body: JSON.stringify({ stars }),
     }),
   giftOffers: () => request<GiftOffer[]>('/gifts/offers/inbox'),
   answerGiftOffer: (offerId: string, action: 'accepted' | 'declined' | 'cancelled') =>
@@ -1456,6 +1467,19 @@ export interface GiftDetail extends GiftAppearanceRow {
   backdrop_title: string | null;
   backdrop_rarity: number | null;
   listed_price: number | null;
+}
+
+export interface StarBalance {
+  balance: number;
+  /** The most that could ever be taken back out: this person's own top-ups. */
+  refundable: number;
+  ledger: Array<{
+    id: string;
+    delta: number;
+    reason: string;
+    ref_id: string | null;
+    created_at: string;
+  }>;
 }
 
 export interface GiftOffer {

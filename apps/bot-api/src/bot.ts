@@ -1609,6 +1609,13 @@ export function createBot(
         await context.answerPreCheckoutQuery(true);
         return;
       }
+      // Topping up a balance is not a premium order either: it has no product
+      // behind it, only stars that become the person's own to spend.
+      if (query.invoice_payload.startsWith('stars:')) {
+        await dataApi.execute('stars.topup.get', { invoicePayload: query.invoice_payload });
+        await context.answerPreCheckoutQuery(true);
+        return;
+      }
       const order = await dataApi.execute<{ id: string }>('payments.getByPayload', {
         invoicePayload: query.invoice_payload,
       });
@@ -1626,6 +1633,17 @@ export function createBot(
 
   bot.on('message:successful_payment', async (context) => {
     const payment = context.message.successful_payment;
+    if (payment.invoice_payload.startsWith('stars:')) {
+      const settled = await dataApi.execute<{ duplicate: boolean; stars: number }>(
+        'stars.topup.settle',
+        {
+          invoicePayload: payment.invoice_payload,
+          telegramPaymentChargeId: payment.telegram_payment_charge_id,
+        },
+      );
+      if (!settled.duplicate) await context.reply(ru.bot.starsToppedUp(settled.stars));
+      return;
+    }
     if (payment.invoice_payload.startsWith('gift:')) {
       // What the money buys is a transfer, and it goes through the same signed
       // path as any other, so the chain of ownership stays whole.

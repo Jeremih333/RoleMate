@@ -1147,6 +1147,25 @@ export function ProfileHeroEmoji({
  * under a short "also known as" line, rather than running them all together, so
  * the one people should use is the one they read first.
  */
+/**
+ * The stars somebody has, and the way out of the app with them. Withdrawal
+ * returns a person's own top-ups: a bot cannot send stars to anybody, and
+ * paying out of a shared pot would let one person take another's money.
+ */
+function ProfileStarBalance() {
+  const balance = useQuery({
+    queryKey: ['star-balance'],
+    queryFn: api.starBalance,
+    staleTime: 60_000,
+  });
+  return (
+    <p className="profile-star-balance">
+      <strong>{ru.miniApp.gifts.stars(balance.data?.balance ?? 0)}</strong>{' '}
+      <Link href="/gifts">{ru.miniApp.gifts.marketplaceTitle}</Link>
+    </p>
+  );
+}
+
 function ProfileUsernamesLine({ aliases }: { aliases: string[] }) {
   const [primary, ...additional] = aliases;
   if (!primary) return null;
@@ -1446,6 +1465,10 @@ export function PublicProfileViewerPage() {
               <ExpandableText text={profile.data.bio} emptyText={ru.miniApp.social.bioEmpty} />
             </span>
             <small>{ru.miniApp.social.aboutLabel}</small>
+          </div>
+          <div className="profile-info-row star-balance-row">
+            <ProfileStarBalance />
+            <small>{ru.miniApp.gifts.balance}</small>
           </div>
           {aliases.length ? (
             <div className="profile-info-row">

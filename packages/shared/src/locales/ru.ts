@@ -213,6 +213,8 @@ export const ru = {
     premiumGiftInvoiceTitle: (name: string) => `Подарок: ${name}`,
     premiumGiftInvoiceDescription: (description: string) =>
       `RoleMate Premium для собеседника. ${description}`,
+    starsToppedUp: (stars: number) =>
+      `Баланс пополнен на ${stars} ★. Потратить их можно в разделе «Маркет подарков».`,
     giftPurchased: 'Подарок твой — он уже в разделе «Маркет подарков» → «Мои подарки».',
     moderationWarning: (reason: string) =>
       `⚠️ Предупреждение от модерации RoleMate\n\n${reason}\n\nЧто делать дальше: удали или исправь то, из-за чего пришло предупреждение. Повторные нарушения ведут к временной, а затем к постоянной блокировке. Если считаешь предупреждение ошибкой, напиши в поддержку через раздел «Помощь» в приложении.`,
@@ -662,6 +664,17 @@ export const ru = {
       removeShelf: 'Удалить коллекцию',
       moveToShelf: 'В коллекцию',
       buy: 'Купить',
+      balance: 'Баланс звёзд',
+      topUp: 'Пополнить',
+      topUpTitle: 'Звёзды RoleMate',
+      topUpDescription: 'Пополнение внутреннего баланса звёзд',
+      topUpPrompt: 'Сколько звёзд зачислить?',
+      withdraw: 'Вывести звёзды',
+      withdrawPrompt: 'Сколько звёзд вывести?',
+      withdrawHint:
+        'Вывести можно только те звёзды, которые ты сам пополнял: Telegram возвращает их тем же платежом обратно тебе.',
+      withdrawn: 'Звёзды отправлены обратно в Telegram.',
+      notEnoughStars: 'Не хватает звёзд на балансе. Пополни баланс и попробуй снова.',
       newShelf: 'Новая коллекция',
       newShelfPrompt: 'Название коллекции',
       accept: 'Принять',

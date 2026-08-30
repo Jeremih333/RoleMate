@@ -46,6 +46,22 @@ export function GiftsPage() {
   const [rank, setRank] = useState<string>('');
   const [sort, setSort] = useState('recent');
   const [openItemId, setOpenItemId] = useState<string | null>(null);
+  const balance = useQuery({
+    queryKey: ['star-balance'],
+    queryFn: api.starBalance,
+    staleTime: 30_000,
+  });
+  const topUp = useMutation({
+    mutationFn: (stars: number) => api.topUpStars(stars),
+    onSuccess: (result) => {
+      // Telegram opens the invoice; the balance follows when it reports back.
+      if (result.invoiceLink) getTelegram()?.openInvoice(result.invoiceLink);
+    },
+  });
+  const withdraw = useMutation({
+    mutationFn: (stars: number) => api.withdrawStars(stars),
+    onSuccess: () => void queryClient.invalidateQueries({ queryKey: ['star-balance'] }),
+  });
 
   const market = useQuery({
     queryKey: ['gift-market', rank, sort],
@@ -98,6 +114,47 @@ export function GiftsPage() {
         <p className="eyebrow">{ru.miniApp.gifts.title}</p>
         <h1>{ru.miniApp.gifts.marketplaceTitle}</h1>
       </header>
+
+      {/* Everything here is bought and sold in stars, so the balance is the
+          first thing the market says. */}
+      <Card className="star-balance">
+        <div>
+          <strong>{ru.miniApp.gifts.stars(balance.data?.balance ?? 0)}</strong>
+          <small>{ru.miniApp.gifts.balance}</small>
+        </div>
+        <div className="star-balance-actions">
+          <Button
+            variant="secondary"
+            loading={topUp.isPending}
+            onClick={() =>
+              ask(ru.miniApp.gifts.topUpPrompt, (value) => {
+                const stars = Number.parseInt(value, 10);
+                if (Number.isFinite(stars) && stars > 0) topUp.mutate(stars);
+              })
+            }
+          >
+            {ru.miniApp.gifts.topUp}
+          </Button>
+          {balance.data?.refundable ? (
+            <Button
+              variant="secondary"
+              loading={withdraw.isPending}
+              onClick={() =>
+                ask(ru.miniApp.gifts.withdrawPrompt, (value) => {
+                  const stars = Number.parseInt(value, 10);
+                  if (Number.isFinite(stars) && stars > 0) withdraw.mutate(stars);
+                })
+              }
+            >
+              {ru.miniApp.gifts.withdraw}
+            </Button>
+          ) : null}
+        </div>
+      </Card>
+      {balance.data?.refundable ? (
+        <p className="text-xs text-muted">{ru.miniApp.gifts.withdrawHint}</p>
+      ) : null}
+      {withdraw.isError ? <div className="error-box">{withdraw.error.message}</div> : null}
 
       <div className="gift-tabs" role="tablist">
         {(
@@ -360,9 +417,12 @@ function GiftSheet({
   const me = useQuery({ queryKey: ['me'], queryFn: api.me, staleTime: 5 * 60_000 });
   const buy = useMutation({
     mutationFn: () => api.buyGift(itemId),
-    onSuccess: (result) => {
-      // Telegram opens the invoice itself; the gift moves when it reports back.
-      if (result.invoiceLink) getTelegram()?.openInvoice(result.invoiceLink);
+    onSuccess: () => {
+      // The stars move between two balances, so everything is current at once.
+      void queryClient.invalidateQueries({ queryKey: ['star-balance'] });
+      void queryClient.invalidateQueries({ queryKey: ['gift', itemId] });
+      void queryClient.invalidateQueries({ queryKey: ['gift-market'] });
+      void queryClient.invalidateQueries({ queryKey: ['gift-mine'] });
     },
   });
   const moveToShelf = useMutation({
@@ -513,6 +573,7 @@ function GiftSheet({
               {ru.miniApp.gifts.buy} · {ru.miniApp.gifts.stars(item.listed_price)}
             </Button>
           ) : null}
+          {buy.isError ? <div className="error-box">{buy.error.message}</div> : null}
           {item?.owner_user_id === me.data?.userId && item?.listed_price ? (
             <Button
               variant="secondary"

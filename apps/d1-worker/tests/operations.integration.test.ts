@@ -1334,6 +1334,185 @@ describe('D1 domain operations', () => {
     ).toMatchObject({ status: 'sold' });
   });
 
+  it('credits a top-up once and never lets a balance fall below zero', async () => {
+    const person = await onboard(2_671);
+    const balance = () =>
+      executeOperation(env, 'stars.balance', { userId: person }, crypto.randomUUID()) as Promise<{
+        balance: number;
+        refundable: number;
+      }>;
+    expect(await balance()).toMatchObject({ balance: 0, refundable: 0 });
+
+    const topup = (await executeOperation(
+      env,
+      'stars.topup.start',
+      { userId: person, stars: 500 },
+      crypto.randomUUID(),
+    )) as { invoicePayload: string };
+    // Nothing is credited until Telegram says the payment went through.
+    expect(await balance()).toMatchObject({ balance: 0 });
+
+    const settle = () =>
+      executeOperation(
+        env,
+        'stars.topup.settle',
+        { invoicePayload: topup.invoicePayload, telegramPaymentChargeId: 'charge-top-1' },
+        crypto.randomUUID(),
+      ) as Promise<{ duplicate: boolean }>;
+    expect(await settle()).toMatchObject({ duplicate: false });
+    // A payment delivered twice credits nothing twice.
+    expect(await settle()).toMatchObject({ duplicate: true });
+    expect(await balance()).toMatchObject({ balance: 500, refundable: 500 });
+
+    // The floor belongs to the database, not to whoever is spending.
+    expect(() =>
+      sqlite.prepare('UPDATE star_balances SET balance = -1 WHERE user_id = ?').run(person),
+    ).toThrow();
+    // And the history of it can be added to but never rewritten or erased.
+    expect(() =>
+      sqlite.prepare('UPDATE star_ledger SET delta = 999 WHERE user_id = ?').run(person),
+    ).toThrow(/cannot be rewritten/);
+    expect(() => sqlite.prepare('DELETE FROM star_ledger WHERE user_id = ?').run(person)).toThrow(
+      /cannot be erased/,
+    );
+  });
+
+  it('buys a gift out of the balance, moving stars and ownership together', async () => {
+    const seller = await onboard(2_672);
+    const buyer = await onboard(2_673);
+    sqlite
+      .prepare("UPDATE users SET role = 'admin', telegram_user_id = 1040929628 WHERE id = ?")
+      .run(seller);
+    const item = (await executeOperation(
+      env,
+      'gifts.mint',
+      { actorUserId: seller, ownerUserId: seller, seriesCode: 'blue_whistle' },
+      crypto.randomUUID(),
+    )) as { itemId: string };
+    await executeOperation(
+      env,
+      'gifts.market.list.set',
+      { userId: seller, itemId: item.itemId, starPrice: 150 },
+      crypto.randomUUID(),
+    );
+
+    const buy = () =>
+      executeOperation(
+        env,
+        'gifts.buy',
+        { itemId: item.itemId, buyerUserId: buyer },
+        crypto.randomUUID(),
+      );
+    // An empty balance buys nothing, and nothing moves while it fails.
+    await expect(buy()).rejects.toMatchObject({ code: 'STAR_BALANCE_TOO_LOW' });
+    expect(
+      sqlite.prepare('SELECT owner_user_id FROM gift_items WHERE id = ?').get(item.itemId),
+    ).toMatchObject({ owner_user_id: seller });
+
+    const topup = (await executeOperation(
+      env,
+      'stars.topup.start',
+      { userId: buyer, stars: 200 },
+      crypto.randomUUID(),
+    )) as { invoicePayload: string };
+    await executeOperation(
+      env,
+      'stars.topup.settle',
+      { invoicePayload: topup.invoicePayload, telegramPaymentChargeId: 'charge-top-2' },
+      crypto.randomUUID(),
+    );
+
+    await expect(buy()).resolves.toMatchObject({ bought: true, starAmount: 150 });
+    const balanceOf = async (userId: string) =>
+      (
+        (await executeOperation(env, 'stars.balance', { userId }, crypto.randomUUID())) as {
+          balance: number;
+        }
+      ).balance;
+    expect(await balanceOf(buyer)).toBe(50);
+    expect(await balanceOf(seller)).toBe(150);
+    expect(
+      sqlite.prepare('SELECT owner_user_id FROM gift_items WHERE id = ?').get(item.itemId),
+    ).toMatchObject({ owner_user_id: buyer });
+    expect(
+      sqlite.prepare('SELECT status FROM gift_listings WHERE item_id = ?').get(item.itemId),
+    ).toMatchObject({ status: 'sold' });
+    // It is no longer for sale, so it cannot be bought a second time.
+    await expect(buy()).rejects.toMatchObject({ code: 'GIFT_NOT_FOR_SALE' });
+  });
+
+  it('returns only the stars somebody topped up themselves', async () => {
+    const seller = await onboard(2_674);
+    const buyer = await onboard(2_675);
+    // Two separate payments: a payment is returned whole or not at all.
+    for (const [stars, charge] of [
+      [100, 'charge-top-3'],
+      [200, 'charge-top-4'],
+    ] as const) {
+      const topup = (await executeOperation(
+        env,
+        'stars.topup.start',
+        { userId: buyer, stars },
+        crypto.randomUUID(),
+      )) as { invoicePayload: string };
+      await executeOperation(
+        env,
+        'stars.topup.settle',
+        { invoicePayload: topup.invoicePayload, telegramPaymentChargeId: charge },
+        crypto.randomUUID(),
+      );
+    }
+
+    // Stars earned by selling are on the balance but were never paid in by this
+    // person, so there is no payment of theirs to return.
+    await executeOperation(
+      env,
+      'stars.settleOffer',
+      { offerId: crypto.randomUUID(), fromUserId: buyer, toUserId: seller, starAmount: 100 },
+      crypto.randomUUID(),
+    );
+    const sellerBalance = (await executeOperation(
+      env,
+      'stars.balance',
+      { userId: seller },
+      crypto.randomUUID(),
+    )) as { balance: number; refundable: number };
+    expect(sellerBalance).toMatchObject({ balance: 100, refundable: 0 });
+    await expect(
+      executeOperation(
+        env,
+        'stars.withdraw.start',
+        { userId: seller, stars: 100 },
+        crypto.randomUUID(),
+      ),
+    ).rejects.toMatchObject({ code: 'STAR_WITHDRAWAL_UNAVAILABLE' });
+
+    // Spent stars are not there to be returned, so the larger payment can no
+    // longer go back whole; the smaller one still can.
+    const plan = (await executeOperation(
+      env,
+      'stars.withdraw.start',
+      { userId: buyer, stars: 100 },
+      crypto.randomUUID(),
+    )) as { withdrawalId: string; stars: number; charges: string[] };
+    expect(plan.charges).toEqual(['charge-top-4']);
+    await executeOperation(
+      env,
+      'stars.withdraw.settle',
+      { withdrawalId: plan.withdrawalId, sent: true },
+      crypto.randomUUID(),
+    );
+    // The balance goes down by what was actually returned, and a top-up that has
+    // been returned cannot be returned again.
+    const after = (await executeOperation(
+      env,
+      'stars.balance',
+      { userId: buyer },
+      crypto.randomUUID(),
+    )) as { balance: number; refundable: number };
+    expect(after).toMatchObject({ balance: 0, refundable: 100 });
+  });
+
   it('answers with counters that say what moved, and nothing else', async () => {
     const reader = await onboard(2_641);
     const other = await onboard(2_642);

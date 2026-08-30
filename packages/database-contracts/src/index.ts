@@ -511,6 +511,34 @@ export const workerOperations = {
     invoicePayload: z.string().min(1).max(128),
     telegramPaymentChargeId: z.string().min(1).max(256),
   }),
+  'stars.balance': z.object({ userId: z.string().uuid() }),
+  'stars.topup.start': z.object({
+    userId: z.string().uuid(),
+    stars: z.number().int().min(1).max(100_000),
+  }),
+  'stars.topup.get': z.object({ invoicePayload: z.string().min(1).max(128) }),
+  'stars.topup.settle': z.object({
+    invoicePayload: z.string().min(1).max(128),
+    telegramPaymentChargeId: z.string().min(1).max(256),
+  }),
+  'gifts.buy': z.object({
+    itemId: z.string().uuid(),
+    buyerUserId: z.string().uuid(),
+  }),
+  'stars.settleOffer': z.object({
+    offerId: z.string().uuid(),
+    fromUserId: z.string().uuid(),
+    toUserId: z.string().uuid(),
+    starAmount: z.number().int().min(1).max(1_000_000),
+  }),
+  'stars.withdraw.start': z.object({
+    userId: z.string().uuid(),
+    stars: z.number().int().min(1).max(100_000),
+  }),
+  'stars.withdraw.settle': z.object({
+    withdrawalId: z.string().uuid(),
+    sent: z.boolean(),
+  }),
   'gifts.showcase': z.object({ userId: z.string().uuid() }),
   'pulse.get': z.object({ userId: z.string().uuid() }),
   'customEmoji.adopt': z.object({

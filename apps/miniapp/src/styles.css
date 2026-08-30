@@ -10791,3 +10791,32 @@ body {
   color: var(--muted);
   font-size: 12px;
 }
+
+/* Everything in the market is bought and sold in stars, so the balance is the
+   first thing it says. */
+.star-balance {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.star-balance strong {
+  display: block;
+  color: #ffd479;
+  font-size: 20px;
+}
+
+.star-balance small {
+  color: var(--muted);
+}
+
+.star-balance-actions {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.profile-star-balance strong {
+  color: #ffd479;
+}

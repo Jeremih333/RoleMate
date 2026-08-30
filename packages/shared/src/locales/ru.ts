@@ -666,6 +666,15 @@ export const ru = {
       buy: 'Купить',
       balance: 'Баланс звёзд',
       tabCollection: 'Коллекция',
+      packs: 'Наборы',
+      standardGifts: 'Обычные подарки',
+      packCount: (count: number) => `${count} подарков`,
+      offersCount: (count: number) => `${count} предложений`,
+      filterPrice: 'Цена',
+      filterModel: 'Модель',
+      filterBackdrop: 'Фон',
+      filterPattern: 'Узор',
+      back: 'Назад',
       collectionHint:
         'Whistle Gifts — серия по рангам искателей Бездны. Чем выше ранг, тем меньше тираж и темнее фон.',
       issuedOf: (issued: number, total: number | null) =>

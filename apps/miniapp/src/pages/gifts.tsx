@@ -50,6 +50,7 @@ export function GiftsPage() {
   const { ask, dialog: promptDialog } = useTextPrompt();
   const [tab, setTab] = useState<'collection' | 'market' | 'mine' | 'offers'>('collection');
   const [openSeries, setOpenSeries] = useState<string | null>(null);
+  const [openPack, setOpenPack] = useState<string | null>(null);
   const [rank, setRank] = useState<string>('');
   const [sort, setSort] = useState('recent');
   const [openItemId, setOpenItemId] = useState<string | null>(null);
@@ -195,44 +196,115 @@ export function GiftsPage() {
 
       {tab === 'collection' ? (
         <div className="gift-collection">
-          <p className="text-xs text-muted">{ru.miniApp.gifts.collectionHint}</p>
-          {(catalogue.data?.collections ?? []).map((collection) => {
-            const series = (catalogue.data?.series ?? []).filter(
-              (row) => row.collection_id === collection.id,
-            );
-            if (!series.length) return null;
-            return (
-              <section key={collection.id}>
-                <h2 className="gift-collection-title">{collection.title}</h2>
+          {openPack ? (
+            // Inside a pack: its own gifts and nothing else, the way a market
+            // opens one collection at a time.
+            <>
+              <div className="gift-pack-header">
+                <button type="button" className="gift-pack-back" onClick={() => setOpenPack(null)}>
+                  {ru.miniApp.gifts.back}
+                </button>
+                <div>
+                  <h2>{packOf(catalogue.data, openPack)?.title ?? ''}</h2>
+                  <small>
+                    {ru.miniApp.gifts.packCount(packSeries(catalogue.data, openPack).length)}
+                  </small>
+                </div>
+              </div>
+              <div className="gift-grid">
+                {packSeries(catalogue.data, openPack).map((row) => (
+                  <button
+                    key={row.id}
+                    type="button"
+                    className="gift-tile"
+                    onClick={() => setOpenSeries(row.code)}
+                  >
+                    <GiftCard
+                      appearance={seriesAppearance(row.rank)}
+                      rank={row.rank}
+                      seriesCode={row.code}
+                      bleed
+                    />
+                    <span className="gift-tile-ribbon">
+                      {ru.miniApp.gifts.rankNames[row.rank] ?? row.rank}
+                    </span>
+                    <span className="gift-tile-price">
+                      {ru.miniApp.gifts.stars(row.star_price)}
+                    </span>
+                    <span className="gift-tile-name">{row.title}</span>
+                  </button>
+                ))}
+              </div>
+            </>
+          ) : (
+            <>
+              {/* Packs first and each as one tile: a collection is one thing, not
+                  fourteen loose gifts spilled among the everyday ones. */}
+              <section>
+                <h2 className="gift-collection-title">{ru.miniApp.gifts.packs}</h2>
                 <div className="gift-grid">
-                  {series.map((row) => (
-                    <button
-                      key={row.id}
-                      type="button"
-                      className="gift-grid-cell"
-                      onClick={() => setOpenSeries(row.code)}
-                    >
-                      <GiftCard
-                        appearance={seriesAppearance(row.rank)}
-                        rank={row.rank}
-                        seriesCode={row.code}
-                        size={104}
-                      />
-                      <strong>{row.title}</strong>
-                      <small>{ru.miniApp.gifts.issuedOf(row.issued, row.total_supply)}</small>
-                      <span className="gift-price">{ru.miniApp.gifts.stars(row.star_price)}</span>
-                    </button>
-                  ))}
+                  {(catalogue.data?.collections ?? [])
+                    .filter((collection) => collection.kind === 'unique')
+                    .map((collection) => {
+                      const series = packSeries(catalogue.data, collection.id);
+                      const face = series[0];
+                      if (!face) return null;
+                      return (
+                        <button
+                          key={collection.id}
+                          type="button"
+                          className="gift-tile is-pack"
+                          onClick={() => setOpenPack(collection.id)}
+                        >
+                          <GiftCard
+                            appearance={seriesAppearance(face.rank)}
+                            rank={face.rank}
+                            seriesCode={face.code}
+                            bleed
+                          />
+                          <span className="gift-tile-name">{collection.title}</span>
+                          <span className="gift-tile-sub">
+                            {ru.miniApp.gifts.packCount(series.length)}
+                          </span>
+                        </button>
+                      );
+                    })}
                 </div>
               </section>
-            );
-          })}
-          <section className="gift-disclaimer">
-            <h2>{ru.miniApp.gifts.disclaimerTitle}</h2>
-            {ru.miniApp.gifts.disclaimer.map((paragraph) => (
-              <p key={paragraph.slice(0, 24)}>{paragraph}</p>
-            ))}
-          </section>
+              <section>
+                <h2 className="gift-collection-title">{ru.miniApp.gifts.standardGifts}</h2>
+                <div className="gift-grid">
+                  {(catalogue.data?.series ?? [])
+                    .filter((row) => row.total_supply === null)
+                    .map((row) => (
+                      <button
+                        key={row.id}
+                        type="button"
+                        className="gift-tile"
+                        onClick={() => setOpenSeries(row.code)}
+                      >
+                        <GiftCard
+                          appearance={seriesAppearance(row.rank)}
+                          rank={row.rank}
+                          seriesCode={row.code}
+                          bleed
+                        />
+                        <span className="gift-tile-price">
+                          {ru.miniApp.gifts.stars(row.star_price)}
+                        </span>
+                        <span className="gift-tile-name">{row.title}</span>
+                      </button>
+                    ))}
+                </div>
+              </section>
+              <section className="gift-disclaimer">
+                <h2>{ru.miniApp.gifts.disclaimerTitle}</h2>
+                {ru.miniApp.gifts.disclaimer.map((paragraph) => (
+                  <p key={paragraph.slice(0, 24)}>{paragraph}</p>
+                ))}
+              </section>
+            </>
+          )}
         </div>
       ) : null}
 
@@ -830,4 +902,14 @@ function SeriesSheet({
       </section>
     </div>
   );
+}
+
+/** The collection a pack tile stands for. */
+function packOf(catalogue: GiftCatalogue | undefined, collectionId: string) {
+  return catalogue?.collections.find((collection) => collection.id === collectionId);
+}
+
+/** Everything inside one pack, in the order the pack itself puts them. */
+function packSeries(catalogue: GiftCatalogue | undefined, collectionId: string) {
+  return (catalogue?.series ?? []).filter((row) => row.collection_id === collectionId);
 }

@@ -17,6 +17,7 @@ import {
   SettingsPage,
 } from './pages/community.js';
 import { HomePage } from './pages/home.js';
+import { GiftsPage } from './pages/gifts.js';
 import { ProfileEditorPage, ProfilePage } from './pages/profile.js';
 import {
   PostsPage,
@@ -191,6 +192,7 @@ export function App() {
           <Route path="/profile/legacy" component={ProfilePage} />
           <Route path="/posts/:postId" component={PostsPage} />
           <Route path="/posts" component={PostsPage} />
+          <Route path="/gifts" component={GiftsPage} />
           <Route path="/premium" component={PremiumPage} />
           <Route path="/referrals" component={ReferralsPage} />
           <Route path="/settings" component={SettingsPage} />

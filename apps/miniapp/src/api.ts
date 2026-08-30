@@ -692,6 +692,48 @@ export const api = {
         body: JSON.stringify({ reaction, ...(customEmojiId ? { customEmojiId } : {}) }),
       },
     ),
+  giftCatalogue: () => request<GiftCatalogue>('/gifts/catalogue'),
+  giftMarket: (filters: GiftMarketFilters) => {
+    const query = new URLSearchParams();
+    for (const [key, value] of Object.entries(filters)) {
+      if (value !== undefined && value !== null && value !== '') query.set(key, String(value));
+    }
+    return request<GiftListing[]>(`/gifts/market?${query.toString()}`);
+  },
+  myGifts: () => request<{ items: GiftItem[]; shelves: GiftShelf[] }>('/gifts/mine'),
+  giftShowcase: (userId: string) => request<GiftShowcaseItem[]>(`/gifts/showcase/${userId}`),
+  gift: (itemId: string) => request<GiftDetail>(`/gifts/${itemId}`),
+  giftListing: (itemId: string, starPrice: number | null) =>
+    request<{ listed: boolean }>(`/gifts/${itemId}/listing`, {
+      method: 'PUT',
+      body: JSON.stringify({ starPrice }),
+    }),
+  giftArrangement: (
+    itemId: string,
+    body: { shelfId?: string | null; pinnedOrder?: number | null },
+  ) =>
+    request<{ arranged: true }>(`/gifts/${itemId}/arrangement`, {
+      method: 'PUT',
+      body: JSON.stringify(body),
+    }),
+  giftOffer: (itemId: string, starAmount: number, message?: string) =>
+    request<{ offerId: string }>(`/gifts/${itemId}/offers`, {
+      method: 'POST',
+      body: JSON.stringify({ starAmount, ...(message ? { message } : {}) }),
+    }),
+  giftOffers: () => request<GiftOffer[]>('/gifts/offers/inbox'),
+  answerGiftOffer: (offerId: string, action: 'accepted' | 'declined' | 'cancelled') =>
+    request<{ status: string }>(`/gifts/offers/${offerId}`, {
+      method: 'PUT',
+      body: JSON.stringify({ action }),
+    }),
+  createGiftShelf: (title: string) =>
+    request<{ shelfId: string }>('/gifts/shelves', {
+      method: 'POST',
+      body: JSON.stringify({ title }),
+    }),
+  removeGiftShelf: (shelfId: string) =>
+    request<{ removed: true }>(`/gifts/shelves/${shelfId}`, { method: 'DELETE', body: '{}' }),
   pulse: () => request<Pulse>('/pulse'),
   customEmojiPacks: () => request<CustomEmojiLibrary>('/custom-emoji/packs'),
   // A whole pack in one response: the index of where each glyph sits, then all
@@ -1289,6 +1331,139 @@ export interface CustomEmojiDescriptor extends CustomEmojiItem {
 
 export interface CustomEmojiPackDetail extends Omit<CustomEmojiPack, 'can_remove'> {
   discovered: number;
+}
+
+/** A gift, the way Telegram describes a collectible: model, pattern, backdrop. */
+export interface GiftAppearanceRow {
+  model_appearance?: string | null;
+  pattern_appearance?: string | null;
+  backdrop_appearance?: string | null;
+}
+
+export interface GiftSeries {
+  id: string;
+  collection_id: string;
+  code: string;
+  title: string;
+  subtitle: string | null;
+  lore: string | null;
+  rank: string;
+  total_supply: number | null;
+  star_price: number;
+  issued: number;
+}
+
+export interface GiftAttribute {
+  id: string;
+  kind: 'model' | 'pattern' | 'backdrop';
+  code: string;
+  title: string;
+  rarity_permille: number;
+  appearance: string;
+}
+
+export interface GiftCatalogue {
+  collections: Array<{
+    id: string;
+    code: string;
+    title: string;
+    kind: string;
+    description: string | null;
+  }>;
+  series: GiftSeries[];
+  attributes: GiftAttribute[];
+}
+
+export interface GiftMarketFilters {
+  seriesCode?: string | undefined;
+  rank?: string | undefined;
+  modelCode?: string | undefined;
+  backdropCode?: string | undefined;
+  minPrice?: number | undefined;
+  maxPrice?: number | undefined;
+  sort?: string | undefined;
+  limit?: number | undefined;
+  offset?: number | undefined;
+}
+
+export interface GiftListing extends GiftAppearanceRow {
+  listing_id: string;
+  item_id: string;
+  serial: number;
+  star_price: number;
+  series_code: string;
+  series_title: string;
+  rank: string;
+  total_supply: number | null;
+  model_title: string | null;
+  backdrop_title: string | null;
+  seller_name: string | null;
+}
+
+export interface GiftItem extends GiftAppearanceRow {
+  id: string;
+  serial: number;
+  pinned_order: number | null;
+  user_collection_id: string | null;
+  series_code: string;
+  series_title: string;
+  rank: string;
+  total_supply: number | null;
+  backdrop_title: string | null;
+  listed_price: number | null;
+}
+
+export interface GiftShelf {
+  id: string;
+  title: string;
+  sort_order: number;
+}
+
+export interface GiftShowcaseItem extends GiftAppearanceRow {
+  id: string;
+  serial: number;
+  series_code: string;
+  series_title: string;
+  rank: string;
+}
+
+export interface GiftDetail extends GiftAppearanceRow {
+  id: string;
+  serial: number;
+  minted_at: string;
+  hash: string;
+  owner_user_id: string | null;
+  owner_name: string | null;
+  pinned_order: number | null;
+  series_code: string;
+  series_title: string;
+  subtitle: string | null;
+  lore: string | null;
+  rank: string;
+  total_supply: number | null;
+  star_price: number;
+  issued: number;
+  model_title: string | null;
+  model_rarity: number | null;
+  pattern_title: string | null;
+  pattern_rarity: number | null;
+  backdrop_title: string | null;
+  backdrop_rarity: number | null;
+  listed_price: number | null;
+}
+
+export interface GiftOffer {
+  id: string;
+  item_id: string;
+  from_user_id: string;
+  to_user_id: string;
+  star_amount: number;
+  message: string | null;
+  status: string;
+  created_at: string;
+  series_title: string;
+  serial: number;
+  from_name: string | null;
 }
 
 /** The counters that say whether anything the app is showing has moved. */

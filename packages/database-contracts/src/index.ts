@@ -438,6 +438,71 @@ export const workerOperations = {
       .min(1)
       .max(200),
   }),
+  'gifts.catalogue': z.object({}),
+  'gifts.mint': z.object({
+    actorUserId: z.string().uuid(),
+    ownerUserId: z.string().uuid(),
+    seriesCode: z.string().trim().min(1).max(64),
+  }),
+  'gifts.item': z.object({ itemId: z.string().uuid() }),
+  'gifts.owned': z.object({
+    userId: z.string().uuid(),
+    limit: z.number().int().min(1).max(200).default(100),
+  }),
+  'gifts.transfer': z.object({
+    itemId: z.string().uuid(),
+    fromUserId: z.string().uuid(),
+    toUserId: z.string().uuid(),
+    reason: z.enum(['gift', 'trade', 'purchase']).default('gift'),
+    starAmount: z.number().int().min(0).default(0),
+  }),
+  'gifts.verify': z.object({ seriesCode: z.string().trim().min(1).max(64) }),
+  'gifts.market.list': z.object({
+    seriesCode: z.string().trim().max(64).optional(),
+    rank: z.enum(['bell', 'red', 'blue', 'moon', 'black', 'white', 'plain']).optional(),
+    modelCode: z.string().trim().max(64).optional(),
+    backdropCode: z.string().trim().max(64).optional(),
+    minPrice: z.number().int().min(0).optional(),
+    maxPrice: z.number().int().min(0).optional(),
+    sort: z.enum(['recent', 'price_asc', 'price_desc', 'serial']).default('recent'),
+    limit: z.number().int().min(1).max(60).default(30),
+    offset: z.number().int().min(0).default(0),
+  }),
+  'gifts.market.list.set': z.object({
+    userId: z.string().uuid(),
+    itemId: z.string().uuid(),
+    starPrice: z.number().int().min(1).max(1_000_000).nullable(),
+  }),
+  'gifts.offers.create': z.object({
+    itemId: z.string().uuid(),
+    fromUserId: z.string().uuid(),
+    starAmount: z.number().int().min(0).max(1_000_000),
+    message: z.string().trim().max(300).optional(),
+  }),
+  'gifts.offers.list': z.object({
+    userId: z.string().uuid(),
+    limit: z.number().int().min(1).max(100).default(50),
+  }),
+  'gifts.offers.respond': z.object({
+    userId: z.string().uuid(),
+    offerId: z.string().uuid(),
+    action: z.enum(['accepted', 'declined', 'cancelled']),
+  }),
+  'gifts.shelves.create': z.object({
+    userId: z.string().uuid(),
+    title: z.string().trim().min(1).max(40),
+  }),
+  'gifts.shelves.remove': z.object({
+    userId: z.string().uuid(),
+    shelfId: z.string().uuid(),
+  }),
+  'gifts.arrange': z.object({
+    userId: z.string().uuid(),
+    itemId: z.string().uuid(),
+    shelfId: z.string().uuid().nullable().optional(),
+    pinnedOrder: z.number().int().min(0).max(7).nullable().optional(),
+  }),
+  'gifts.showcase': z.object({ userId: z.string().uuid() }),
   'pulse.get': z.object({ userId: z.string().uuid() }),
   'customEmoji.adopt': z.object({
     setName: z

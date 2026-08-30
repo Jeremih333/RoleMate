@@ -105,6 +105,7 @@ beforeEach(() => {
     INTERNAL_SERVICE_ID: 'test',
     INTERNAL_API_SECRET: 'test-secret',
     REFERRAL_IDENTITY_SECRET: 'test-referral-identity-secret',
+    GIFT_LEDGER_SECRET: 'test-gift-ledger-secret',
   };
 });
 
@@ -1046,6 +1047,230 @@ describe('D1 domain operations', () => {
       reply_header_custom_emoji_id: '5301',
       reply_header_emoji: '✨',
     });
+  });
+
+  it('issues a limited gift series that nobody can enlarge, and proves its chain', async () => {
+    const owner = await onboard(2_651);
+    const collector = await onboard(2_652);
+    // Only the owner of the product may issue, and only from a series whose
+    // circulation was written when the series was created.
+    sqlite
+      .prepare("UPDATE users SET role = 'admin', telegram_user_id = 1040929628 WHERE id = ?")
+      .run(owner);
+    const mint = (ownerUserId: string, seriesCode: string) =>
+      executeOperation(
+        env,
+        'gifts.mint',
+        { actorUserId: owner, ownerUserId, seriesCode },
+        crypto.randomUUID(),
+      ) as Promise<{ itemId: string; serial: number; hash: string }>;
+
+    await expect(
+      executeOperation(
+        env,
+        'gifts.mint',
+        { actorUserId: collector, ownerUserId: collector, seriesCode: 'lyza_whistle' },
+        crypto.randomUUID(),
+      ),
+    ).rejects.toMatchObject({ code: 'GIFT_MINT_FORBIDDEN' });
+
+    const first = await mint(owner, 'lyza_whistle');
+    const second = await mint(collector, 'lyza_whistle');
+    expect([first.serial, second.serial]).toEqual([1, 2]);
+
+    // The circulation is the whole promise of a limited series.
+    expect(() =>
+      sqlite
+        .prepare("UPDATE gift_series SET total_supply = 999999 WHERE code = 'lyza_whistle'")
+        .run(),
+    ).toThrow(/circulation cannot be changed/);
+    // Nor can an issued copy be renumbered into somebody else's place.
+    expect(() =>
+      sqlite.prepare('UPDATE gift_items SET serial = 500 WHERE id = ?').run(first.itemId),
+    ).toThrow(/cannot be renumbered/);
+
+    const chain = (await executeOperation(
+      env,
+      'gifts.verify',
+      { seriesCode: 'lyza_whistle' },
+      crypto.randomUUID(),
+    )) as { valid: boolean; issued: number; totalSupply: number | null; brokenAt: number | null };
+    expect(chain).toMatchObject({ valid: true, issued: 2, totalSupply: 100, brokenAt: null });
+
+    // Rewriting anything the signature covers breaks the chain from there on,
+    // which is the point of signing each link over the one before it.
+    sqlite
+      .prepare("UPDATE gift_items SET minted_at = '2000-01-01 00:00:00' WHERE id = ?")
+      .run(first.itemId);
+    expect(
+      await executeOperation(
+        env,
+        'gifts.verify',
+        { seriesCode: 'lyza_whistle' },
+        crypto.randomUUID(),
+      ),
+    ).toMatchObject({ valid: false, brokenAt: 1 });
+  });
+
+  it('refuses to issue more copies than the series was ever going to have', async () => {
+    const owner = await onboard(2_653);
+    sqlite
+      .prepare("UPDATE users SET role = 'admin', telegram_user_id = 1040929628 WHERE id = ?")
+      .run(owner);
+    sqlite
+      .prepare(
+        `INSERT INTO gift_series (id, collection_id, code, title, rank, total_supply, star_price)
+         VALUES ('gs-tiny', 'gc-whistle', 'tiny_whistle', 'Tiny', 'red', 2, 10)`,
+      )
+      .run();
+    const mint = () =>
+      executeOperation(
+        env,
+        'gifts.mint',
+        { actorUserId: owner, ownerUserId: owner, seriesCode: 'tiny_whistle' },
+        crypto.randomUUID(),
+      );
+    await mint();
+    await mint();
+    await expect(mint()).rejects.toMatchObject({ code: 'GIFT_SERIES_EXHAUSTED' });
+    // And not by going around the operation either.
+    expect(() =>
+      sqlite
+        .prepare(
+          `INSERT INTO gift_items (id, series_id, serial, prev_hash, hash)
+           VALUES (?, 'gs-tiny', 3, 'x', 'y')`,
+        )
+        .run(crypto.randomUUID()),
+    ).toThrow(/outside the circulation/);
+  });
+
+  it('moves a gift only when its owner says so, and keeps every hand it passed through', async () => {
+    const owner = await onboard(2_654);
+    const friend = await onboard(2_655);
+    const stranger = await onboard(2_656);
+    sqlite
+      .prepare("UPDATE users SET role = 'admin', telegram_user_id = 1040929628 WHERE id = ?")
+      .run(owner);
+    const item = (await executeOperation(
+      env,
+      'gifts.mint',
+      { actorUserId: owner, ownerUserId: owner, seriesCode: 'bell_whistle' },
+      crypto.randomUUID(),
+    )) as { itemId: string };
+
+    await expect(
+      executeOperation(
+        env,
+        'gifts.transfer',
+        {
+          itemId: item.itemId,
+          fromUserId: stranger,
+          toUserId: friend,
+          reason: 'gift',
+          starAmount: 0,
+        },
+        crypto.randomUUID(),
+      ),
+    ).rejects.toMatchObject({ code: 'GIFT_NOT_YOURS' });
+
+    await expect(
+      executeOperation(
+        env,
+        'gifts.transfer',
+        { itemId: item.itemId, fromUserId: owner, toUserId: friend, reason: 'gift', starAmount: 0 },
+        crypto.randomUUID(),
+      ),
+    ).resolves.toMatchObject({ transferred: true });
+
+    const owned = (await executeOperation(
+      env,
+      'gifts.owned',
+      { userId: friend, limit: 100 },
+      crypto.randomUUID(),
+    )) as { items: Array<{ id: string }> };
+    expect(owned.items.map((row) => row.id)).toEqual([item.itemId]);
+
+    // The history is the provenance: added to, never rewritten or erased.
+    const history = sqlite
+      .prepare('SELECT reason FROM gift_transfers WHERE item_id = ? ORDER BY rowid')
+      .all(item.itemId) as Array<{ reason: string }>;
+    expect(history.map((row) => row.reason)).toEqual(['mint', 'gift']);
+    expect(() =>
+      sqlite.prepare('DELETE FROM gift_transfers WHERE item_id = ?').run(item.itemId),
+    ).toThrow(/cannot be erased/);
+  });
+
+  it('shows the marketplace what it asks for and nothing else', async () => {
+    const owner = await onboard(2_657);
+    const buyer = await onboard(2_658);
+    sqlite
+      .prepare("UPDATE users SET role = 'admin', telegram_user_id = 1040929628 WHERE id = ?")
+      .run(owner);
+    const cheap = (await executeOperation(
+      env,
+      'gifts.mint',
+      { actorUserId: owner, ownerUserId: owner, seriesCode: 'red_whistle' },
+      crypto.randomUUID(),
+    )) as { itemId: string };
+    const dear = (await executeOperation(
+      env,
+      'gifts.mint',
+      { actorUserId: owner, ownerUserId: owner, seriesCode: 'ozen_whistle' },
+      crypto.randomUUID(),
+    )) as { itemId: string };
+    for (const [itemId, starPrice] of [
+      [cheap.itemId, 120],
+      [dear.itemId, 9_000],
+    ] as const) {
+      await executeOperation(
+        env,
+        'gifts.market.list.set',
+        { userId: owner, itemId, starPrice },
+        crypto.randomUUID(),
+      );
+    }
+    const market = (filters: Record<string, unknown>) =>
+      executeOperation(
+        env,
+        'gifts.market.list',
+        { sort: 'price_asc', limit: 30, offset: 0, ...filters },
+        crypto.randomUUID(),
+      ) as Promise<Array<{ item_id: string; star_price: number; rank: string }>>;
+
+    expect((await market({})).map((row) => row.star_price)).toEqual([120, 9_000]);
+    expect((await market({ rank: 'white' })).map((row) => row.item_id)).toEqual([dear.itemId]);
+    expect((await market({ maxPrice: 500 })).map((row) => row.item_id)).toEqual([cheap.itemId]);
+
+    // Somebody who wants one that is not for sale can offer for it instead.
+    await executeOperation(
+      env,
+      'gifts.market.list.set',
+      { userId: owner, itemId: dear.itemId, starPrice: null },
+      crypto.randomUUID(),
+    );
+    expect(await market({})).toHaveLength(1);
+    const offer = (await executeOperation(
+      env,
+      'gifts.offers.create',
+      { itemId: dear.itemId, fromUserId: buyer, starAmount: 7_500, message: 'Trade?' },
+      crypto.randomUUID(),
+    )) as { offerId: string };
+    await expect(
+      executeOperation(
+        env,
+        'gifts.offers.respond',
+        { userId: buyer, offerId: offer.offerId, action: 'declined' },
+        crypto.randomUUID(),
+      ),
+    ).rejects.toMatchObject({ code: 'GIFT_OFFER_FORBIDDEN' });
+    await expect(
+      executeOperation(
+        env,
+        'gifts.offers.respond',
+        { userId: owner, offerId: offer.offerId, action: 'declined' },
+        crypto.randomUUID(),
+      ),
+    ).resolves.toMatchObject({ status: 'declined' });
   });
 
   it('answers with counters that say what moved, and nothing else', async () => {

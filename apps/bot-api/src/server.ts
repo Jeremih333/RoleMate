@@ -834,6 +834,127 @@ export async function buildServer(
   // polling every list separately would cost several requests a minute per open
   // app, which the free plan cannot carry. This is a handful of counters, and
   // the app refetches only the list whose counter actually changed.
+  // Gifts. The catalogue is public content and changes about never, so it is
+  // cached hard; everything else belongs to whoever is asking.
+  app.get('/api/gifts/catalogue', async (request, reply) => {
+    await authenticate(request);
+    reply.header('Cache-Control', 'private, max-age=600');
+    return dataApi.execute('gifts.catalogue', {});
+  });
+  app.get('/api/gifts/market', async (request) => {
+    await authenticate(request);
+    const query = z
+      .object({
+        seriesCode: z.string().max(64).optional(),
+        rank: z.enum(['bell', 'red', 'blue', 'moon', 'black', 'white', 'plain']).optional(),
+        modelCode: z.string().max(64).optional(),
+        backdropCode: z.string().max(64).optional(),
+        minPrice: z.coerce.number().int().min(0).optional(),
+        maxPrice: z.coerce.number().int().min(0).optional(),
+        sort: z.enum(['recent', 'price_asc', 'price_desc', 'serial']).default('recent'),
+        limit: z.coerce.number().int().min(1).max(60).default(30),
+        offset: z.coerce.number().int().min(0).default(0),
+      })
+      .parse(request.query);
+    return dataApi.execute('gifts.market.list', query);
+  });
+  app.get('/api/gifts/mine', async (request) => {
+    const session = await authenticate(request);
+    return dataApi.execute('gifts.owned', { userId: session.userId, limit: 100 });
+  });
+  app.get('/api/gifts/showcase/:userId', async (request) => {
+    await authenticate(request);
+    const { userId } = z.object({ userId: z.string().uuid() }).parse(request.params);
+    return dataApi.execute('gifts.showcase', { userId });
+  });
+  app.get('/api/gifts/:itemId', async (request) => {
+    await authenticate(request);
+    const { itemId } = z.object({ itemId: z.string().uuid() }).parse(request.params);
+    return dataApi.execute('gifts.item', { itemId });
+  });
+  app.post('/api/gifts/:itemId/transfer', async (request) => {
+    const session = await mutate(request);
+    const { itemId } = z.object({ itemId: z.string().uuid() }).parse(request.params);
+    const { toUserId } = z.object({ toUserId: z.string().uuid() }).parse(request.body);
+    return dataApi.execute('gifts.transfer', {
+      itemId,
+      fromUserId: session.userId,
+      toUserId,
+      reason: 'gift',
+      starAmount: 0,
+    });
+  });
+  app.put('/api/gifts/:itemId/listing', async (request) => {
+    const session = await mutate(request);
+    const { itemId } = z.object({ itemId: z.string().uuid() }).parse(request.params);
+    const { starPrice } = z
+      .object({ starPrice: z.number().int().min(1).max(1_000_000).nullable() })
+      .parse(request.body);
+    return dataApi.execute('gifts.market.list.set', { userId: session.userId, itemId, starPrice });
+  });
+  app.put('/api/gifts/:itemId/arrangement', async (request) => {
+    const session = await mutate(request);
+    const { itemId } = z.object({ itemId: z.string().uuid() }).parse(request.params);
+    const body = z
+      .object({
+        shelfId: z.string().uuid().nullable().optional(),
+        pinnedOrder: z.number().int().min(0).max(7).nullable().optional(),
+      })
+      .parse(request.body);
+    return dataApi.execute('gifts.arrange', { userId: session.userId, itemId, ...body });
+  });
+  app.post('/api/gifts/:itemId/offers', async (request) => {
+    const session = await mutate(request);
+    const { itemId } = z.object({ itemId: z.string().uuid() }).parse(request.params);
+    const body = z
+      .object({
+        starAmount: z.number().int().min(0).max(1_000_000),
+        message: z.string().trim().max(300).optional(),
+      })
+      .parse(request.body);
+    return dataApi.execute('gifts.offers.create', {
+      itemId,
+      fromUserId: session.userId,
+      ...body,
+    });
+  });
+  app.get('/api/gifts/offers/inbox', async (request) => {
+    const session = await authenticate(request);
+    return dataApi.execute('gifts.offers.list', { userId: session.userId, limit: 50 });
+  });
+  app.put('/api/gifts/offers/:offerId', async (request) => {
+    const session = await mutate(request);
+    const { offerId } = z.object({ offerId: z.string().uuid() }).parse(request.params);
+    const { action } = z
+      .object({ action: z.enum(['accepted', 'declined', 'cancelled']) })
+      .parse(request.body);
+    const answer = await dataApi.execute<{ status: string; itemId: string; fromUserId: string }>(
+      'gifts.offers.respond',
+      { userId: session.userId, offerId, action },
+    );
+    // Accepting is what actually moves the gift, and the move goes through the
+    // same signed path as any other, so the chain stays whole.
+    if (answer.status === 'accepted') {
+      await dataApi.execute('gifts.transfer', {
+        itemId: answer.itemId,
+        fromUserId: session.userId,
+        toUserId: answer.fromUserId,
+        reason: 'trade',
+        starAmount: 0,
+      });
+    }
+    return answer;
+  });
+  app.post('/api/gifts/shelves', async (request) => {
+    const session = await mutate(request);
+    const { title } = z.object({ title: z.string().trim().min(1).max(40) }).parse(request.body);
+    return dataApi.execute('gifts.shelves.create', { userId: session.userId, title });
+  });
+  app.delete('/api/gifts/shelves/:shelfId', async (request) => {
+    const session = await mutate(request);
+    const { shelfId } = z.object({ shelfId: z.string().uuid() }).parse(request.params);
+    return dataApi.execute('gifts.shelves.remove', { userId: session.userId, shelfId });
+  });
   app.get('/api/pulse', async (request) => {
     const session = await authenticate(request);
     return dataApi.execute('pulse.get', { userId: session.userId });

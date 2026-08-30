@@ -54,6 +54,7 @@ import { CustomEmojiPickerDialog } from '../components/custom-emoji-picker.js';
 import { CustomEmojiInsertButton } from '../components/custom-emoji-insert.js';
 import { CustomEmojiField } from '../components/custom-emoji-field.js';
 import { CustomEmojiInline } from '../components/custom-emoji-inline.js';
+import { GiftCard } from '../components/gift-card.js';
 import { EditorExtras, EditorSheet } from '../components/editor-sheet.js';
 import { useDismiss } from '../components/use-dismiss.js';
 import { draftLength, draftToStored, storedToDraft } from '../components/custom-emoji-draft.js';
@@ -1055,6 +1056,54 @@ export function profileHeroProps(profile: {
   };
 }
 
+/**
+ * The gifts somebody shows on their profile.
+ *
+ * Telegram lights each one with the colour of its own backdrop, so a header
+ * reads as a small shelf of what its owner has. They are still here: a header
+ * full of moving pictures is what a modest phone spends its whole frame on, and
+ * the animation belongs to the gift somebody actually opened.
+ */
+function ProfileGiftShowcase({ userId }: { userId: string }) {
+  const [, navigate] = useLocation();
+  const showcase = useQuery({
+    queryKey: ['gift-showcase', userId],
+    queryFn: () => api.giftShowcase(userId),
+    staleTime: 5 * 60_000,
+  });
+  if (!showcase.data?.length) return null;
+  return (
+    <div className="profile-gift-showcase">
+      {showcase.data.map((item) => (
+        <button
+          key={item.id}
+          type="button"
+          aria-label={`${item.series_title} #${item.serial}`}
+          onClick={() => navigate('/gifts')}
+        >
+          <GiftCard
+            appearance={{
+              model: parseAppearance(item.model_appearance),
+              backdrop: parseAppearance(item.backdrop_appearance),
+            }}
+            size={46}
+          />
+        </button>
+      ))}
+    </div>
+  );
+}
+
+/** Appearance travels as JSON on the row; a broken one simply draws plainly. */
+function parseAppearance(value: string | null | undefined) {
+  if (!value) return null;
+  try {
+    return JSON.parse(value) as Record<string, string>;
+  } catch {
+    return null;
+  }
+}
+
 export function ProfileHeroEmoji({
   emoji,
   customEmojiId,
@@ -1089,14 +1138,23 @@ export function ProfileHeroEmoji({
   );
 }
 
+/**
+ * The usernames somebody goes by.
+ *
+ * Telegram puts the main one on its own line and the rest quietly beneath it,
+ * under a short "also known as" line, rather than running them all together, so
+ * the one people should use is the one they read first.
+ */
 function ProfileUsernamesLine({ aliases }: { aliases: string[] }) {
   const [primary, ...additional] = aliases;
   if (!primary) return null;
   return (
-    <p className="profile-usernames-line">
-      <Link href={`/u/${encodeURIComponent(primary)}`}>@{primary}</Link>
+    <div className="profile-usernames-line">
+      <p className="profile-username-primary">
+        <Link href={`/u/${encodeURIComponent(primary)}`}>@{primary}</Link>
+      </p>
       {additional.length ? (
-        <>
+        <p className="profile-username-aliases">
           {ru.miniApp.social.additionalUsernames}{' '}
           {additional.map((alias, index) => (
             <span key={alias}>
@@ -1104,9 +1162,9 @@ function ProfileUsernamesLine({ aliases }: { aliases: string[] }) {
               <Link href={`/u/${encodeURIComponent(alias)}`}>@{alias}</Link>
             </span>
           ))}
-        </>
+        </p>
       ) : null}
-    </p>
+    </div>
   );
 }
 
@@ -1311,6 +1369,7 @@ export function PublicProfileViewerPage() {
             className="profile-avatar-large"
             accessVersion={mediaAccessVersion}
           />
+          <ProfileGiftShowcase userId={profile.data.id} />
           <strong className="profile-hero-name">
             {profile.data.display_name}
             <VerificationBadge

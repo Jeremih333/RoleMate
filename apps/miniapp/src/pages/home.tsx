@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   ArrowRight,
+  Gift,
   BookOpen,
   Crown,
   Heart,
@@ -227,6 +228,21 @@ export function HomePage() {
           <p>{ru.miniApp.home.anonymityNotice}</p>
         </div>
       </details>
+
+      {/* The way into the market, in the pastel the gifts themselves are drawn
+          in, with the gift pattern tiled quietly behind it. */}
+      <Link href="/gifts" className="gift-home-link">
+        <Card className="gift-home-card">
+          <span className="gift-home-icon">
+            <Gift aria-hidden />
+          </span>
+          <span className="gift-home-text">
+            <strong>{ru.miniApp.gifts.marketplaceTitle}</strong>
+            <small>{ru.miniApp.gifts.homeDescription}</small>
+          </span>
+          <ArrowRight className="ml-auto opacity-70" />
+        </Card>
+      </Link>
 
       <section className="grid gap-3 sm:grid-cols-2">
         <Link href="/premium">

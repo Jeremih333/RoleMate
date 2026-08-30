@@ -12,6 +12,7 @@ import {
   type WorkerOperation,
 } from '@rolemate/database-contracts';
 import { ApiError } from './errors.js';
+import { GENESIS_HASH, hashMint, hashTransfer, rollAttribute } from './gifts.js';
 import type { Env } from './types.js';
 
 type Handler<T extends WorkerOperation> = (
@@ -6104,6 +6105,524 @@ const handlers: { [K in WorkerOperation]: Handler<K> } = {
    * handful of counters in a single query — the app compares them with what it
    * had and refetches only the list that actually changed.
    */
+  /**
+   * Everything on offer: the collections, their series and the three axes a
+   * collectible varies along. Read by the marketplace, and small enough to be
+   * cached hard by whoever asks for it.
+   */
+  'gifts.catalogue': async (env) => {
+    const [collections, series, attributes] = await Promise.all([
+      env.DB.prepare(
+        'SELECT id, code, title, kind, description FROM gift_collections ORDER BY sort_order',
+      ).all(),
+      env.DB.prepare(
+        `SELECT s.id, s.collection_id, s.code, s.title, s.subtitle, s.lore, s.rank,
+                s.total_supply, s.star_price,
+                (SELECT COUNT(*) FROM gift_items i WHERE i.series_id = s.id) AS issued
+         FROM gift_series s ORDER BY s.sort_order`,
+      ).all(),
+      env.DB.prepare(
+        'SELECT id, kind, code, title, rarity_permille, appearance FROM gift_attributes ORDER BY kind, sort_order',
+      ).all(),
+    ]);
+    return {
+      collections: collections.results,
+      series: series.results,
+      attributes: attributes.results,
+    };
+  },
+  /**
+   * Issues the next copy of a series to somebody.
+   *
+   * Only the owner of the product may do this, because minting is the one thing
+   * that decides how many exist. The circulation itself is beyond even them: the
+   * database refuses to change it, and a copy numbered past the end of the issue
+   * is refused too. The attributes are rolled by rarity, and the record is
+   * signed over the one before it.
+   */
+  'gifts.mint': async (env, input) => {
+    const staff = await env.DB.prepare(
+      "SELECT id FROM users WHERE id = ?1 AND role = 'admin' AND telegram_user_id = 1040929628",
+    )
+      .bind(input.actorUserId)
+      .first<{ id: string }>();
+    if (!staff) throw new ApiError(403, 'GIFT_MINT_FORBIDDEN', 'Only the owner may issue gifts');
+    const series = await env.DB.prepare('SELECT id, total_supply FROM gift_series WHERE code = ?1')
+      .bind(input.seriesCode)
+      .first<{ id: string; total_supply: number | null }>();
+    if (!series) throw new ApiError(404, 'GIFT_SERIES_NOT_FOUND', 'No such gift series');
+    const owner = await env.DB.prepare('SELECT id FROM users WHERE id = ?1')
+      .bind(input.ownerUserId)
+      .first<{ id: string }>();
+    if (!owner) throw new ApiError(404, 'USER_NOT_FOUND', 'No such user');
+
+    const last = await env.DB.prepare(
+      'SELECT serial, hash FROM gift_items WHERE series_id = ?1 ORDER BY serial DESC LIMIT 1',
+    )
+      .bind(series.id)
+      .first<{ serial: number; hash: string }>();
+    const serial = Number(last?.serial ?? 0) + 1;
+    if (series.total_supply !== null && serial > series.total_supply) {
+      throw new ApiError(409, 'GIFT_SERIES_EXHAUSTED', 'The whole issue has been given out');
+    }
+
+    const pools = (
+      await env.DB.prepare(
+        'SELECT id, kind, rarity_permille FROM gift_attributes ORDER BY kind, sort_order',
+      ).all<{ id: string; kind: string; rarity_permille: number }>()
+    ).results;
+    const pick = (kind: string) =>
+      rollAttribute(
+        pools.filter((item) => item.kind === kind),
+        Math.random(),
+      );
+    const model = pick('model');
+    const pattern = pick('pattern');
+    const backdrop = pick('backdrop');
+    const mintedAt = new Date().toISOString().slice(0, 19).replace('T', ' ');
+    const link = {
+      seriesId: series.id,
+      serial,
+      modelId: model?.id ?? '',
+      patternId: pattern?.id ?? '',
+      backdropId: backdrop?.id ?? '',
+      mintedAt,
+    };
+    const prevHash = last?.hash ?? GENESIS_HASH;
+    const hash = await hashMint(env, link, prevHash);
+    const itemId = crypto.randomUUID();
+    const transferHash = await hashTransfer(
+      env,
+      {
+        itemId,
+        fromUserId: null,
+        toUserId: input.ownerUserId,
+        reason: 'mint',
+        starAmount: 0,
+        createdAt: mintedAt,
+      },
+      hash,
+    );
+    await env.DB.batch([
+      env.DB.prepare(
+        `INSERT INTO gift_items
+           (id, series_id, serial, model_id, pattern_id, backdrop_id, owner_user_id,
+            minted_at, prev_hash, hash)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)`,
+      ).bind(
+        itemId,
+        series.id,
+        serial,
+        model?.id ?? null,
+        pattern?.id ?? null,
+        backdrop?.id ?? null,
+        input.ownerUserId,
+        mintedAt,
+        prevHash,
+        hash,
+      ),
+      env.DB.prepare(
+        `INSERT INTO gift_transfers
+           (id, item_id, from_user_id, to_user_id, reason, star_amount, created_at, prev_hash, hash)
+         VALUES (?1, ?2, NULL, ?3, 'mint', 0, ?4, ?5, ?6)`,
+      ).bind(crypto.randomUUID(), itemId, input.ownerUserId, mintedAt, hash, transferHash),
+    ]);
+    return { itemId, serial, hash };
+  },
+  /** One copy, with everything a card has to show about it. */
+  'gifts.item': async (env, input) => {
+    const item = await env.DB.prepare(
+      `SELECT i.id, i.serial, i.minted_at, i.hash, i.owner_user_id, i.pinned_order,
+              i.user_collection_id,
+              s.code AS series_code, s.title AS series_title, s.subtitle, s.lore, s.rank,
+              s.total_supply, s.star_price,
+              (SELECT COUNT(*) FROM gift_items sib WHERE sib.series_id = s.id) AS issued,
+              model.code AS model_code, model.title AS model_title,
+              model.rarity_permille AS model_rarity, model.appearance AS model_appearance,
+              pattern.code AS pattern_code, pattern.title AS pattern_title,
+              pattern.rarity_permille AS pattern_rarity, pattern.appearance AS pattern_appearance,
+              backdrop.code AS backdrop_code, backdrop.title AS backdrop_title,
+              backdrop.rarity_permille AS backdrop_rarity,
+              backdrop.appearance AS backdrop_appearance,
+              owner.display_name AS owner_name, owner.avatar_media_id AS owner_avatar_media_id,
+              listing.star_price AS listed_price, listing.status AS listing_status
+       FROM gift_items i
+       JOIN gift_series s ON s.id = i.series_id
+       LEFT JOIN gift_attributes model ON model.id = i.model_id
+       LEFT JOIN gift_attributes pattern ON pattern.id = i.pattern_id
+       LEFT JOIN gift_attributes backdrop ON backdrop.id = i.backdrop_id
+       LEFT JOIN user_profiles owner ON owner.user_id = i.owner_user_id
+       LEFT JOIN gift_listings listing ON listing.item_id = i.id AND listing.status = 'active'
+       WHERE i.id = ?1`,
+    )
+      .bind(input.itemId)
+      .first();
+    if (!item) throw new ApiError(404, 'GIFT_NOT_FOUND', 'No such gift');
+    return item;
+  },
+  /** What somebody owns, and the shelves they arranged it on. */
+  'gifts.owned': async (env, input) => {
+    const [items, shelves] = await Promise.all([
+      env.DB.prepare(
+        `SELECT i.id, i.serial, i.pinned_order, i.user_collection_id,
+                s.code AS series_code, s.title AS series_title, s.rank, s.total_supply,
+                model.appearance AS model_appearance, pattern.appearance AS pattern_appearance,
+                backdrop.appearance AS backdrop_appearance, backdrop.title AS backdrop_title,
+                listing.star_price AS listed_price
+         FROM gift_items i
+         JOIN gift_series s ON s.id = i.series_id
+         LEFT JOIN gift_attributes model ON model.id = i.model_id
+         LEFT JOIN gift_attributes pattern ON pattern.id = i.pattern_id
+         LEFT JOIN gift_attributes backdrop ON backdrop.id = i.backdrop_id
+         LEFT JOIN gift_listings listing ON listing.item_id = i.id AND listing.status = 'active'
+         WHERE i.owner_user_id = ?1
+         ORDER BY i.pinned_order IS NULL, i.pinned_order, i.minted_at DESC
+         LIMIT ?2`,
+      )
+        .bind(input.userId, input.limit)
+        .all(),
+      env.DB.prepare(
+        'SELECT id, title, sort_order FROM user_gift_collections WHERE user_id = ?1 ORDER BY sort_order',
+      )
+        .bind(input.userId)
+        .all(),
+    ]);
+    return { items: items.results, shelves: shelves.results };
+  },
+  /**
+   * Hands a copy to somebody else. Only its owner can, and the move is written
+   * into the chain rather than replacing what was there.
+   */
+  'gifts.transfer': async (env, input) => {
+    const item = await env.DB.prepare('SELECT id, owner_user_id FROM gift_items WHERE id = ?1')
+      .bind(input.itemId)
+      .first<{ id: string; owner_user_id: string | null }>();
+    if (!item) throw new ApiError(404, 'GIFT_NOT_FOUND', 'No such gift');
+    if (item.owner_user_id !== input.fromUserId) {
+      throw new ApiError(403, 'GIFT_NOT_YOURS', 'Only the owner can give this away');
+    }
+    if (input.toUserId === input.fromUserId) {
+      throw new ApiError(400, 'GIFT_SAME_OWNER', 'It is already theirs');
+    }
+    const recipient = await env.DB.prepare('SELECT id FROM users WHERE id = ?1')
+      .bind(input.toUserId)
+      .first<{ id: string }>();
+    if (!recipient) throw new ApiError(404, 'USER_NOT_FOUND', 'No such user');
+    const last = await env.DB.prepare(
+      // By insertion order rather than by timestamp: two moves in the same
+      // second must still chain onto the right link.
+      'SELECT hash FROM gift_transfers WHERE item_id = ?1 ORDER BY rowid DESC LIMIT 1',
+    )
+      .bind(input.itemId)
+      .first<{ hash: string }>();
+    const createdAt = new Date().toISOString().slice(0, 19).replace('T', ' ');
+    const hash = await hashTransfer(
+      env,
+      {
+        itemId: input.itemId,
+        fromUserId: input.fromUserId,
+        toUserId: input.toUserId,
+        reason: input.reason,
+        starAmount: input.starAmount,
+        createdAt,
+      },
+      last?.hash ?? GENESIS_HASH,
+    );
+    await env.DB.batch([
+      env.DB.prepare(
+        `UPDATE gift_items
+         SET owner_user_id = ?2, pinned_order = NULL, user_collection_id = NULL
+         WHERE id = ?1`,
+      ).bind(input.itemId, input.toUserId),
+      env.DB.prepare(
+        `INSERT INTO gift_transfers
+           (id, item_id, from_user_id, to_user_id, reason, star_amount, created_at, prev_hash, hash)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)`,
+      ).bind(
+        crypto.randomUUID(),
+        input.itemId,
+        input.fromUserId,
+        input.toUserId,
+        input.reason,
+        input.starAmount,
+        createdAt,
+        last?.hash ?? GENESIS_HASH,
+        hash,
+      ),
+      env.DB.prepare(
+        "UPDATE gift_listings SET status = 'cancelled' WHERE item_id = ?1 AND status = 'active'",
+      ).bind(input.itemId),
+    ]);
+    return { transferred: true, hash };
+  },
+  /** Walks the chain of a series and says whether it still adds up. */
+  'gifts.verify': async (env, input) => {
+    const series = await env.DB.prepare('SELECT id, total_supply FROM gift_series WHERE code = ?1')
+      .bind(input.seriesCode)
+      .first<{ id: string; total_supply: number | null }>();
+    if (!series) throw new ApiError(404, 'GIFT_SERIES_NOT_FOUND', 'No such gift series');
+    const items = (
+      await env.DB.prepare(
+        `SELECT serial, model_id, pattern_id, backdrop_id, minted_at, prev_hash, hash
+         FROM gift_items WHERE series_id = ?1 ORDER BY serial`,
+      )
+        .bind(series.id)
+        .all<{
+          serial: number;
+          model_id: string | null;
+          pattern_id: string | null;
+          backdrop_id: string | null;
+          minted_at: string;
+          prev_hash: string;
+          hash: string;
+        }>()
+    ).results;
+    let expectedPrev = GENESIS_HASH;
+    for (const item of items) {
+      const hash = await hashMint(
+        env,
+        {
+          seriesId: series.id,
+          serial: item.serial,
+          modelId: item.model_id ?? '',
+          patternId: item.pattern_id ?? '',
+          backdropId: item.backdrop_id ?? '',
+          mintedAt: item.minted_at,
+        },
+        item.prev_hash,
+      );
+      if (item.prev_hash !== expectedPrev || hash !== item.hash) {
+        return { valid: false, brokenAt: item.serial, issued: items.length };
+      }
+      expectedPrev = item.hash;
+    }
+    return {
+      valid: true,
+      issued: items.length,
+      totalSupply: series.total_supply,
+      brokenAt: null,
+    };
+  },
+  /** The marketplace: what is for sale, filtered the way Telegram filters it. */
+  'gifts.market.list': async (env, input) => {
+    const rows = (
+      await env.DB.prepare(
+        `SELECT l.id AS listing_id, l.star_price, l.created_at,
+                i.id AS item_id, i.serial,
+                s.code AS series_code, s.title AS series_title, s.rank, s.total_supply,
+                model.code AS model_code, model.title AS model_title,
+                model.rarity_permille AS model_rarity, model.appearance AS model_appearance,
+                pattern.code AS pattern_code, pattern.appearance AS pattern_appearance,
+                backdrop.code AS backdrop_code, backdrop.title AS backdrop_title,
+                backdrop.rarity_permille AS backdrop_rarity,
+                backdrop.appearance AS backdrop_appearance,
+                seller.display_name AS seller_name
+         FROM gift_listings l
+         JOIN gift_items i ON i.id = l.item_id
+         JOIN gift_series s ON s.id = i.series_id
+         LEFT JOIN gift_attributes model ON model.id = i.model_id
+         LEFT JOIN gift_attributes pattern ON pattern.id = i.pattern_id
+         LEFT JOIN gift_attributes backdrop ON backdrop.id = i.backdrop_id
+         LEFT JOIN user_profiles seller ON seller.user_id = l.seller_user_id
+         WHERE l.status = 'active'
+           AND (?1 IS NULL OR s.code = ?1)
+           AND (?2 IS NULL OR s.rank = ?2)
+           AND (?3 IS NULL OR model.code = ?3)
+           AND (?4 IS NULL OR backdrop.code = ?4)
+           AND (?5 IS NULL OR l.star_price >= ?5)
+           AND (?6 IS NULL OR l.star_price <= ?6)
+         ORDER BY
+           CASE WHEN ?7 = 'price_desc' THEN -l.star_price ELSE l.star_price END
+             * CASE WHEN ?7 IN ('price_asc', 'price_desc') THEN 1 ELSE 0 END,
+           CASE WHEN ?7 = 'serial' THEN i.serial ELSE 0 END,
+           l.created_at DESC
+         LIMIT ?8 OFFSET ?9`,
+      )
+        .bind(
+          input.seriesCode ?? null,
+          input.rank ?? null,
+          input.modelCode ?? null,
+          input.backdropCode ?? null,
+          input.minPrice ?? null,
+          input.maxPrice ?? null,
+          input.sort,
+          input.limit,
+          input.offset,
+        )
+        .all()
+    ).results;
+    return rows;
+  },
+  /** Puts a copy up for sale, or takes it back down. */
+  'gifts.market.list.set': async (env, input) => {
+    const item = await env.DB.prepare('SELECT owner_user_id FROM gift_items WHERE id = ?1')
+      .bind(input.itemId)
+      .first<{ owner_user_id: string | null }>();
+    if (!item) throw new ApiError(404, 'GIFT_NOT_FOUND', 'No such gift');
+    if (item.owner_user_id !== input.userId) {
+      throw new ApiError(403, 'GIFT_NOT_YOURS', 'Only the owner can sell this');
+    }
+    if (input.starPrice === null) {
+      await env.DB.prepare(
+        "UPDATE gift_listings SET status = 'cancelled', updated_at = CURRENT_TIMESTAMP WHERE item_id = ?1 AND status = 'active'",
+      )
+        .bind(input.itemId)
+        .run();
+      return { listed: false };
+    }
+    await env.DB.prepare(
+      `INSERT INTO gift_listings (id, item_id, seller_user_id, star_price)
+       VALUES (?1, ?2, ?3, ?4)
+       ON CONFLICT(item_id) DO UPDATE SET
+         seller_user_id = excluded.seller_user_id, star_price = excluded.star_price,
+         status = 'active', updated_at = CURRENT_TIMESTAMP`,
+    )
+      .bind(crypto.randomUUID(), input.itemId, input.userId, input.starPrice)
+      .run();
+    return { listed: true, starPrice: input.starPrice };
+  },
+  /** "Предложить сделку": an offer to the owner of a copy. */
+  'gifts.offers.create': async (env, input) => {
+    const item = await env.DB.prepare('SELECT owner_user_id FROM gift_items WHERE id = ?1')
+      .bind(input.itemId)
+      .first<{ owner_user_id: string | null }>();
+    if (!item?.owner_user_id) throw new ApiError(404, 'GIFT_NOT_FOUND', 'No such gift');
+    if (item.owner_user_id === input.fromUserId) {
+      throw new ApiError(400, 'GIFT_SAME_OWNER', 'It is already yours');
+    }
+    const id = crypto.randomUUID();
+    await env.DB.prepare(
+      `INSERT INTO gift_offers (id, item_id, from_user_id, to_user_id, star_amount, message)
+       VALUES (?1, ?2, ?3, ?4, ?5, ?6)`,
+    )
+      .bind(
+        id,
+        input.itemId,
+        input.fromUserId,
+        item.owner_user_id,
+        input.starAmount,
+        input.message ?? null,
+      )
+      .run();
+    return { offerId: id, toUserId: item.owner_user_id };
+  },
+  'gifts.offers.list': async (env, input) => {
+    return (
+      await env.DB.prepare(
+        `SELECT o.id, o.item_id, o.from_user_id, o.to_user_id, o.star_amount, o.message,
+                o.status, o.created_at,
+                s.title AS series_title, i.serial,
+                sender.display_name AS from_name
+         FROM gift_offers o
+         JOIN gift_items i ON i.id = o.item_id
+         JOIN gift_series s ON s.id = i.series_id
+         LEFT JOIN user_profiles sender ON sender.user_id = o.from_user_id
+         WHERE (o.to_user_id = ?1 OR o.from_user_id = ?1)
+         ORDER BY o.created_at DESC LIMIT ?2`,
+      )
+        .bind(input.userId, input.limit)
+        .all()
+    ).results;
+  },
+  /**
+   * Accepting an offer moves the copy; declining only closes the offer. Either
+   * way the answer belongs to whoever the offer was made to.
+   */
+  'gifts.offers.respond': async (env, input) => {
+    const offer = await env.DB.prepare(
+      'SELECT id, item_id, from_user_id, to_user_id, star_amount, status FROM gift_offers WHERE id = ?1',
+    )
+      .bind(input.offerId)
+      .first<{
+        id: string;
+        item_id: string;
+        from_user_id: string;
+        to_user_id: string;
+        star_amount: number;
+        status: string;
+      }>();
+    if (!offer) throw new ApiError(404, 'GIFT_OFFER_NOT_FOUND', 'No such offer');
+    if (offer.status !== 'pending') {
+      throw new ApiError(409, 'GIFT_OFFER_CLOSED', 'This offer has already been answered');
+    }
+    const isRecipient = offer.to_user_id === input.userId;
+    const isSender = offer.from_user_id === input.userId;
+    if (input.action === 'cancelled' ? !isSender : !isRecipient) {
+      throw new ApiError(403, 'GIFT_OFFER_FORBIDDEN', 'This answer is not yours to give');
+    }
+    await env.DB.prepare(
+      'UPDATE gift_offers SET status = ?2, resolved_at = CURRENT_TIMESTAMP WHERE id = ?1',
+    )
+      .bind(offer.id, input.action)
+      .run();
+    return { status: input.action, itemId: offer.item_id, fromUserId: offer.from_user_id };
+  },
+  /** The shelves an owner arranges their copies on, and what sits where. */
+  'gifts.shelves.create': async (env, input) => {
+    const count = await env.DB.prepare(
+      'SELECT COUNT(*) AS total FROM user_gift_collections WHERE user_id = ?1',
+    )
+      .bind(input.userId)
+      .first<{ total: number }>();
+    if (Number(count?.total ?? 0) >= 20) {
+      throw new ApiError(429, 'GIFT_SHELF_LIMIT', 'That is enough collections for now');
+    }
+    const id = crypto.randomUUID();
+    await env.DB.prepare(
+      'INSERT INTO user_gift_collections (id, user_id, title, sort_order) VALUES (?1, ?2, ?3, ?4)',
+    )
+      .bind(id, input.userId, input.title, Number(count?.total ?? 0))
+      .run();
+    return { shelfId: id };
+  },
+  'gifts.shelves.remove': async (env, input) => {
+    await env.DB.batch([
+      env.DB.prepare(
+        'UPDATE gift_items SET user_collection_id = NULL WHERE user_collection_id = ?1 AND owner_user_id = ?2',
+      ).bind(input.shelfId, input.userId),
+      env.DB.prepare('DELETE FROM user_gift_collections WHERE id = ?1 AND user_id = ?2').bind(
+        input.shelfId,
+        input.userId,
+      ),
+    ]);
+    return { removed: true };
+  },
+  /** Where a copy sits: which shelf, and whether it is shown on the profile. */
+  'gifts.arrange': async (env, input) => {
+    const item = await env.DB.prepare('SELECT owner_user_id FROM gift_items WHERE id = ?1')
+      .bind(input.itemId)
+      .first<{ owner_user_id: string | null }>();
+    if (item?.owner_user_id !== input.userId) {
+      throw new ApiError(403, 'GIFT_NOT_YOURS', 'Only the owner can arrange this');
+    }
+    await env.DB.prepare(
+      `UPDATE gift_items
+       SET user_collection_id = ?2,
+           pinned_order = ?3
+       WHERE id = ?1`,
+    )
+      .bind(input.itemId, input.shelfId ?? null, input.pinnedOrder ?? null)
+      .run();
+    return { arranged: true };
+  },
+  /** The few copies a profile shows in its header, the way Telegram does. */
+  'gifts.showcase': async (env, input) => {
+    return (
+      await env.DB.prepare(
+        `SELECT i.id, i.serial, s.code AS series_code, s.title AS series_title, s.rank,
+                model.appearance AS model_appearance,
+                backdrop.appearance AS backdrop_appearance
+         FROM gift_items i
+         JOIN gift_series s ON s.id = i.series_id
+         LEFT JOIN gift_attributes model ON model.id = i.model_id
+         LEFT JOIN gift_attributes backdrop ON backdrop.id = i.backdrop_id
+         WHERE i.owner_user_id = ?1 AND i.pinned_order IS NOT NULL
+         ORDER BY i.pinned_order LIMIT 8`,
+      )
+        .bind(input.userId)
+        .all()
+    ).results;
+  },
   'pulse.get': async (env, input) => {
     const row = await env.DB.prepare(
       `SELECT

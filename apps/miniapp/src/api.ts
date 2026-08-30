@@ -726,6 +726,11 @@ export const api = {
       method: 'POST',
       body: '{}',
     }),
+  claimGift: (seriesCode: string) =>
+    request<{ itemId: string; serial: number; starAmount: number }>(
+      `/gifts/claim/${encodeURIComponent(seriesCode)}`,
+      { method: 'POST', body: '{}' },
+    ),
   starBalance: () => request<StarBalance>('/stars/balance'),
   topUpStars: (stars: number) =>
     request<{ invoiceLink: string }>('/stars/topup', {

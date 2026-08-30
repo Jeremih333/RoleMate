@@ -1,5 +1,5 @@
 import { ApiError } from './errors.js';
-import { GENESIS_HASH, hashTransfer } from './gifts.js';
+import { GENESIS_HASH, hashMint, hashTransfer, rollAttribute } from './gifts.js';
 import type { Env } from './types.js';
 
 /**
@@ -118,4 +118,94 @@ export async function moveGift(
     ).bind(input.itemId),
   ]);
   return { hash };
+}
+
+/**
+ * Issues one copy of a series to somebody.
+ *
+ * Shared by every path that brings a copy into existence — the owner minting a
+ * collectible, somebody taking a standard gift for stars — so a copy is never
+ * created outside the ledger. Its number follows the last one issued, its
+ * attributes are rolled by rarity, and the record is signed over the one before
+ * it. The circulation is checked here and again by the database, which is what
+ * makes a limited series limited.
+ */
+export async function issueGift(
+  env: Env,
+  input: { seriesId: string; ownerUserId: string; totalSupply?: number | null },
+): Promise<{ itemId: string; serial: number; hash: string }> {
+  const last = await env.DB.prepare(
+    'SELECT serial, hash FROM gift_items WHERE series_id = ?1 ORDER BY serial DESC LIMIT 1',
+  )
+    .bind(input.seriesId)
+    .first<{ serial: number; hash: string }>();
+  const serial = Number(last?.serial ?? 0) + 1;
+  if (input.totalSupply !== null && input.totalSupply !== undefined && serial > input.totalSupply) {
+    throw new ApiError(409, 'GIFT_SERIES_EXHAUSTED', 'The whole issue has been given out');
+  }
+  const pools = (
+    await env.DB.prepare(
+      'SELECT id, kind, rarity_permille FROM gift_attributes ORDER BY kind, sort_order',
+    ).all<{ id: string; kind: string; rarity_permille: number }>()
+  ).results;
+  const pick = (kind: string) =>
+    rollAttribute(
+      pools.filter((item) => item.kind === kind),
+      Math.random(),
+    );
+  const model = pick('model');
+  const pattern = pick('pattern');
+  const backdrop = pick('backdrop');
+  const mintedAt = new Date().toISOString().slice(0, 19).replace('T', ' ');
+  const prevHash = last?.hash ?? GENESIS_HASH;
+  const hash = await hashMint(
+    env,
+    {
+      seriesId: input.seriesId,
+      serial,
+      modelId: model?.id ?? '',
+      patternId: pattern?.id ?? '',
+      backdropId: backdrop?.id ?? '',
+      mintedAt,
+    },
+    prevHash,
+  );
+  const itemId = crypto.randomUUID();
+  const transferHash = await hashTransfer(
+    env,
+    {
+      itemId,
+      fromUserId: null,
+      toUserId: input.ownerUserId,
+      reason: 'mint',
+      starAmount: 0,
+      createdAt: mintedAt,
+    },
+    hash,
+  );
+  await env.DB.batch([
+    env.DB.prepare(
+      `INSERT INTO gift_items
+         (id, series_id, serial, model_id, pattern_id, backdrop_id, owner_user_id,
+          minted_at, prev_hash, hash)
+       VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)`,
+    ).bind(
+      itemId,
+      input.seriesId,
+      serial,
+      model?.id ?? null,
+      pattern?.id ?? null,
+      backdrop?.id ?? null,
+      input.ownerUserId,
+      mintedAt,
+      prevHash,
+      hash,
+    ),
+    env.DB.prepare(
+      `INSERT INTO gift_transfers
+         (id, item_id, from_user_id, to_user_id, reason, star_amount, created_at, prev_hash, hash)
+       VALUES (?1, ?2, NULL, ?3, 'mint', 0, ?4, ?5, ?6)`,
+    ).bind(crypto.randomUUID(), itemId, input.ownerUserId, mintedAt, hash, transferHash),
+  ]);
+  return { itemId, serial, hash };
 }

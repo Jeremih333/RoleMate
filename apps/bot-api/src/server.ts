@@ -1012,6 +1012,13 @@ export async function buildServer(
     if (!sent) throw new DataApiError('STAR_WITHDRAWAL_FAILED', ru.api.requestFailed, 502);
     return { withdrawn: plan.stars };
   });
+  app.post('/api/gifts/claim/:seriesCode', async (request) => {
+    const session = await mutate(request);
+    const { seriesCode } = z
+      .object({ seriesCode: z.string().min(1).max(64) })
+      .parse(request.params);
+    return dataApi.execute('gifts.claim', { userId: session.userId, seriesCode });
+  });
   app.post('/api/gifts/:itemId/buy', async (request) => {
     const session = await mutate(request);
     const { itemId } = z.object({ itemId: z.string().uuid() }).parse(request.params);

@@ -1513,6 +1513,49 @@ describe('D1 domain operations', () => {
     expect(after).toMatchObject({ balance: 0, refundable: 100 });
   });
 
+  it('lets anybody take a standard gift for stars, and nobody take a limited one', async () => {
+    const person = await onboard(2_681);
+    const topup = (await executeOperation(
+      env,
+      'stars.topup.start',
+      { userId: person, stars: 60 },
+      crypto.randomUUID(),
+    )) as { invoicePayload: string };
+    await executeOperation(
+      env,
+      'stars.topup.settle',
+      { invoicePayload: topup.invoicePayload, telegramPaymentChargeId: 'charge-claim-1' },
+      crypto.randomUUID(),
+    );
+
+    const claim = (seriesCode: string) =>
+      executeOperation(env, 'gifts.claim', { userId: person, seriesCode }, crypto.randomUUID());
+
+    // A limited series exists only as many times as its circulation says, and
+    // only the owner of the product issues those.
+    await expect(claim('lyza_whistle')).rejects.toMatchObject({ code: 'GIFT_SERIES_LIMITED' });
+
+    await expect(claim('teddy')).resolves.toMatchObject({ serial: 1, starAmount: 15 });
+    await expect(claim('teddy')).resolves.toMatchObject({ serial: 2 });
+    const owned = (await executeOperation(
+      env,
+      'gifts.owned',
+      { userId: person, limit: 100 },
+      crypto.randomUUID(),
+    )) as { items: Array<{ series_code: string }> };
+    expect(owned.items.map((row) => row.series_code)).toEqual(['teddy', 'teddy']);
+
+    // The stars really left the balance, and an empty one buys nothing.
+    const balance = (await executeOperation(
+      env,
+      'stars.balance',
+      { userId: person },
+      crypto.randomUUID(),
+    )) as { balance: number };
+    expect(balance.balance).toBe(30);
+    await expect(claim('star')).rejects.toMatchObject({ code: 'STAR_BALANCE_TOO_LOW' });
+  });
+
   it('answers with counters that say what moved, and nothing else', async () => {
     const reader = await onboard(2_641);
     const other = await onboard(2_642);

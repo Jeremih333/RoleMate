@@ -539,6 +539,10 @@ export const workerOperations = {
     withdrawalId: z.string().uuid(),
     sent: z.boolean(),
   }),
+  'gifts.claim': z.object({
+    userId: z.string().uuid(),
+    seriesCode: z.string().trim().min(1).max(64),
+  }),
   'gifts.showcase': z.object({ userId: z.string().uuid() }),
   'pulse.get': z.object({ userId: z.string().uuid() }),
   'customEmoji.adopt': z.object({

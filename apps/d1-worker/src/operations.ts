@@ -12,8 +12,8 @@ import {
   type WorkerOperation,
 } from '@rolemate/database-contracts';
 import { ApiError } from './errors.js';
-import { GENESIS_HASH, hashMint, hashTransfer, rollAttribute } from './gifts.js';
-import { creditStars, moveGift } from './ledger.js';
+import { GENESIS_HASH, hashMint } from './gifts.js';
+import { creditStars, issueGift, moveGift } from './ledger.js';
 import type { Env } from './types.js';
 
 type Handler<T extends WorkerOperation> = (
@@ -6157,78 +6157,12 @@ const handlers: { [K in WorkerOperation]: Handler<K> } = {
       .first<{ id: string }>();
     if (!owner) throw new ApiError(404, 'USER_NOT_FOUND', 'No such user');
 
-    const last = await env.DB.prepare(
-      'SELECT serial, hash FROM gift_items WHERE series_id = ?1 ORDER BY serial DESC LIMIT 1',
-    )
-      .bind(series.id)
-      .first<{ serial: number; hash: string }>();
-    const serial = Number(last?.serial ?? 0) + 1;
-    if (series.total_supply !== null && serial > series.total_supply) {
-      throw new ApiError(409, 'GIFT_SERIES_EXHAUSTED', 'The whole issue has been given out');
-    }
-
-    const pools = (
-      await env.DB.prepare(
-        'SELECT id, kind, rarity_permille FROM gift_attributes ORDER BY kind, sort_order',
-      ).all<{ id: string; kind: string; rarity_permille: number }>()
-    ).results;
-    const pick = (kind: string) =>
-      rollAttribute(
-        pools.filter((item) => item.kind === kind),
-        Math.random(),
-      );
-    const model = pick('model');
-    const pattern = pick('pattern');
-    const backdrop = pick('backdrop');
-    const mintedAt = new Date().toISOString().slice(0, 19).replace('T', ' ');
-    const link = {
+    const minted = await issueGift(env, {
       seriesId: series.id,
-      serial,
-      modelId: model?.id ?? '',
-      patternId: pattern?.id ?? '',
-      backdropId: backdrop?.id ?? '',
-      mintedAt,
-    };
-    const prevHash = last?.hash ?? GENESIS_HASH;
-    const hash = await hashMint(env, link, prevHash);
-    const itemId = crypto.randomUUID();
-    const transferHash = await hashTransfer(
-      env,
-      {
-        itemId,
-        fromUserId: null,
-        toUserId: input.ownerUserId,
-        reason: 'mint',
-        starAmount: 0,
-        createdAt: mintedAt,
-      },
-      hash,
-    );
-    await env.DB.batch([
-      env.DB.prepare(
-        `INSERT INTO gift_items
-           (id, series_id, serial, model_id, pattern_id, backdrop_id, owner_user_id,
-            minted_at, prev_hash, hash)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)`,
-      ).bind(
-        itemId,
-        series.id,
-        serial,
-        model?.id ?? null,
-        pattern?.id ?? null,
-        backdrop?.id ?? null,
-        input.ownerUserId,
-        mintedAt,
-        prevHash,
-        hash,
-      ),
-      env.DB.prepare(
-        `INSERT INTO gift_transfers
-           (id, item_id, from_user_id, to_user_id, reason, star_amount, created_at, prev_hash, hash)
-         VALUES (?1, ?2, NULL, ?3, 'mint', 0, ?4, ?5, ?6)`,
-      ).bind(crypto.randomUUID(), itemId, input.ownerUserId, mintedAt, hash, transferHash),
-    ]);
-    return { itemId, serial, hash };
+      ownerUserId: input.ownerUserId,
+      totalSupply: series.total_supply,
+    });
+    return minted;
   },
   /** One copy, with everything a card has to show about it. */
   'gifts.item': async (env, input) => {
@@ -6891,6 +6825,40 @@ const handlers: { [K in WorkerOperation]: Handler<K> } = {
         .run();
     }
     return { ...withdrawal, duplicate: false };
+  },
+  /**
+   * Takes a standard gift for its price in stars.
+   *
+   * Standard gifts have no limit, so anybody can have one: the stars leave the
+   * balance and a fresh copy is issued to them through the same signed path a
+   * minted collectible takes. A limited series is not claimable this way — its
+   * copies exist only as many times as its circulation says, and only the owner
+   * of the product issues them.
+   */
+  'gifts.claim': async (env, input) => {
+    const series = await env.DB.prepare(
+      'SELECT id, total_supply, star_price FROM gift_series WHERE code = ?1',
+    )
+      .bind(input.seriesCode)
+      .first<{ id: string; total_supply: number | null; star_price: number }>();
+    if (!series) throw new ApiError(404, 'GIFT_SERIES_NOT_FOUND', 'No such gift series');
+    if (series.total_supply !== null) {
+      throw new ApiError(403, 'GIFT_SERIES_LIMITED', 'This series is issued by its owner only');
+    }
+    const balance = await env.DB.prepare('SELECT balance FROM star_balances WHERE user_id = ?1')
+      .bind(input.userId)
+      .first<{ balance: number }>();
+    if (Number(balance?.balance ?? 0) < series.star_price) {
+      throw new ApiError(402, 'STAR_BALANCE_TOO_LOW', 'Not enough stars on the balance');
+    }
+    await creditStars(env, {
+      userId: input.userId,
+      delta: -series.star_price,
+      reason: 'purchase',
+      refId: series.id,
+    });
+    const minted = await issueGift(env, { seriesId: series.id, ownerUserId: input.userId });
+    return { itemId: minted.itemId, serial: minted.serial, starAmount: series.star_price };
   },
   'gifts.showcase': async (env, input) => {
     return (

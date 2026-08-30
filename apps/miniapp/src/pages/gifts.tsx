@@ -2,7 +2,13 @@ import { useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Gift, Link2, Share2, Sparkles, X } from 'lucide-react';
 import { ru } from '@rolemate/shared';
-import { api, type GiftDetail, type GiftListing, type GiftShelf } from '../api.js';
+import {
+  api,
+  type GiftCatalogue,
+  type GiftDetail,
+  type GiftListing,
+  type GiftShelf,
+} from '../api.js';
 import { Button, Card, EmptyState, useTextPrompt } from '../components/ui.js';
 import { GiftCard, type GiftAppearance } from '../components/gift-card.js';
 import { getTelegram } from '../telegram.js';
@@ -42,7 +48,8 @@ const RANKS = ['white', 'black', 'moon', 'blue', 'red', 'bell', 'plain'] as cons
 export function GiftsPage() {
   const queryClient = useQueryClient();
   const { ask, dialog: promptDialog } = useTextPrompt();
-  const [tab, setTab] = useState<'market' | 'mine' | 'offers'>('market');
+  const [tab, setTab] = useState<'collection' | 'market' | 'mine' | 'offers'>('collection');
+  const [openSeries, setOpenSeries] = useState<string | null>(null);
   const [rank, setRank] = useState<string>('');
   const [sort, setSort] = useState('recent');
   const [openItemId, setOpenItemId] = useState<string | null>(null);
@@ -63,6 +70,14 @@ export function GiftsPage() {
     onSuccess: () => void queryClient.invalidateQueries({ queryKey: ['star-balance'] }),
   });
 
+  // The collection is what the market is about, so it is what opens: a market
+  // with nothing listed yet would otherwise look like a product with nothing in
+  // it, when in fact the whole series is there to be seen.
+  const catalogue = useQuery({
+    queryKey: ['gift-catalogue'],
+    queryFn: api.giftCatalogue,
+    staleTime: 30 * 60_000,
+  });
   const market = useQuery({
     queryKey: ['gift-market', rank, sort],
     queryFn: () =>
@@ -159,6 +174,7 @@ export function GiftsPage() {
       <div className="gift-tabs" role="tablist">
         {(
           [
+            ['collection', ru.miniApp.gifts.tabCollection],
             ['market', ru.miniApp.gifts.tabMarket],
             ['mine', ru.miniApp.gifts.tabMine],
             ['offers', ru.miniApp.gifts.tabOffers],
@@ -176,6 +192,49 @@ export function GiftsPage() {
           </button>
         ))}
       </div>
+
+      {tab === 'collection' ? (
+        <div className="gift-collection">
+          <p className="text-xs text-muted">{ru.miniApp.gifts.collectionHint}</p>
+          {(catalogue.data?.collections ?? []).map((collection) => {
+            const series = (catalogue.data?.series ?? []).filter(
+              (row) => row.collection_id === collection.id,
+            );
+            if (!series.length) return null;
+            return (
+              <section key={collection.id}>
+                <h2 className="gift-collection-title">{collection.title}</h2>
+                <div className="gift-grid">
+                  {series.map((row) => (
+                    <button
+                      key={row.id}
+                      type="button"
+                      className="gift-grid-cell"
+                      onClick={() => setOpenSeries(row.code)}
+                    >
+                      <GiftCard
+                        appearance={seriesAppearance(row.rank)}
+                        rank={row.rank}
+                        seriesCode={row.code}
+                        size={104}
+                      />
+                      <strong>{row.title}</strong>
+                      <small>{ru.miniApp.gifts.issuedOf(row.issued, row.total_supply)}</small>
+                      <span className="gift-price">{ru.miniApp.gifts.stars(row.star_price)}</span>
+                    </button>
+                  ))}
+                </div>
+              </section>
+            );
+          })}
+          <section className="gift-disclaimer">
+            <h2>{ru.miniApp.gifts.disclaimerTitle}</h2>
+            {ru.miniApp.gifts.disclaimer.map((paragraph) => (
+              <p key={paragraph.slice(0, 24)}>{paragraph}</p>
+            ))}
+          </section>
+        </div>
+      ) : null}
 
       {tab === 'market' ? (
         <>
@@ -366,6 +425,13 @@ export function GiftsPage() {
         )
       ) : null}
 
+      {openSeries ? (
+        <SeriesSheet
+          seriesCode={openSeries}
+          catalogue={catalogue.data}
+          onClose={() => setOpenSeries(null)}
+        />
+      ) : null}
       {openItemId ? (
         <GiftSheet
           itemId={openItemId}
@@ -620,6 +686,142 @@ export function GiftsHomeCard() {
         <strong>{ru.miniApp.gifts.marketplaceTitle}</strong>
         <small>{ru.miniApp.gifts.homeDescription}</small>
       </div>
+    </div>
+  );
+}
+
+/**
+ * How a series looks before any particular copy of it exists: the rank decides
+ * how dark the card is, which is the rule the ranks of the Abyss already imply.
+ */
+const RANK_LOOK: Record<
+  string,
+  { backdrop: GiftAppearance['backdrop']; model: GiftAppearance['model'] }
+> = {
+  white: {
+    backdrop: { from: '#05070d', to: '#101726', glow: '#c9d6ff' },
+    model: { body: '#f4f1ea', edge: '#cfc7b4', cord: '#8d8574' },
+  },
+  black: {
+    backdrop: { from: '#07080c', to: '#171a24', glow: '#e8ecff' },
+    model: { body: '#1b1c22', edge: '#3c3f4c', cord: '#0e0f13' },
+  },
+  moon: {
+    backdrop: { from: '#0f1420', to: '#25304a', glow: '#d5e2ff' },
+    model: { body: '#d8dee9', edge: '#9aa3b1', cord: '#5b6472' },
+  },
+  blue: {
+    backdrop: { from: '#0a1424', to: '#173154', glow: '#7fb2ff' },
+    model: { body: '#7fb2ff', edge: '#4e79bd', cord: '#2f4a75' },
+  },
+  red: {
+    backdrop: { from: '#160a0a', to: '#3a1414', glow: '#ff9b7a' },
+    model: { body: '#ff8f80', edge: '#bc4f43', cord: '#742d26' },
+  },
+  bell: {
+    backdrop: { from: '#1b1408', to: '#3d2f11', glow: '#ffcf80' },
+    model: { body: '#ffd479', edge: '#b8862c', cord: '#6d5019' },
+  },
+  plain: {
+    backdrop: { from: '#181320', to: '#3a2c46', glow: '#ffd9ec' },
+    model: null,
+  },
+};
+
+function seriesAppearance(rank: string): GiftAppearance {
+  const look = RANK_LOOK[rank] ?? RANK_LOOK.plain!;
+  return {
+    backdrop: look.backdrop ?? null,
+    model: look.model ?? null,
+    pattern: { tile: 'echo' },
+  };
+}
+
+/**
+ * One series, opened from the collection: what it is, how large the issue is,
+ * and the one thing anybody can do with it. A standard gift is taken for its
+ * price in stars; a limited one exists only as many times as its circulation
+ * says, and only the owner of the product issues those.
+ */
+function SeriesSheet({
+  seriesCode,
+  catalogue,
+  onClose,
+}: {
+  seriesCode: string;
+  catalogue: GiftCatalogue | undefined;
+  onClose: () => void;
+}) {
+  const queryClient = useQueryClient();
+  const series = catalogue?.series.find((row) => row.code === seriesCode);
+  const claim = useMutation({
+    mutationFn: () => api.claimGift(seriesCode),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ['gift-catalogue'] });
+      void queryClient.invalidateQueries({ queryKey: ['gift-mine'] });
+      void queryClient.invalidateQueries({ queryKey: ['star-balance'] });
+    },
+  });
+  if (!series) return null;
+  const limited = series.total_supply !== null;
+  const soldOut = limited && series.issued >= (series.total_supply ?? 0);
+  return (
+    <div className="editor-sheet-backdrop" role="presentation" onMouseDown={onClose}>
+      <section
+        className="editor-sheet gift-sheet"
+        role="dialog"
+        aria-modal="true"
+        aria-label={series.title}
+        onMouseDown={(event) => event.stopPropagation()}
+      >
+        <header className="editor-sheet-header">
+          <strong>{series.title}</strong>
+          <button type="button" aria-label={ru.miniApp.dialogs.cancel} onClick={onClose}>
+            <X aria-hidden />
+          </button>
+        </header>
+        <div className="editor-sheet-body">
+          <div className="gift-sheet-hero">
+            <GiftCard
+              appearance={seriesAppearance(series.rank)}
+              rank={series.rank}
+              seriesCode={series.code}
+              size={196}
+              playing
+              label={series.title}
+            />
+            <h2>{series.title}</h2>
+            {series.subtitle ? <p className="text-muted">{series.subtitle}</p> : null}
+          </div>
+          {series.lore ? <p className="gift-sheet-lore">{series.lore}</p> : null}
+          <table className="gift-attributes">
+            <tbody>
+              <tr>
+                <th>{ru.miniApp.gifts.quantity}</th>
+                <td>{ru.miniApp.gifts.issuedOf(series.issued, series.total_supply)}</td>
+              </tr>
+              <tr>
+                <th>{ru.miniApp.gifts.value}</th>
+                <td>{ru.miniApp.gifts.stars(series.star_price)}</td>
+              </tr>
+            </tbody>
+          </table>
+          {limited ? <p className="gift-sheet-lore">{ru.miniApp.gifts.limitedOnlyOwner}</p> : null}
+          {claim.isError ? <div className="error-box mt-3">{claim.error.message}</div> : null}
+          {claim.isSuccess ? <p className="gift-sheet-lore">{ru.miniApp.gifts.claimed}</p> : null}
+        </div>
+        <footer className="editor-sheet-footer">
+          {limited ? (
+            <Button variant="secondary" disabled>
+              {soldOut ? ru.miniApp.gifts.soldOut : ru.miniApp.gifts.limitedOnlyOwner}
+            </Button>
+          ) : (
+            <Button loading={claim.isPending} onClick={() => claim.mutate()}>
+              {ru.miniApp.gifts.claim} · {ru.miniApp.gifts.stars(series.star_price)}
+            </Button>
+          )}
+        </footer>
+      </section>
     </div>
   );
 }

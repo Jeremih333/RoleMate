@@ -10609,12 +10609,23 @@ body {
 }
 
 /* The market itself. */
+/* Chips scroll sideways inside the page rather than past the edge of it, and
+   the row keeps a little air at each end so the first and last do not touch. */
 .gift-tabs,
 .gift-filter-row {
   display: flex;
   gap: 6px;
+  max-width: 100%;
+  padding-bottom: 2px;
   overflow-x: auto;
+  overscroll-behavior-x: contain;
   scrollbar-width: none;
+  -webkit-overflow-scrolling: touch;
+}
+
+.gift-tabs::-webkit-scrollbar,
+.gift-filter-row::-webkit-scrollbar {
+  display: none;
 }
 
 .gift-tabs button,
@@ -10794,11 +10805,30 @@ body {
 
 /* Everything in the market is bought and sold in stars, so the balance is the
    first thing it says. */
+/* The page itself: the market had no wrapper of its own, so its rows ran to the
+   edges of the screen and its chips slid out of sight past the right of it. */
+.page-stack {
+  display: grid;
+  gap: 14px;
+  padding-bottom: 12px;
+}
+
+.page-header h1 {
+  margin-top: 2px;
+  font-size: 26px;
+  line-height: 1.2;
+}
+
 .star-balance {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 10px;
+  flex-wrap: wrap;
+}
+
+.star-balance > div:first-child {
+  min-width: 0;
 }
 
 .star-balance strong {
@@ -10819,4 +10849,35 @@ body {
 
 .profile-star-balance strong {
   color: #ffd479;
+}
+
+.gift-collection {
+  display: grid;
+  gap: 16px;
+}
+
+.gift-collection-title {
+  margin-bottom: 8px;
+  font-size: 15px;
+}
+
+/* What the thing is and what it is not: shown where somebody decides to spend,
+   not buried in a settings screen. */
+.gift-disclaimer {
+  display: grid;
+  gap: 8px;
+  border: 1px solid rgb(255 255 255 / 10%);
+  border-radius: 14px;
+  padding: 14px;
+  background: rgb(255 255 255 / 4%);
+}
+
+.gift-disclaimer h2 {
+  font-size: 14px;
+}
+
+.gift-disclaimer p {
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.55;
 }

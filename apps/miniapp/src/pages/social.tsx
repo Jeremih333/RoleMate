@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type CSSProperties } from 'react';
+import { useCallback, useEffect, useRef, useState, type CSSProperties } from 'react';
 import { createPortal } from 'react-dom';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import type { QueryClient } from '@tanstack/react-query';
@@ -23,7 +23,6 @@ import {
   Save,
   Share2,
   Shield,
-  Settings2,
   Star,
   ThumbsDown,
   Trash2,
@@ -55,6 +54,8 @@ import { CustomEmojiPickerDialog } from '../components/custom-emoji-picker.js';
 import { CustomEmojiInsertButton } from '../components/custom-emoji-insert.js';
 import { CustomEmojiField } from '../components/custom-emoji-field.js';
 import { CustomEmojiInline } from '../components/custom-emoji-inline.js';
+import { EditorExtras, EditorSheet } from '../components/editor-sheet.js';
+import { useDismiss } from '../components/use-dismiss.js';
 import { draftLength, draftToStored, storedToDraft } from '../components/custom-emoji-draft.js';
 import { useCustomEmojiBase } from '../components/custom-emoji-library.js';
 import { FeedVideo } from '../components/feed-video.js';
@@ -1890,7 +1891,14 @@ export function PostCard({
   const [ownCommentToDelete, setOwnCommentToDelete] = useState<string | null>(null);
   const [postMediaToDelete, setPostMediaToDelete] = useState<string | null>(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [extrasOpen, setExtrasOpen] = useState(false);
   const [postMenuOpen, setPostMenuOpen] = useState(false);
+  const closePostMenu = useCallback(() => setPostMenuOpen(false), []);
+  const { ref: postMenuRef, trigger: postMenuTrigger } = useDismiss<
+    HTMLDivElement,
+    HTMLButtonElement
+  >(postMenuOpen, closePostMenu);
+  const { ask, dialog: postPromptDialog } = useTextPrompt();
   const [moderationOpen, setModerationOpen] = useState(false);
   const [engagementKind, setEngagementKind] = useState<'ratings' | 'shares' | null>(null);
   const [failedMediaIds, setFailedMediaIds] = useState<Set<string>>(() => new Set());
@@ -2152,10 +2160,6 @@ export function PostCard({
     updatePost.reset();
     removeMedia.reset();
   };
-  const togglePostSettings = () => {
-    resetPostDraft();
-    setSettingsOpen((value) => !value);
-  };
   const cancelPostEditing = () => {
     resetPostDraft();
     setSettingsOpen(false);
@@ -2406,8 +2410,9 @@ export function PostCard({
             {post.is_following ? ru.miniApp.social.followingAuthor : ru.miniApp.social.followAuthor}
           </button>
         ) : null}
-        <div className="post-card-menu">
+        <div className="post-card-menu" ref={postMenuRef}>
           <button
+            ref={postMenuTrigger}
             className="post-report-button"
             type="button"
             aria-label={ru.miniApp.social.postMenu}
@@ -2417,58 +2422,90 @@ export function PostCard({
             <MoreVertical aria-hidden />
           </button>
           {postMenuOpen ? (
-            <>
-              <button
-                type="button"
-                className="post-menu-backdrop"
-                aria-label={ru.miniApp.community.cancelAction}
-                onClick={() => setPostMenuOpen(false)}
-              />
-              <div className="post-card-menu-popover post-action-sheet" role="menu">
-                {isOwnPost ? (
+            <div className="post-card-menu-popover post-action-sheet" role="menu">
+              {/* One action per line and each one says what it does. A single
+                  "settings" entry that unfolded every field at once is what made
+                  managing a post a puzzle. */}
+              {isOwnPost ? (
+                <>
                   <button
                     type="button"
                     onClick={() => {
                       setPostMenuOpen(false);
-                      togglePostSettings();
+                      resetPostDraft();
+                      setSettingsOpen(true);
                     }}
                   >
-                    <Settings2 /> {ru.miniApp.social.postSettings}
+                    <Pencil /> {ru.miniApp.social.editPost}
                   </button>
-                ) : (
-                  <>
-                    <button type="button" onClick={() => setEngagementKind('ratings')}>
-                      <Heart /> {ru.miniApp.social.postRatedBy}
-                    </button>
-                    <button type="button" onClick={() => setEngagementKind('shares')}>
-                      <Share2 /> {ru.miniApp.social.postSharedBy}
-                    </button>
-                    <button type="button" onClick={() => hidePost.mutate()}>
-                      <Eye /> {ru.miniApp.social.hidePost}
-                    </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setPostMenuOpen(false);
+                      addMedia();
+                    }}
+                  >
+                    <ImagePlus /> {ru.miniApp.social.addPostMedia}
+                  </button>
+                  {mediaItems.length ? (
                     <button
                       type="button"
-                      className="danger"
                       onClick={() => {
-                        const description = window
-                          .prompt(ru.miniApp.social.reportPostPrompt)
-                          ?.trim();
-                        if (description) {
-                          report.mutate({
-                            reportedUserId: post.author_user_id,
-                            postId: post.id,
-                            description,
-                          });
-                        }
                         setPostMenuOpen(false);
+                        setPostMediaToDelete('all');
                       }}
                     >
-                      <Flag /> {ru.miniApp.social.report}
+                      <Trash2 /> {ru.miniApp.social.removePostMedia}
                     </button>
-                  </>
-                )}
-              </div>
-            </>
+                  ) : null}
+                  <button type="button" onClick={() => setEngagementKind('ratings')}>
+                    <Heart /> {ru.miniApp.social.postRatedBy}
+                  </button>
+                  <button type="button" onClick={() => setEngagementKind('shares')}>
+                    <Share2 /> {ru.miniApp.social.postSharedBy}
+                  </button>
+                  <button
+                    type="button"
+                    className="danger"
+                    onClick={() => {
+                      setPostMenuOpen(false);
+                      confirm(ru.miniApp.social.deletePostConfirm, () => deletePost.mutate());
+                    }}
+                  >
+                    <Trash2 /> {ru.miniApp.social.deletePost}
+                  </button>
+                </>
+              ) : (
+                <>
+                  <button type="button" onClick={() => setEngagementKind('ratings')}>
+                    <Heart /> {ru.miniApp.social.postRatedBy}
+                  </button>
+                  <button type="button" onClick={() => setEngagementKind('shares')}>
+                    <Share2 /> {ru.miniApp.social.postSharedBy}
+                  </button>
+                  <button type="button" onClick={() => hidePost.mutate()}>
+                    <Eye /> {ru.miniApp.social.hidePost}
+                  </button>
+                  <button
+                    type="button"
+                    className="danger"
+                    onClick={() => {
+                      setPostMenuOpen(false);
+                      ask(ru.miniApp.social.reportPostPrompt, (description) => {
+                        if (!description.trim()) return;
+                        report.mutate({
+                          reportedUserId: post.author_user_id,
+                          postId: post.id,
+                          description: description.trim(),
+                        });
+                      });
+                    }}
+                  >
+                    <Flag /> {ru.miniApp.social.report}
+                  </button>
+                </>
+              )}
+            </div>
           ) : null}
         </div>
       </div>
@@ -2783,148 +2820,136 @@ export function PostCard({
         </span>
       </div>
       {isOwnPost && settingsOpen ? (
-        <div className="border-t border-white/10 p-5" data-testid={`post-settings-${post.id}`}>
-          <label className="field-label" htmlFor={`post-title-${post.id}`}>
-            {ru.miniApp.social.postTitle}
-          </label>
-          <input
-            id={`post-title-${post.id}`}
-            className="input"
-            maxLength={120}
-            value={postTitle}
-            onChange={(event) => setPostTitle(event.target.value)}
-          />
-          <label className="field-label mt-4" htmlFor={`post-body-${post.id}`}>
-            {ru.miniApp.social.postBody}
-          </label>
-          <CustomEmojiField value={postBody} onChange={setPostBody}>
-            <textarea
-              id={`post-body-${post.id}`}
-              className="input min-h-48"
-              maxLength={8000}
-              value={postBody}
-              onChange={(event) => setPostBody(event.target.value)}
-            />
-          </CustomEmojiField>
-          {/* Editing a post is writing, so it gets the same emoji button the
-              composers have; without it an emoji could only ever be added at
-              the moment a post was created. */}
-          <div className="mt-2 flex items-center gap-2">
-            <CustomEmojiInsertButton
-              onInsert={(token) => setPostBody((current) => `${current}${token}`)}
-            />
-            <p className="text-xs text-muted">{ru.miniApp.social.postMarkdownHint}</p>
-          </div>
-          <label className="field-label mt-4" htmlFor={`post-playlist-title-${post.id}`}>
-            {ru.miniApp.social.postPlaylistTitle}
-          </label>
-          <input
-            id={`post-playlist-title-${post.id}`}
-            className="input"
-            maxLength={120}
-            value={postPlaylistTitle}
-            onChange={(event) => setPostPlaylistTitle(event.target.value)}
-          />
-          <p className="mt-2 text-xs text-muted">{ru.miniApp.social.postPlaylistTitleHint}</p>
-          <label className="field-label mt-4" htmlFor={`post-tags-${post.id}`}>
-            {ru.miniApp.social.postTags}
-          </label>
-          <input
-            id={`post-tags-${post.id}`}
-            className="input"
-            value={postTags}
-            onChange={(event) => setPostTags(event.target.value)}
-          />
-          <label className="field-label mt-4" htmlFor={`post-fandoms-${post.id}`}>
-            {ru.miniApp.social.postFandoms}
-          </label>
-          <input
-            id={`post-fandoms-${post.id}`}
-            className="input"
-            value={postFandoms}
-            onChange={(event) => setPostFandoms(event.target.value)}
-          />
-          <label className="field-label mt-4" htmlFor={`post-hashtags-${post.id}`}>
-            {ru.miniApp.social.postHashtags}
-          </label>
-          <input
-            id={`post-hashtags-${post.id}`}
-            className="input"
-            value={postHashtags}
-            onChange={(event) => setPostHashtags(event.target.value)}
-          />
-          <p className="mt-2 text-xs text-muted">{ru.miniApp.social.postMetadataHint}</p>
-          {mediaItems.length ? (
-            <div className="post-media-manager mt-4">
-              {mediaItems.map((item, index) => (
-                <div className="post-media-manager-item" key={item.id ?? `legacy-${index}`}>
-                  <FileText aria-hidden />
-                  <span>
-                    <strong>
-                      {item.track_title || `${ru.miniApp.profile.mediaTitle} ${index + 1}`}
-                    </strong>
-                    <small>
-                      {item.track_performer
-                        ? `${item.track_performer} · ${item.media_type}`
-                        : item.media_type}
-                    </small>
-                  </span>
-                  {item.id ? (
-                    <button
-                      type="button"
-                      aria-label={ru.miniApp.social.removePostMediaItem}
-                      onClick={() => setPostMediaToDelete(item.id)}
-                    >
-                      <Trash2 aria-hidden />
-                    </button>
-                  ) : null}
-                </div>
-              ))}
-            </div>
-          ) : null}
-          <div className="mt-4 flex flex-wrap gap-2">
-            <Button
-              loading={updatePost.isPending}
-              disabled={!postBody.trim()}
-              onClick={() => updatePost.mutate()}
-            >
-              <Save className="h-4 w-4" /> {ru.miniApp.social.savePost}
-            </Button>
-            <Button variant="secondary" onClick={cancelPostEditing}>
-              <X className="h-4 w-4" /> {ru.miniApp.social.cancelPostEditing}
-            </Button>
-            <Button variant="secondary" onClick={addMedia}>
-              <ImagePlus className="h-4 w-4" /> {ru.miniApp.social.addPostMedia}
-            </Button>
-            {mediaItems.length ? (
+        <EditorSheet
+          title={ru.miniApp.social.editPostTitle}
+          onClose={cancelPostEditing}
+          footer={
+            <>
               <Button
-                variant="danger"
-                loading={removeMedia.isPending}
-                onClick={() => setPostMediaToDelete('all')}
+                loading={updatePost.isPending}
+                disabled={!postBody.trim()}
+                onClick={() => updatePost.mutate()}
               >
-                <Trash2 className="h-4 w-4" /> {ru.miniApp.social.removePostMedia}
+                <Save className="h-4 w-4" /> {ru.miniApp.social.savePost}
               </Button>
+              <Button variant="secondary" onClick={cancelPostEditing}>
+                {ru.miniApp.social.cancelPostEditing}
+              </Button>
+            </>
+          }
+        >
+          <div data-testid={`post-settings-${post.id}`}>
+            {/* The writing first and alone, the way Threads opens an editor. */}
+            <CustomEmojiField value={postBody} onChange={setPostBody}>
+              <textarea
+                id={`post-body-${post.id}`}
+                className="input editor-sheet-text"
+                maxLength={8000}
+                aria-label={ru.miniApp.social.postBody}
+                value={postBody}
+                onChange={(event) => setPostBody(event.target.value)}
+              />
+            </CustomEmojiField>
+            <div className="editor-sheet-tools">
+              <CustomEmojiInsertButton
+                onInsert={(token) => setPostBody((current) => `${current}${token}`)}
+              />
+              <Button variant="secondary" onClick={addMedia}>
+                <ImagePlus className="h-4 w-4" /> {ru.miniApp.social.addPostMedia}
+              </Button>
+            </div>
+            <p className="mt-2 text-xs text-muted">{ru.miniApp.social.postMarkdownHint}</p>
+            {mediaItems.length ? (
+              <div className="post-media-manager mt-4">
+                {mediaItems.map((item, index) => (
+                  <div className="post-media-manager-item" key={item.id ?? `legacy-${index}`}>
+                    <FileText aria-hidden />
+                    <span>
+                      <strong>
+                        {item.track_title || `${ru.miniApp.profile.mediaTitle} ${index + 1}`}
+                      </strong>
+                      <small>
+                        {item.track_performer
+                          ? `${item.track_performer} · ${item.media_type}`
+                          : item.media_type}
+                      </small>
+                    </span>
+                    {item.id ? (
+                      <button
+                        type="button"
+                        aria-label={ru.miniApp.social.removePostMediaItem}
+                        onClick={() => setPostMediaToDelete(item.id)}
+                      >
+                        <Trash2 aria-hidden />
+                      </button>
+                    ) : null}
+                  </div>
+                ))}
+              </div>
             ) : null}
-            <Button
-              variant="danger"
-              loading={deletePost.isPending}
-              onClick={() =>
-                confirm(ru.miniApp.social.deletePostConfirm, () => deletePost.mutate())
-              }
+            <EditorExtras
+              label={ru.miniApp.social.postExtras}
+              hint={ru.miniApp.social.postExtrasHint}
+              open={extrasOpen}
+              onToggle={() => setExtrasOpen((value) => !value)}
             >
-              <Trash2 className="h-4 w-4" /> {ru.miniApp.social.deletePost}
-            </Button>
+              <label className="field-label" htmlFor={`post-title-${post.id}`}>
+                {ru.miniApp.social.postTitle}
+              </label>
+              <input
+                id={`post-title-${post.id}`}
+                className="input"
+                maxLength={120}
+                value={postTitle}
+                onChange={(event) => setPostTitle(event.target.value)}
+              />
+              <label className="field-label mt-4" htmlFor={`post-tags-${post.id}`}>
+                {ru.miniApp.social.postTags}
+              </label>
+              <input
+                id={`post-tags-${post.id}`}
+                className="input"
+                value={postTags}
+                onChange={(event) => setPostTags(event.target.value)}
+              />
+              <label className="field-label mt-4" htmlFor={`post-fandoms-${post.id}`}>
+                {ru.miniApp.social.postFandoms}
+              </label>
+              <input
+                id={`post-fandoms-${post.id}`}
+                className="input"
+                value={postFandoms}
+                onChange={(event) => setPostFandoms(event.target.value)}
+              />
+              <label className="field-label mt-4" htmlFor={`post-hashtags-${post.id}`}>
+                {ru.miniApp.social.postHashtags}
+              </label>
+              <input
+                id={`post-hashtags-${post.id}`}
+                className="input"
+                value={postHashtags}
+                onChange={(event) => setPostHashtags(event.target.value)}
+              />
+              <label className="field-label mt-4" htmlFor={`post-playlist-title-${post.id}`}>
+                {ru.miniApp.social.postPlaylistTitle}
+              </label>
+              <input
+                id={`post-playlist-title-${post.id}`}
+                className="input"
+                value={postPlaylistTitle}
+                maxLength={120}
+                onChange={(event) => setPostPlaylistTitle(event.target.value)}
+              />
+              <p className="mt-2 text-xs text-muted">{ru.miniApp.social.postPlaylistTitleHint}</p>
+            </EditorExtras>
+            {updatePost.isError ? (
+              <div className="error-box mt-3">{updatePost.error.message}</div>
+            ) : null}
+            {removeMedia.isError ? (
+              <div className="error-box mt-3">{removeMedia.error.message}</div>
+            ) : null}
           </div>
-          {updatePost.isError ? (
-            <div className="error-box mt-3">{updatePost.error.message}</div>
-          ) : null}
-          {removeMedia.isError ? (
-            <div className="error-box mt-3">{removeMedia.error.message}</div>
-          ) : null}
-          {deletePost.isError ? (
-            <div className="error-box mt-3">{deletePost.error.message}</div>
-          ) : null}
-        </div>
+        </EditorSheet>
       ) : null}
       {open ? (
         <div className="border-t border-white/10 p-5">
@@ -3395,6 +3420,7 @@ export function PostCard({
         onSend={(conversationIds) => sharePlaylist.mutate(conversationIds)}
       />
       {confirmDialog}
+      {postPromptDialog}
     </Card>
   );
 }

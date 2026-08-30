@@ -21,6 +21,7 @@ import { useUserStore } from '../store.js';
 import { api, type UserNotification } from '../api.js';
 import { applyThemePreference, getTelegram, trackTopbarHeight } from '../telegram.js';
 import { CUSTOM_EMOJI_PACK_EVENT } from './custom-emoji-token.js';
+import { usePulse } from './use-pulse.js';
 import { CustomEmojiPickerDialog } from './custom-emoji-picker.js';
 import { useViewerTime } from './viewer-time.js';
 
@@ -68,12 +69,15 @@ export function Layout({ children }: { children: ReactNode }) {
   const [feedTopActionVisible, setFeedTopActionVisible] = useState(false);
   const [notificationsOpen, setNotificationsOpen] = useState(false);
   const queryClient = useQueryClient();
+  // One small request keeps every screen current; the lists themselves are
+  // refetched only when it says they changed.
+  usePulse();
   const notifications = useQuery({
     queryKey: ['notifications'],
     queryFn: api.notifications,
-    // Mounted on every screen, so this poll runs for the whole session — and the
-    // bot already delivers anything urgent to the private chat.
-    refetchInterval: 180_000,
+    // The pulse is what notices a new notification now, so this is only a
+    // fallback for a beat that never arrived.
+    refetchInterval: 600_000,
     refetchIntervalInBackground: false,
   });
   const settings = useQuery({

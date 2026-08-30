@@ -829,6 +829,15 @@ export async function buildServer(
       riskScore: session.riskScore,
     };
   });
+  // One small answer telling the app whether anything it is showing has moved.
+  // A screen that never refreshes made people walk between tabs to find out;
+  // polling every list separately would cost several requests a minute per open
+  // app, which the free plan cannot carry. This is a handful of counters, and
+  // the app refetches only the list whose counter actually changed.
+  app.get('/api/pulse', async (request) => {
+    const session = await authenticate(request);
+    return dataApi.execute('pulse.get', { userId: session.userId });
+  });
   app.get('/api/notifications', async (request) => {
     const session = await authenticate(request);
     return dataApi.execute('notifications.list', { userId: session.userId, limit: 50 });

@@ -6095,6 +6095,40 @@ const handlers: { [K in WorkerOperation]: Handler<K> } = {
     }
     return deliveries;
   },
+  /**
+   * One small answer saying whether anything the reader is looking at has moved.
+   *
+   * A screen that never refreshes made people walk between tabs to see whether
+   * anything had happened; polling each list separately would have cost several
+   * requests a minute per open app, which the free plan cannot carry. This is a
+   * handful of counters in a single query — the app compares them with what it
+   * had and refetches only the list that actually changed.
+   */
+  'pulse.get': async (env, input) => {
+    const row = await env.DB.prepare(
+      `SELECT
+         (SELECT COUNT(*) FROM user_notifications
+          WHERE user_id = ?1 AND dismissed_at IS NULL AND read_at IS NULL) AS unread_notifications,
+         (SELECT MAX(created_at) FROM user_notifications
+          WHERE user_id = ?1 AND dismissed_at IS NULL) AS last_notification_at,
+         (SELECT MAX(m.created_at) FROM conversation_messages m
+          JOIN conversation_participants p
+            ON p.conversation_id = m.conversation_id AND p.user_id = ?1
+          WHERE m.sender_user_id <> ?1 AND m.deleted_at IS NULL) AS last_message_at,
+         (SELECT COUNT(*) FROM conversation_messages m
+          JOIN conversation_participants p
+            ON p.conversation_id = m.conversation_id AND p.user_id = ?1
+          WHERE m.sender_user_id <> ?1 AND m.deleted_at IS NULL AND m.read_at IS NULL)
+           AS unread_messages,
+         (SELECT COUNT(*) FROM swipes
+          WHERE target_user_id = ?1 AND action IN ('like', 'super_like')) AS incoming_likes,
+         (SELECT MAX(published_at) FROM telegram_posts
+          WHERE status = 'active') AS last_post_at`,
+    )
+      .bind(input.userId)
+      .first<Record<string, unknown>>();
+    return row ?? {};
+  },
   'notifications.list': async (env, input) => {
     return (
       await env.DB.prepare(

@@ -261,9 +261,10 @@ export function ChatsPage() {
     queryFn: () => api.conversations(),
     refetchOnMount: 'always',
     refetchOnWindowFocus: 'always',
-    // Every local mutation already invalidates this list, and opening the screen
-    // refetches it, so the poll is only a safety net for the other side.
-    refetchInterval: 120_000,
+    // Every local mutation invalidates this list, opening the screen refetches
+    // it, and the pulse refetches it the moment a message arrives, so the poll
+    // is only a safety net for a beat that never came.
+    refetchInterval: 300_000,
     refetchIntervalInBackground: false,
   });
   const settings = useQuery({ queryKey: ['settings'], queryFn: api.settings });

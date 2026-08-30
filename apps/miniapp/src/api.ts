@@ -692,6 +692,7 @@ export const api = {
         body: JSON.stringify({ reaction, ...(customEmojiId ? { customEmojiId } : {}) }),
       },
     ),
+  pulse: () => request<Pulse>('/pulse'),
   customEmojiPacks: () => request<CustomEmojiLibrary>('/custom-emoji/packs'),
   // A whole pack in one response: the index of where each glyph sits, then all
   // their bytes. Painting a picker used to cost one request per glyph.
@@ -1288,6 +1289,16 @@ export interface CustomEmojiDescriptor extends CustomEmojiItem {
 
 export interface CustomEmojiPackDetail extends Omit<CustomEmojiPack, 'can_remove'> {
   discovered: number;
+}
+
+/** The counters that say whether anything the app is showing has moved. */
+export interface Pulse {
+  unread_notifications: number;
+  last_notification_at: string | null;
+  unread_messages: number;
+  last_message_at: string | null;
+  incoming_likes: number;
+  last_post_at: string | null;
 }
 
 export interface CustomEmojiLibrary {

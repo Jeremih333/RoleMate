@@ -1048,6 +1048,81 @@ describe('D1 domain operations', () => {
     });
   });
 
+  it('answers with counters that say what moved, and nothing else', async () => {
+    const reader = await onboard(2_641);
+    const other = await onboard(2_642);
+    const pulse = () =>
+      executeOperation(env, 'pulse.get', { userId: reader }, crypto.randomUUID()) as Promise<{
+        unread_notifications: number;
+        unread_messages: number;
+        last_message_at: string | null;
+        incoming_likes: number;
+      }>;
+
+    // A quiet account: everything at rest, so the app refetches nothing.
+    expect(await pulse()).toMatchObject({
+      unread_notifications: 0,
+      unread_messages: 0,
+      last_message_at: null,
+      incoming_likes: 0,
+    });
+
+    const conversation = (await executeOperation(
+      env,
+      'conversations.startDirect',
+      { userId: other, targetUserId: reader },
+      crypto.randomUUID(),
+    )) as { conversationId: string };
+    await executeOperation(
+      env,
+      'conversations.recordMiniAppMessage',
+      {
+        userId: other,
+        conversationId: conversation.conversationId,
+        destinationMessageId: 4_301,
+        messageType: 'text',
+        encryptedContent: 'encrypted.pulse.payload',
+      },
+      crypto.randomUUID(),
+    );
+    const afterMessage = await pulse();
+    expect(afterMessage.unread_messages).toBe(1);
+    expect(afterMessage.last_message_at).not.toBeNull();
+
+    // Answering means having seen the conversation: the reader's own message is
+    // not news to them, and it marks what was waiting as read.
+    await executeOperation(
+      env,
+      'conversations.recordMiniAppMessage',
+      {
+        userId: reader,
+        conversationId: conversation.conversationId,
+        destinationMessageId: 4_302,
+        messageType: 'text',
+        encryptedContent: 'encrypted.own.payload',
+      },
+      crypto.randomUUID(),
+    );
+    expect((await pulse()).unread_messages).toBe(0);
+
+    sqlite
+      .prepare(
+        `INSERT INTO user_notifications
+           (id, user_id, kind, context, message, open_path, source_key)
+         VALUES (?, ?, 'comment', 'post', 'Something happened', '/posts', ?)`,
+      )
+      .run(crypto.randomUUID(), reader, `pulse:${crypto.randomUUID()}`);
+    expect((await pulse()).unread_notifications).toBe(1);
+
+    sqlite
+      .prepare(
+        `INSERT INTO swipes (id, actor_user_id, target_user_id, action, source, idempotency_key)
+         VALUES (?, ?, ?, 'like', 'miniapp', ?)`,
+      )
+      .run(crypto.randomUUID(), other, reader, `pulse:${crypto.randomUUID()}`);
+    expect((await pulse()).incoming_likes).toBe(1);
+  });
+
   it('adopts an emoji met in the wild, shows its set and lets somebody add it', async () => {
     const readerId = await onboard(2_611);
     grantPremium(readerId);

@@ -438,6 +438,7 @@ export const workerOperations = {
       .min(1)
       .max(200),
   }),
+  'pulse.get': z.object({ userId: z.string().uuid() }),
   'customEmoji.adopt': z.object({
     setName: z
       .string()

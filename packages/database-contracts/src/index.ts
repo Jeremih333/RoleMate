@@ -502,6 +502,15 @@ export const workerOperations = {
     shelfId: z.string().uuid().nullable().optional(),
     pinnedOrder: z.number().int().min(0).max(7).nullable().optional(),
   }),
+  'gifts.purchase.start': z.object({
+    itemId: z.string().uuid(),
+    buyerUserId: z.string().uuid(),
+  }),
+  'gifts.purchase.get': z.object({ invoicePayload: z.string().min(1).max(128) }),
+  'gifts.purchase.settle': z.object({
+    invoicePayload: z.string().min(1).max(128),
+    telegramPaymentChargeId: z.string().min(1).max(256),
+  }),
   'gifts.showcase': z.object({ userId: z.string().uuid() }),
   'pulse.get': z.object({ userId: z.string().uuid() }),
   'customEmoji.adopt': z.object({

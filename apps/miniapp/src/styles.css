@@ -10316,9 +10316,213 @@ body {
   filter: drop-shadow(0 6px 14px rgb(0 0 0 / 45%));
 }
 
+/* Each rank moves in its own way when its gift is opened: an apprentice's
+   whistle simply swings, and a sovereign's floats and shimmers. */
 .gift-card.is-playing .gift-card-body {
   animation: gift-whistle-sway 2.6s ease-in-out infinite;
   transform-origin: 48px 30px;
+}
+
+.gift-card.is-playing[data-rank='bell'] .gift-card-body {
+  animation: gift-whistle-swing 1.6s ease-in-out infinite;
+}
+
+.gift-card.is-playing[data-rank='blue'] .gift-card-body {
+  animation: gift-whistle-sway 3.4s ease-in-out infinite;
+}
+
+.gift-card.is-playing[data-rank='moon'] .gift-card-body {
+  animation: gift-whistle-rise 3s ease-in-out infinite;
+}
+
+.gift-card.is-playing[data-rank='black'] .gift-card-body {
+  animation: gift-whistle-pulse 2.2s ease-in-out infinite;
+  transform-origin: 48px 48px;
+}
+
+.gift-card.is-playing[data-rank='white'] .gift-card-body {
+  animation: gift-whistle-float 4s ease-in-out infinite;
+  transform-origin: 48px 48px;
+}
+
+.gift-card.is-playing[data-rank='white'] .gift-card-whistle {
+  filter: drop-shadow(0 6px 14px rgb(0 0 0 / 45%)) drop-shadow(0 0 10px var(--gift-glow));
+}
+
+/* A standard gift is an emoji, and each one has a movement of its own. */
+.gift-card-emoji {
+  position: relative;
+  z-index: 2;
+  line-height: 1;
+  filter: drop-shadow(0 6px 14px rgb(0 0 0 / 40%));
+}
+
+.gift-card.is-playing[data-motion='hug'] .gift-card-emoji {
+  animation: gift-emoji-hug 2s ease-in-out infinite;
+}
+
+.gift-card.is-playing[data-motion='bloom'] .gift-card-emoji {
+  animation: gift-emoji-bloom 2.4s ease-in-out infinite;
+}
+
+.gift-card.is-playing[data-motion='sway'] .gift-card-emoji {
+  animation: gift-emoji-sway 2.6s ease-in-out infinite;
+}
+
+.gift-card.is-playing[data-motion='spin'] .gift-card-emoji {
+  animation: gift-emoji-spin 4s linear infinite;
+}
+
+.gift-card.is-playing[data-motion='beat'] .gift-card-emoji {
+  animation: gift-emoji-beat 1.2s ease-in-out infinite;
+}
+
+.gift-card.is-playing[data-motion='bounce'] .gift-card-emoji {
+  animation: gift-emoji-bounce 1.6s ease-in-out infinite;
+}
+
+.gift-card.is-playing[data-motion='wobble'] .gift-card-emoji {
+  animation: gift-emoji-wobble 1.4s ease-in-out infinite;
+}
+
+.gift-card.is-playing[data-motion='twinkle'] .gift-card-emoji {
+  animation: gift-emoji-twinkle 1.8s ease-in-out infinite;
+}
+
+@keyframes gift-whistle-swing {
+  0%,
+  100% {
+    transform: rotate(-9deg);
+  }
+  50% {
+    transform: rotate(9deg);
+  }
+}
+
+@keyframes gift-whistle-rise {
+  0%,
+  100% {
+    transform: translateY(2px) rotate(-2deg);
+  }
+  50% {
+    transform: translateY(-4px) rotate(2deg);
+  }
+}
+
+@keyframes gift-whistle-pulse {
+  0%,
+  100% {
+    transform: scale(1);
+  }
+  50% {
+    transform: scale(1.05);
+  }
+}
+
+@keyframes gift-whistle-float {
+  0%,
+  100% {
+    transform: translateY(0) rotate(-2deg) scale(1);
+  }
+  35% {
+    transform: translateY(-5px) rotate(1deg) scale(1.03);
+  }
+  70% {
+    transform: translateY(-2px) rotate(3deg) scale(1.01);
+  }
+}
+
+@keyframes gift-emoji-hug {
+  0%,
+  100% {
+    transform: scale(1) rotate(-3deg);
+  }
+  50% {
+    transform: scale(1.08) rotate(3deg);
+  }
+}
+
+@keyframes gift-emoji-bloom {
+  0%,
+  100% {
+    transform: scale(1);
+  }
+  40% {
+    transform: scale(1.12) rotate(-4deg);
+  }
+  70% {
+    transform: scale(1.04) rotate(4deg);
+  }
+}
+
+@keyframes gift-emoji-sway {
+  0%,
+  100% {
+    transform: rotate(-7deg);
+  }
+  50% {
+    transform: rotate(7deg);
+  }
+}
+
+@keyframes gift-emoji-spin {
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@keyframes gift-emoji-beat {
+  0%,
+  100% {
+    transform: scale(1);
+  }
+  25% {
+    transform: scale(1.16);
+  }
+  45% {
+    transform: scale(1);
+  }
+  65% {
+    transform: scale(1.1);
+  }
+}
+
+@keyframes gift-emoji-bounce {
+  0%,
+  100% {
+    transform: translateY(0);
+  }
+  40% {
+    transform: translateY(-9px);
+  }
+  60% {
+    transform: translateY(-3px);
+  }
+}
+
+@keyframes gift-emoji-wobble {
+  0%,
+  100% {
+    transform: rotate(-5deg) translateY(0);
+  }
+  50% {
+    transform: rotate(5deg) translateY(-3px);
+  }
+}
+
+@keyframes gift-emoji-twinkle {
+  0%,
+  100% {
+    transform: scale(1) rotate(0deg);
+    opacity: 1;
+  }
+  50% {
+    transform: scale(1.14) rotate(18deg);
+    opacity: 0.85;
+  }
 }
 
 .gift-card.is-playing::after {
@@ -10347,6 +10551,7 @@ body {
 
 @media (prefers-reduced-motion: reduce) {
   .gift-card.is-playing .gift-card-body,
+  .gift-card.is-playing .gift-card-emoji,
   .gift-card.is-playing::after {
     animation: none;
   }
@@ -10563,4 +10768,26 @@ body {
   border: 0;
   padding: 0;
   background: transparent;
+}
+
+.gift-shelves {
+  display: grid;
+  gap: 6px;
+}
+
+.gift-shelf-remove {
+  justify-self: start;
+  border: 0;
+  padding: 2px 0;
+  color: #ff9b9b;
+  background: transparent;
+  font-size: 12px;
+}
+
+.gift-shelf-picker {
+  display: grid;
+  gap: 4px;
+  margin-top: 14px;
+  color: var(--muted);
+  font-size: 12px;
 }

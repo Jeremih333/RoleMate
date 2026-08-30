@@ -1602,6 +1602,13 @@ export function createBot(
   bot.on('pre_checkout_query', async (context) => {
     const query = context.preCheckoutQuery;
     try {
+      // A gift purchase carries a payload of its own: it is not a premium order
+      // and has no product behind it, only one numbered copy with an owner.
+      if (query.invoice_payload.startsWith('gift:')) {
+        await dataApi.execute('gifts.purchase.get', { invoicePayload: query.invoice_payload });
+        await context.answerPreCheckoutQuery(true);
+        return;
+      }
       const order = await dataApi.execute<{ id: string }>('payments.getByPayload', {
         invoicePayload: query.invoice_payload,
       });
@@ -1619,6 +1626,30 @@ export function createBot(
 
   bot.on('message:successful_payment', async (context) => {
     const payment = context.message.successful_payment;
+    if (payment.invoice_payload.startsWith('gift:')) {
+      // What the money buys is a transfer, and it goes through the same signed
+      // path as any other, so the chain of ownership stays whole.
+      const settled = await dataApi.execute<{
+        duplicate: boolean;
+        item_id: string;
+        buyer_user_id: string;
+        seller_user_id: string;
+      }>('gifts.purchase.settle', {
+        invoicePayload: payment.invoice_payload,
+        telegramPaymentChargeId: payment.telegram_payment_charge_id,
+      });
+      if (!settled.duplicate) {
+        await dataApi.execute('gifts.transfer', {
+          itemId: settled.item_id,
+          fromUserId: settled.seller_user_id,
+          toUserId: settled.buyer_user_id,
+          reason: 'purchase',
+          starAmount: payment.total_amount,
+        });
+        await context.reply(ru.bot.giftPurchased);
+      }
+      return;
+    }
     const order = await dataApi.execute<{ id: string }>('payments.getByPayload', {
       invoicePayload: payment.invoice_payload,
     });

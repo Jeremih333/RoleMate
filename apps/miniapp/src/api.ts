@@ -721,6 +721,11 @@ export const api = {
       method: 'POST',
       body: JSON.stringify({ starAmount, ...(message ? { message } : {}) }),
     }),
+  buyGift: (itemId: string) =>
+    request<{ invoiceLink: string }>(`/gifts/${itemId}/invoice`, {
+      method: 'POST',
+      body: '{}',
+    }),
   giftOffers: () => request<GiftOffer[]>('/gifts/offers/inbox'),
   answerGiftOffer: (offerId: string, action: 'accepted' | 'declined' | 'cancelled') =>
     request<{ status: string }>(`/gifts/offers/${offerId}`, {
@@ -1430,6 +1435,7 @@ export interface GiftShowcaseItem extends GiftAppearanceRow {
 export interface GiftDetail extends GiftAppearanceRow {
   id: string;
   serial: number;
+  user_collection_id: string | null;
   minted_at: string;
   hash: string;
   owner_user_id: string | null;

@@ -945,6 +945,29 @@ export async function buildServer(
     }
     return answer;
   });
+  // Buying a listed gift with Stars. The invoice carries a payload of its own,
+  // and nothing moves until Telegram says the payment went through.
+  app.post('/api/gifts/:itemId/invoice', async (request) => {
+    const session = await mutateSafe(request);
+    const { itemId } = z.object({ itemId: z.string().uuid() }).parse(request.params);
+    const gift = await dataApi.execute<{ series_title: string; serial: number }>('gifts.item', {
+      itemId,
+    });
+    const purchase = await dataApi.execute<{ invoicePayload: string; starAmount: number }>(
+      'gifts.purchase.start',
+      { itemId, buyerUserId: session.userId },
+    );
+    return stars.createPayment({
+      userId: session.userId,
+      telegramUserId: session.telegramUserId,
+      productId: itemId,
+      title: `${gift.series_title} #${gift.serial}`,
+      description: ru.miniApp.gifts.marketplaceTitle,
+      amount: purchase.starAmount,
+      currency: 'XTR',
+      invoicePayload: purchase.invoicePayload,
+    });
+  });
   app.post('/api/gifts/shelves', async (request) => {
     const session = await mutate(request);
     const { title } = z.object({ title: z.string().trim().min(1).max(40) }).parse(request.body);

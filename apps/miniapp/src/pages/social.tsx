@@ -1086,6 +1086,8 @@ function ProfileGiftShowcase({ userId }: { userId: string }) {
               model: parseAppearance(item.model_appearance),
               backdrop: parseAppearance(item.backdrop_appearance),
             }}
+            rank={item.rank}
+            seriesCode={item.series_code}
             size={46}
           />
         </button>

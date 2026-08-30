@@ -1273,6 +1273,67 @@ describe('D1 domain operations', () => {
     ).resolves.toMatchObject({ status: 'declined' });
   });
 
+  it('settles a paid gift exactly once, however many times the payment arrives', async () => {
+    const seller = await onboard(2_661);
+    const buyer = await onboard(2_662);
+    sqlite
+      .prepare("UPDATE users SET role = 'admin', telegram_user_id = 1040929628 WHERE id = ?")
+      .run(seller);
+    const item = (await executeOperation(
+      env,
+      'gifts.mint',
+      { actorUserId: seller, ownerUserId: seller, seriesCode: 'moon_whistle' },
+      crypto.randomUUID(),
+    )) as { itemId: string };
+
+    // Nothing to buy until the owner asks for something.
+    await expect(
+      executeOperation(
+        env,
+        'gifts.purchase.start',
+        { itemId: item.itemId, buyerUserId: buyer },
+        crypto.randomUUID(),
+      ),
+    ).rejects.toMatchObject({ code: 'GIFT_NOT_FOR_SALE' });
+
+    await executeOperation(
+      env,
+      'gifts.market.list.set',
+      { userId: seller, itemId: item.itemId, starPrice: 400 },
+      crypto.randomUUID(),
+    );
+    await expect(
+      executeOperation(
+        env,
+        'gifts.purchase.start',
+        { itemId: item.itemId, buyerUserId: seller },
+        crypto.randomUUID(),
+      ),
+    ).rejects.toMatchObject({ code: 'GIFT_SAME_OWNER' });
+
+    const purchase = (await executeOperation(
+      env,
+      'gifts.purchase.start',
+      { itemId: item.itemId, buyerUserId: buyer },
+      crypto.randomUUID(),
+    )) as { invoicePayload: string; starAmount: number };
+    expect(purchase.starAmount).toBe(400);
+
+    const settle = () =>
+      executeOperation(
+        env,
+        'gifts.purchase.settle',
+        { invoicePayload: purchase.invoicePayload, telegramPaymentChargeId: 'charge-1' },
+        crypto.randomUUID(),
+      ) as Promise<{ duplicate: boolean; item_id: string }>;
+    expect(await settle()).toMatchObject({ duplicate: false, item_id: item.itemId });
+    // A webhook delivered twice must not move a gift twice.
+    expect(await settle()).toMatchObject({ duplicate: true });
+    expect(
+      sqlite.prepare('SELECT status FROM gift_listings WHERE item_id = ?').get(item.itemId),
+    ).toMatchObject({ status: 'sold' });
+  });
+
   it('answers with counters that say what moved, and nothing else', async () => {
     const reader = await onboard(2_641);
     const other = await onboard(2_642);

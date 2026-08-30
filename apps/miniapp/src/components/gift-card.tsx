@@ -1,17 +1,18 @@
 import { useId, type CSSProperties } from 'react';
 
 /**
- * A whistle on its card.
+ * A gift on its card.
  *
- * Every gift in the series shows the same silhouette in the same place — that is
- * what makes them one series — and everything around it is what makes a
- * particular copy itself: the whistle's material, the pattern tiled behind it
- * and the backdrop it sits on. The rarer the rank, the darker the card, which is
- * the rule the ranks of the Abyss already imply.
+ * A whistle sits in the same place on every card — that is what makes them one
+ * series — while its shape belongs to its rank, and everything around it belongs
+ * to the copy: the material, the pattern tiled behind it and the backdrop it
+ * sits on. The rarer the rank, the darker the card and the more the whistle does
+ * when somebody opens it, which is the rule the ranks of the Abyss already
+ * imply. A standard gift is an emoji instead, with a movement of its own.
  *
- * It is drawn rather than fetched: a marketplace shows dozens of these at once,
- * and dozens of pictures would be dozens of requests on a plan that has a
- * hundred thousand a day. The whistle only moves once somebody opens it.
+ * It is drawn rather than fetched: a market shows dozens of these at once, and
+ * dozens of pictures would be dozens of requests on a plan that has a hundred
+ * thousand a day. Nothing moves until a gift is opened.
  */
 export interface GiftAppearance {
   model?: { body?: string; edge?: string; cord?: string } | null;
@@ -36,13 +37,58 @@ const TILES: Record<string, string> = {
   echo: 'M8 8 m-2 0 a2 2 0 1 0 4 0 a2 2 0 1 0 -4 0 M8 8 m-5 0 a5 5 0 1 0 10 0 a5 5 0 1 0 -10 0',
 };
 
+/**
+ * One silhouette per rank. A bell is a bell; a red whistle is the plain pea
+ * whistle an apprentice is given; the ranks above it grow a band, a crescent,
+ * an angular guard and finally the sovereign's winged relic.
+ */
+const SILHOUETTES: Record<string, string> = {
+  bell: 'M48 26 a14 14 0 0 1 14 14 v10 l5 8 h-38 l5 -8 v-10 a14 14 0 0 1 14 -14 z M44 58 a4 4 0 0 0 8 0',
+  red: 'M34 36 h20 a12 12 0 0 1 12 12 v2 a12 12 0 0 1 -12 12 h-4 l-5 10 -5 -10 h-6 a12 12 0 0 1 -12 -12 v-2 a12 12 0 0 1 12 -12 z',
+  blue: 'M32 34 h24 a13 13 0 0 1 13 13 v3 a13 13 0 0 1 -13 13 h-5 l-5 11 -5 -11 h-9 a13 13 0 0 1 -13 -13 v-3 a13 13 0 0 1 13 -13 z M30 46 h38',
+  moon: 'M48 22 a12 12 0 0 0 0 18 a12 12 0 0 1 0 -18 z M32 38 h32 a12 12 0 0 1 12 12 a12 12 0 0 1 -12 12 h-6 l-4 10 -5 -10 h-17 a12 12 0 0 1 -12 -12 a12 12 0 0 1 12 -12 z',
+  black:
+    'M30 34 l10 -8 h16 l10 8 v8 a14 14 0 0 1 -6 24 h-6 l-6 12 -6 -12 h-6 a14 14 0 0 1 -6 -24 z M38 30 h20',
+  white:
+    'M48 18 l7 9 h-14 z M30 33 h36 a13 13 0 0 1 13 13 v4 a13 13 0 0 1 -13 13 h-8 l-5 13 -5 -13 h-18 a13 13 0 0 1 -13 -13 v-4 a13 13 0 0 1 13 -13 z M22 44 l-8 -6 M74 44 l8 -6',
+};
+
+/** The everyday gifts: an emoji, and the movement that belongs to it. */
+const STANDARD_EMOJI: Record<string, string> = {
+  teddy: '\u{1F9F8}',
+  bouquet: '\u{1F490}',
+  tulip: '\u{1F337}',
+  daisy: '\u{1F33C}',
+  heart: '❤️',
+  cake: '\u{1F382}',
+  poop: '\u{1F4A9}',
+  star: '⭐',
+};
+
+const STANDARD_MOTION: Record<string, string> = {
+  teddy: 'hug',
+  bouquet: 'bloom',
+  tulip: 'sway',
+  daisy: 'spin',
+  heart: 'beat',
+  cake: 'bounce',
+  poop: 'wobble',
+  star: 'twinkle',
+};
+
 export function GiftCard({
   appearance,
+  rank = 'plain',
+  seriesCode,
   size = 132,
   playing = false,
   label,
 }: {
   appearance: GiftAppearance;
+  /** Decides the silhouette and how much it does when opened. */
+  rank?: string;
+  /** For a standard gift, which emoji it is. */
+  seriesCode?: string;
   size?: number;
   /** Animation is for a gift somebody opened, not for a shelf full of them. */
   playing?: boolean;
@@ -52,9 +98,13 @@ export function GiftCard({
   const backdrop = appearance.backdrop ?? {};
   const model = appearance.model ?? {};
   const tile = TILES[appearance.pattern?.tile ?? ''] ?? TILES.echo!;
+  const emoji = seriesCode ? STANDARD_EMOJI[seriesCode] : undefined;
+  const silhouette = SILHOUETTES[rank] ?? SILHOUETTES.red!;
   return (
     <div
       className={`gift-card${playing ? ' is-playing' : ''}`}
+      data-rank={rank}
+      data-motion={emoji ? (STANDARD_MOTION[seriesCode ?? ''] ?? 'sway') : undefined}
       style={
         {
           width: size,
@@ -75,22 +125,32 @@ export function GiftCard({
         </defs>
         <rect width="96" height="96" fill={`url(#tile-${id})`} />
       </svg>
-      <svg className="gift-card-whistle" viewBox="0 0 96 96" aria-hidden>
-        <g className="gift-card-cord" stroke={model.cord ?? '#5f5346'} strokeWidth="3" fill="none">
-          <path d="M30 22 C40 10 56 10 66 22" />
-        </g>
-        <g className="gift-card-body">
-          {/* The same silhouette on every card in the series; only the material
-              and the light on it change from copy to copy. */}
-          <path
-            d="M34 34 h22 a10 10 0 0 1 10 10 v6 a10 10 0 0 1 -10 10 h-6 l-4 12 -6 -12 h-6 a10 10 0 0 1 -10 -10 v-6 a10 10 0 0 1 10 -10 z"
-            fill={model.body ?? '#cbb9a4'}
-            stroke={model.edge ?? '#9b8a76'}
-            strokeWidth="2.5"
-          />
-          <circle cx="58" cy="47" r="4.5" fill={model.edge ?? '#9b8a76'} opacity="0.75" />
-        </g>
-      </svg>
+      {emoji ? (
+        <span className="gift-card-emoji" style={{ fontSize: size * 0.46 }}>
+          {emoji}
+        </span>
+      ) : (
+        <svg className="gift-card-whistle" viewBox="0 0 96 96" aria-hidden>
+          <g
+            className="gift-card-cord"
+            stroke={model.cord ?? '#5f5346'}
+            strokeWidth="3"
+            fill="none"
+          >
+            <path d="M30 22 C40 10 56 10 66 22" />
+          </g>
+          <g className="gift-card-body">
+            <path
+              d={silhouette}
+              fill={model.body ?? '#cbb9a4'}
+              stroke={model.edge ?? '#9b8a76'}
+              strokeWidth="2.5"
+              strokeLinejoin="round"
+            />
+            <circle cx="58" cy="49" r="4.5" fill={model.edge ?? '#9b8a76'} opacity="0.75" />
+          </g>
+        </svg>
+      )}
     </div>
   );
 }

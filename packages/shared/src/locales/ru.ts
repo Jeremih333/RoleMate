@@ -213,6 +213,7 @@ export const ru = {
     premiumGiftInvoiceTitle: (name: string) => `Подарок: ${name}`,
     premiumGiftInvoiceDescription: (description: string) =>
       `RoleMate Premium для собеседника. ${description}`,
+    giftPurchased: 'Подарок твой — он уже в разделе «Маркет подарков» → «Мои подарки».',
     moderationWarning: (reason: string) =>
       `⚠️ Предупреждение от модерации RoleMate\n\n${reason}\n\nЧто делать дальше: удали или исправь то, из-за чего пришло предупреждение. Повторные нарушения ведут к временной, а затем к постоянной блокировке. Если считаешь предупреждение ошибкой, напиши в поддержку через раздел «Помощь» в приложении.`,
     customEmoji: {
@@ -657,6 +658,10 @@ export const ru = {
       unlist: 'Снять с продажи',
       pin: 'Показывать в профиле',
       unpin: 'Убрать из профиля',
+      allGifts: 'Все подарки',
+      removeShelf: 'Удалить коллекцию',
+      moveToShelf: 'В коллекцию',
+      buy: 'Купить',
       newShelf: 'Новая коллекция',
       newShelfPrompt: 'Название коллекции',
       accept: 'Принять',

@@ -2,9 +2,10 @@ import { useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Gift, Link2, Share2, Sparkles, X } from 'lucide-react';
 import { ru } from '@rolemate/shared';
-import { api, type GiftDetail, type GiftListing } from '../api.js';
+import { api, type GiftDetail, type GiftListing, type GiftShelf } from '../api.js';
 import { Button, Card, EmptyState, useTextPrompt } from '../components/ui.js';
 import { GiftCard, type GiftAppearance } from '../components/gift-card.js';
+import { getTelegram } from '../telegram.js';
 
 /** Appearance arrives as JSON on the row; a broken one simply draws plainly. */
 function appearanceOf(row: {
@@ -69,6 +70,18 @@ export function GiftsPage() {
     queryFn: api.giftOffers,
     enabled: tab === 'offers',
     staleTime: 60_000,
+  });
+  const [shelf, setShelf] = useState<string>('');
+  const createShelf = useMutation({
+    mutationFn: (title: string) => api.createGiftShelf(title),
+    onSuccess: () => void queryClient.invalidateQueries({ queryKey: ['gift-mine'] }),
+  });
+  const removeShelf = useMutation({
+    mutationFn: (shelfId: string) => api.removeGiftShelf(shelfId),
+    onSuccess: () => {
+      setShelf('');
+      void queryClient.invalidateQueries({ queryKey: ['gift-mine'] });
+    },
   });
   const answer = useMutation({
     mutationFn: ({ offerId, action }: { offerId: string; action: 'accepted' | 'declined' }) =>
@@ -150,7 +163,12 @@ export function GiftsPage() {
                   className="gift-grid-cell"
                   onClick={() => setOpenItemId(listing.item_id)}
                 >
-                  <GiftCard appearance={appearanceOf(listing)} size={104} />
+                  <GiftCard
+                    appearance={appearanceOf(listing)}
+                    rank={listing.rank}
+                    seriesCode={listing.series_code}
+                    size={104}
+                  />
                   <strong>{listing.series_title}</strong>
                   <small>#{listing.serial.toLocaleString('ru-RU')}</small>
                   <span className="gift-price">{ru.miniApp.gifts.stars(listing.star_price)}</span>
@@ -167,24 +185,76 @@ export function GiftsPage() {
         </>
       ) : null}
 
+      {tab === 'mine' && mine.data?.items.length ? (
+        // The shelves somebody arranges their own gifts on, named by them, the
+        // way Telegram lets an owner group what they have.
+        <div className="gift-shelves">
+          <div className="gift-filter-row">
+            <button
+              type="button"
+              className={shelf === '' ? 'is-active' : ''}
+              onClick={() => setShelf('')}
+            >
+              {ru.miniApp.gifts.allGifts}
+            </button>
+            {(mine.data.shelves ?? []).map((row) => (
+              <button
+                key={row.id}
+                type="button"
+                className={shelf === row.id ? 'is-active' : ''}
+                onClick={() => setShelf(row.id)}
+              >
+                {row.title}
+              </button>
+            ))}
+            <button
+              type="button"
+              onClick={() =>
+                ask(ru.miniApp.gifts.newShelfPrompt, (title) => {
+                  if (title.trim()) createShelf.mutate(title.trim());
+                })
+              }
+            >
+              + {ru.miniApp.gifts.newShelf}
+            </button>
+          </div>
+          {shelf ? (
+            <button
+              type="button"
+              className="gift-shelf-remove"
+              onClick={() => removeShelf.mutate(shelf)}
+            >
+              {ru.miniApp.gifts.removeShelf}
+            </button>
+          ) : null}
+        </div>
+      ) : null}
+
       {tab === 'mine' ? (
         mine.data?.items.length ? (
           <div className="gift-grid">
-            {mine.data.items.map((item) => (
-              <button
-                key={item.id}
-                type="button"
-                className="gift-grid-cell"
-                onClick={() => setOpenItemId(item.id)}
-              >
-                <GiftCard appearance={appearanceOf(item)} size={104} />
-                <strong>{item.series_title}</strong>
-                <small>#{item.serial.toLocaleString('ru-RU')}</small>
-                {item.listed_price ? (
-                  <span className="gift-price">{ru.miniApp.gifts.stars(item.listed_price)}</span>
-                ) : null}
-              </button>
-            ))}
+            {mine.data.items
+              .filter((item) => !shelf || item.user_collection_id === shelf)
+              .map((item) => (
+                <button
+                  key={item.id}
+                  type="button"
+                  className="gift-grid-cell"
+                  onClick={() => setOpenItemId(item.id)}
+                >
+                  <GiftCard
+                    appearance={appearanceOf(item)}
+                    rank={item.rank}
+                    seriesCode={item.series_code}
+                    size={104}
+                  />
+                  <strong>{item.series_title}</strong>
+                  <small>#{item.serial.toLocaleString('ru-RU')}</small>
+                  {item.listed_price ? (
+                    <span className="gift-price">{ru.miniApp.gifts.stars(item.listed_price)}</span>
+                  ) : null}
+                </button>
+              ))}
           </div>
         ) : mine.isLoading ? null : (
           <EmptyState
@@ -240,7 +310,12 @@ export function GiftsPage() {
       ) : null}
 
       {openItemId ? (
-        <GiftSheet itemId={openItemId} onClose={() => setOpenItemId(null)} ask={ask} />
+        <GiftSheet
+          itemId={openItemId}
+          shelves={mine.data?.shelves ?? []}
+          onClose={() => setOpenItemId(null)}
+          ask={ask}
+        />
       ) : null}
       {promptDialog}
     </section>
@@ -254,10 +329,12 @@ export function GiftsPage() {
  */
 function GiftSheet({
   itemId,
+  shelves,
   onClose,
   ask,
 }: {
   itemId: string;
+  shelves: GiftShelf[];
   onClose: () => void;
   ask: (title: string, onSubmit: (value: string) => void) => void;
 }) {
@@ -278,6 +355,21 @@ function GiftSheet({
       void queryClient.invalidateQueries({ queryKey: ['gift', itemId] });
       void queryClient.invalidateQueries({ queryKey: ['gift-mine'] });
       void queryClient.invalidateQueries({ queryKey: ['gift-market'] });
+    },
+  });
+  const me = useQuery({ queryKey: ['me'], queryFn: api.me, staleTime: 5 * 60_000 });
+  const buy = useMutation({
+    mutationFn: () => api.buyGift(itemId),
+    onSuccess: (result) => {
+      // Telegram opens the invoice itself; the gift moves when it reports back.
+      if (result.invoiceLink) getTelegram()?.openInvoice(result.invoiceLink);
+    },
+  });
+  const moveToShelf = useMutation({
+    mutationFn: (shelfId: string | null) => api.giftArrangement(itemId, { shelfId }),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ['gift', itemId] });
+      void queryClient.invalidateQueries({ queryKey: ['gift-mine'] });
     },
   });
   const pin = useMutation({
@@ -349,6 +441,8 @@ function GiftSheet({
               <div className="gift-sheet-hero">
                 <GiftCard
                   appearance={appearanceOf(item)}
+                  rank={item.rank}
+                  seriesCode={item.series_code}
                   size={196}
                   playing
                   label={item.series_title}
@@ -359,6 +453,23 @@ function GiftSheet({
                 {item.subtitle ? <p className="text-muted">{item.subtitle}</p> : null}
               </div>
               {item.lore ? <p className="gift-sheet-lore">{item.lore}</p> : null}
+              {shelves.length ? (
+                <label className="gift-shelf-picker">
+                  <span>{ru.miniApp.gifts.moveToShelf}</span>
+                  <select
+                    className="input"
+                    value={item.user_collection_id ?? ''}
+                    onChange={(event) => moveToShelf.mutate(event.target.value || null)}
+                  >
+                    <option value="">{ru.miniApp.gifts.allGifts}</option>
+                    {shelves.map((row) => (
+                      <option key={row.id} value={row.id}>
+                        {row.title}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+              ) : null}
               <table className="gift-attributes">
                 <tbody>
                   <tr>
@@ -397,7 +508,12 @@ function GiftSheet({
           ) : null}
         </div>
         <footer className="editor-sheet-footer">
-          {item?.listed_price ? (
+          {item && item.owner_user_id !== me.data?.userId && item.listed_price ? (
+            <Button loading={buy.isPending} onClick={() => buy.mutate()}>
+              {ru.miniApp.gifts.buy} · {ru.miniApp.gifts.stars(item.listed_price)}
+            </Button>
+          ) : null}
+          {item?.owner_user_id === me.data?.userId && item?.listed_price ? (
             <Button
               variant="secondary"
               loading={listing.isPending}
@@ -405,7 +521,7 @@ function GiftSheet({
             >
               {ru.miniApp.gifts.unlist}
             </Button>
-          ) : (
+          ) : item?.owner_user_id === me.data?.userId ? (
             <Button
               variant="secondary"
               loading={listing.isPending}
@@ -418,14 +534,16 @@ function GiftSheet({
             >
               {ru.miniApp.gifts.sell}
             </Button>
-          )}
-          <Button
-            variant="secondary"
-            loading={pin.isPending}
-            onClick={() => pin.mutate(item?.pinned_order === null ? 0 : null)}
-          >
-            {item?.pinned_order === null ? ru.miniApp.gifts.pin : ru.miniApp.gifts.unpin}
-          </Button>
+          ) : null}
+          {item && item.owner_user_id === me.data?.userId ? (
+            <Button
+              variant="secondary"
+              loading={pin.isPending}
+              onClick={() => pin.mutate(item.pinned_order === null ? 0 : null)}
+            >
+              {item.pinned_order === null ? ru.miniApp.gifts.pin : ru.miniApp.gifts.unpin}
+            </Button>
+          ) : null}
         </footer>
       </section>
     </div>

@@ -109,6 +109,7 @@ describe('D1 migrations', () => {
       '0079_custom_emoji_hydration_attempts.sql',
       '0080_gifts.sql',
       '0081_gift_catalogue.sql',
+      '0082_gift_purchases.sql',
     ]);
     expect(() => applyMigrations()).not.toThrow();
     const postColumns = database.prepare('PRAGMA table_info(telegram_posts)').all() as Array<{

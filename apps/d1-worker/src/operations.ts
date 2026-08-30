@@ -6606,6 +6606,84 @@ const handlers: { [K in WorkerOperation]: Handler<K> } = {
     return { arranged: true };
   },
   /** The few copies a profile shows in its header, the way Telegram does. */
+  /**
+   * Starts buying a listed gift. The payload is what Telegram carries through
+   * the payment and hands back when it succeeds; until then nothing moves.
+   */
+  'gifts.purchase.start': async (env, input) => {
+    const listing = await env.DB.prepare(
+      `SELECT l.id, l.item_id, l.seller_user_id, l.star_price
+       FROM gift_listings l WHERE l.item_id = ?1 AND l.status = 'active'`,
+    )
+      .bind(input.itemId)
+      .first<{ id: string; item_id: string; seller_user_id: string; star_price: number }>();
+    if (!listing) throw new ApiError(404, 'GIFT_NOT_FOR_SALE', 'This gift is not for sale');
+    if (listing.seller_user_id === input.buyerUserId) {
+      throw new ApiError(400, 'GIFT_SAME_OWNER', 'It is already yours');
+    }
+    const id = crypto.randomUUID();
+    const payload = `gift:${id}`;
+    await env.DB.prepare(
+      `INSERT INTO gift_purchases
+         (id, listing_id, item_id, buyer_user_id, seller_user_id, star_amount, invoice_payload)
+       VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)`,
+    )
+      .bind(
+        id,
+        listing.id,
+        listing.item_id,
+        input.buyerUserId,
+        listing.seller_user_id,
+        listing.star_price,
+        payload,
+      )
+      .run();
+    return { purchaseId: id, invoicePayload: payload, starAmount: listing.star_price };
+  },
+  'gifts.purchase.get': async (env, input) => {
+    const purchase = await env.DB.prepare(
+      `SELECT id, listing_id, item_id, buyer_user_id, seller_user_id, star_amount, status
+       FROM gift_purchases WHERE invoice_payload = ?1`,
+    )
+      .bind(input.invoicePayload)
+      .first();
+    if (!purchase) throw new ApiError(404, 'GIFT_PURCHASE_NOT_FOUND', 'No such purchase');
+    return purchase;
+  },
+  /**
+   * Marks a purchase paid, once. A second delivery of the same payment finds it
+   * already settled and changes nothing, which is what keeps a repeated webhook
+   * from moving a gift twice.
+   */
+  'gifts.purchase.settle': async (env, input) => {
+    const purchase = await env.DB.prepare(
+      `SELECT id, listing_id, item_id, buyer_user_id, seller_user_id, star_amount, status
+       FROM gift_purchases WHERE invoice_payload = ?1`,
+    )
+      .bind(input.invoicePayload)
+      .first<{
+        id: string;
+        listing_id: string;
+        item_id: string;
+        buyer_user_id: string;
+        seller_user_id: string;
+        star_amount: number;
+        status: string;
+      }>();
+    if (!purchase) throw new ApiError(404, 'GIFT_PURCHASE_NOT_FOUND', 'No such purchase');
+    if (purchase.status === 'paid') return { ...purchase, duplicate: true };
+    await env.DB.batch([
+      env.DB.prepare(
+        `UPDATE gift_purchases
+         SET status = 'paid', paid_at = CURRENT_TIMESTAMP, telegram_payment_charge_id = ?2
+         WHERE id = ?1`,
+      ).bind(purchase.id, input.telegramPaymentChargeId),
+      env.DB.prepare(
+        "UPDATE gift_listings SET status = 'sold', updated_at = CURRENT_TIMESTAMP WHERE id = ?1",
+      ).bind(purchase.listing_id),
+    ]);
+    return { ...purchase, duplicate: false };
+  },
   'gifts.showcase': async (env, input) => {
     return (
       await env.DB.prepare(
